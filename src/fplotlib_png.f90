@@ -354,14 +354,9 @@ contains
         seq = 0
         do f = 1, nframes
             base = (f - 1)*3*w*h
-            k = base
-            do y = 1, h
-                do x = 1, w
-                    do c = 1, 3
-                        k = k + 1
-                        rgb(c, x, y) = iachar(pix(k:k))
-                    end do
-                end do
+            do concurrent (y = 1:h, x = 1:w, c = 1:3)
+                k = base + (y - 1)*3*w + (x - 1)*3 + c
+                rgb(c, x, y) = iachar(pix(k:k))
             end do
 
             allocate (d(26))
