@@ -17,8 +17,9 @@
 !   accepted and drawn with the same glyph as the letter they abbreviate.
 !   ``\varsigma`` is the final sigma, and it does differ from ``\sigma``.
 ! * ``\times`` is the multiplication sign.
-! * ``\,``, ``\;`` and ``\ `` insert a thin space, a thick space and a
-!   word space. A space typed between symbols is kept as well.
+! * ``\,`` inserts a thin space and ``\;`` a thick one. A backslash
+!   followed by a space inserts a word space. A space typed between
+!   symbols is kept as well.
 !
 ! ``^`` and ``_`` raise and lower the next character, or the next group
 ! in braces. Several scripts in a row share one base, so ``x_{i}^{2}``
