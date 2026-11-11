@@ -34,9 +34,16 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "tools"))
 from gen_glyphs import font_file  # noqa: E402
 
-for _face in ("Lato-Regular.ttf", "Lato-Bold.ttf", "Lato-Italic.ttf",
-              "Lato-BoldItalic.ttf"):
-    font_manager.fontManager.addfont(str(font_file(_face, os.environ.get("FPLOTLIB_FONTS"))))
+_LATO = [str(font_file(_face, os.environ.get("FPLOTLIB_FONTS")))
+         for _face in ("Lato-Regular.ttf", "Lato-Bold.ttf", "Lato-Italic.ttf",
+                       "Lato-BoldItalic.ttf")]
+# A system may have a Lato of its own (Ubuntu's fonts-lato, for one), with
+# other line metrics; matplotlib would be free to pick it over these, so it
+# is taken out of the list first.
+font_manager.fontManager.ttflist = [
+    f for f in font_manager.fontManager.ttflist if f.name != "Lato"]
+for _path in _LATO:
+    font_manager.fontManager.addfont(_path)
 plt.rcParams["font.family"] = "Lato"
 plt.rcParams["mathtext.fontset"] = "custom"
 plt.rcParams["mathtext.rm"] = "Lato"
