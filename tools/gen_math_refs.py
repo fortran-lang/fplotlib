@@ -110,6 +110,11 @@ FORMULAS = [
     r"$\dfrac{\frac{a}{b}}{c}$",
     r"$\left(\dfrac{\frac{a}{b}}{c + d}\right)$",
     r"$2\frac{a}{b}, \frac{c}{d}x$",
+    # Delimiters that do not pair up stay as they are, as TeX sets them:
+    # unmatched ones, escaped ones and ones in braces.
+    r"$[\frac{1}{2}, 1)$",
+    r"$\(\frac{a}{b}\) + \[\frac{c}{d}\]$",
+    r"${(}\frac{a}{b}{)}$",
     r"$\left(\displaystyle\sum_{k=1}^{n}\frac{1}{k^2}\right)$",
     r"$\langle x, y \rangle$",
     r"$\left\lfloor x \right\rfloor$",
@@ -178,9 +183,16 @@ BINOM = re.compile(r"\\([dt]?)binom\{([^{}]*)\}\{([^{}]*)\}")
 BINOM_STYLE = {"": "", "d": r"\displaystyle", "t": r"\textstyle"}
 
 
+# fplotlib's escaped \( \) \[ \] are the plain characters, which TeX
+# writes without the backslash.
+ESCAPES = {"\\(": "(", "\\)": ")", "\\[": "[", "\\]": "]"}
+
+
 def page(formula):
     for a, b in ALPHABETS.items():
         formula = formula.replace(a + "{", b + "{")
+    for a, b in ESCAPES.items():
+        formula = formula.replace(a, b)
     formula = BINOM.sub(lambda m: r"{%s{{%s}\atopwithdelims(){%s}}}"
                         % (BINOM_STYLE[m[1]], m[2], m[3]), formula)
     return (r"\vrule width %gbp height %gbp depth 0pt\kern-%gbp%s\newpage" "\n"

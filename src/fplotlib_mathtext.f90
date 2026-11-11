@@ -30,6 +30,12 @@
 ! the reference the layout is checked against. \binom is TeX's own
 ! \atopwithdelims(), which sizes the parentheses by the MATH table.
 !
+! Matched delimiters grow by themselves, as Typst's do (auto_pair and
+! settle_auto): a pair of the same kind in one list encloses what is
+! between them, and if that is taller than the plain delimiters they
+! become a \left...\right sized by Typst's rule; otherwise they are set
+! exactly as written. Escaped (\( \[) and braced delimiters never pair.
+!
 ! Text outside the dollar signs is set in Lato, as any other text; a
 ! dollar sign written \$ is a dollar sign, in text and in math.
 module fplotlib_mathtext
@@ -122,6 +128,10 @@ module fplotlib_mathtext
     real(dp), parameter :: NULL_DELIM = 0.12_dp, SHORTFALL = 0.5_dp
     real(dp), parameter :: STRUT_H = 0.84_dp, STRUT_D = 0.36_dp
     real(dp), parameter :: DELIM_FACTOR = 901.0_dp/500.0_dp
+    ! How much less than its contents an automatic delimiter may cover, in
+    ! ems: Typst's DELIM_SHORT_FALL.
+    real(dp), parameter :: AUTO_SHORTFALL = 0.1_dp
+    integer, parameter :: ROLE_OPEN = 1, ROLE_CLOSE = 2, ROLE_EITHER = 3
 
     ! Spelled this way because a backslash inside a string literal is not
     ! portable: some compilers read it as the start of an escape.
@@ -164,6 +174,13 @@ module fplotlib_mathtext
         logical :: wide = .false.
         ! K_BIG: 1 to 4 for \big, \Big, \bigg, \Bigg.
         integer :: level = 0
+        ! Automatic delimiters. An atom that is a delimiter may pair up
+        ! with another unless it is fixed (written \( or in braces), and a
+        ! | left between a pair is its middle (amid). A K_LR made from a
+        ! pair has auto 1 until settle_auto decides it, 2 once it has
+        ! grown; lo and lc are its opening and closing atoms.
+        logical :: fixed = .false., amid = .false.
+        integer :: auto = 0, lo = 0, lc = 0
     end type noad_t
 
     ! A box: items i0..i1 of the arena, and its dimensions in points. A box
@@ -196,8 +213,9 @@ module fplotlib_mathtext
     integer :: NI = 0
 
     ! The size the \middle delimiters of the \left...\right group being
-    ! laid out are to have, negative while the group is being measured.
-    real(dp) :: LR_TARGET = -1.0_dp
+    ! laid out are to have, negative while the group is being measured,
+    ! and the size an assembly for them is built to.
+    real(dp) :: LR_TARGET = -1.0_dp, LR_FULL = -1.0_dp
 
 contains
 
@@ -384,6 +402,8 @@ contains
         if (head > 0 .and. cls == CL_ORD) then
             if (plain_ord(head)) then
                 k = head
+                ! A delimiter in braces is a character, not a fence.
+                NOADS(k)%fixed = .true.
                 return
             end if
         end if
@@ -587,9 +607,10 @@ contains
             end select
         end do
 
+        head = auto_pair(head)
         if (infix > 0) then
             k = new_noad(K_FRAC, CL_INNER)
-            NOADS(k)%a = num
+            NOADS(k)%a = auto_pair(num)
             NOADS(k)%b = head
             NOADS(k)%rule = infix == 1
             if (infix == 3) then
@@ -626,6 +647,129 @@ contains
         end do
         if (b > 0) NOADS(q)%next = b
     end subroutine append_list
+
+    ! Automatic delimiters, as Typst has them. In one list, an opening
+    ! delimiter written as a character or a symbol (( [ \{ \langle \lfloor
+    ! \lceil) pairs up with the next closing one of the same kind, nested
+    ! as brackets nest, and two | or two ‖ pair up as well; a | or ‖ left
+    ! alone between a pair is that pair's middle. A delimiter with nothing
+    ! to pair with, as in [0, 1), stays as it is. Each pair becomes an
+    ! automatic \left...\right, which settle_auto turns back into the
+    ! plain delimiters unless what they enclose is taller than they are.
+    recursive function auto_pair(head) result(new)
+        integer, intent(in) :: head
+        integer :: new
+        integer, allocatable :: arr(:), pend(:), stk(:), skind(:), srole(:)
+        integer :: n, q, k, j, top, kind, role
+        logical :: found
+
+        new = head
+        n = 0
+        q = head
+        do while (q > 0)
+            n = n + 1
+            q = NOADS(q)%next
+        end do
+        if (n < 2) return
+        allocate (arr(n), pend(n), stk(n), skind(n), srole(n))
+        pend = 0
+        q = head
+        do k = 1, n
+            arr(k) = q
+            q = NOADS(q)%next
+        end do
+        top = 0
+        do k = 1, n
+            call fence_role(arr(k), kind, role)
+            if (kind == 0) cycle
+            found = .false.
+            if (role /= ROLE_OPEN) then
+                ! The nearest opening of the same kind, past lone fences.
+                j = top
+                do while (j > 0)
+                    if (skind(j) == kind) then
+                        found = .true.
+                        exit
+                    end if
+                    if (srole(j) /= ROLE_EITHER) exit
+                    j = j - 1
+                end do
+            end if
+            if (found) then
+                pend(stk(j)) = k
+                do q = j + 1, top
+                    NOADS(arr(stk(q)))%amid = .true.
+                end do
+                top = j - 1
+            else if (role /= ROLE_CLOSE .and. NOADS(arr(k))%sup < 0 &
+                     .and. NOADS(arr(k))%sub < 0) then
+                top = top + 1
+                stk(top) = k
+                skind(top) = kind
+                srole(top) = role
+            end if
+        end do
+        if (all(pend == 0)) return
+        new = pair_build(arr, pend, 1, n)
+    end function auto_pair
+
+    ! The list of arr(lo:hi), each pair in it (from the opening at k to
+    ! the closing at pend(k)) made one automatic \left...\right.
+    recursive function pair_build(arr, pend, lo, hi) result(head)
+        integer, intent(in) :: arr(:), pend(:), lo, hi
+        integer :: head, tail, p, k
+        head = 0
+        tail = 0
+        p = lo
+        do while (p <= hi)
+            if (pend(p) > 0) then
+                k = new_noad(K_LR, CL_INNER)
+                NOADS(k)%auto = 1
+                NOADS(k)%lo = arr(p)
+                NOADS(k)%lc = arr(pend(p))
+                NOADS(k)%dl = NOADS(arr(p))%cp
+                NOADS(k)%dr = NOADS(arr(pend(p)))%cp
+                NOADS(k)%a = pair_build(arr, pend, p + 1, pend(p) - 1)
+                p = pend(p) + 1
+            else
+                k = arr(p)
+                p = p + 1
+            end if
+            call append(head, tail, k)
+        end do
+        if (tail > 0) NOADS(tail)%next = 0
+    end function pair_build
+
+    ! Which kind of delimiter atom q is (0 when it cannot pair up), and
+    ! whether it opens, closes or, for | and ‖, may do either.
+    subroutine fence_role(q, kind, role)
+        integer, intent(in) :: q
+        integer, intent(out) :: kind, role
+        kind = 0
+        role = 0
+        if (NOADS(q)%kind /= K_ATOM .or. NOADS(q)%nuc /= NUC_CHAR) return
+        if (NOADS(q)%fixed) return
+        select case (NOADS(q)%cp)
+        case (40, 41); kind = 1
+        case (91, 93); kind = 2
+        case (123, 125); kind = 3
+        case (10216, 10217); kind = 4
+        case (8970, 8971); kind = 5
+        case (8968, 8969); kind = 6
+        case (124); kind = 7
+        case (8214); kind = 8
+        case default; return
+        end select
+        if (NOADS(q)%cls == CL_OPEN) then
+            role = ROLE_OPEN
+        else if (NOADS(q)%cls == CL_CLOSE) then
+            role = ROLE_CLOSE
+        else if (NOADS(q)%cls == CL_ORD .and. kind >= 7) then
+            role = ROLE_EITHER
+        else
+            kind = 0
+        end if
+    end subroutine fence_role
 
     ! The argument of a script or a command: a braced group is its
     ! contents, anything else is itself.
@@ -788,6 +932,16 @@ contains
             return
         case ("|")
             k = char_noad(8214, ALPH_RM, CL_ORD)
+            return
+        case ("(", "[")
+            ! An escaped parenthesis or bracket is the character itself,
+            ! which never pairs up and never grows.
+            k = char_noad(iachar(s(2:2)), ALPH_RM, CL_OPEN)
+            NOADS(k)%fixed = .true.
+            return
+        case (")", "]")
+            k = char_noad(iachar(s(2:2)), ALPH_RM, CL_CLOSE)
+            NOADS(k)%fixed = .true.
             return
         case ("$", "%", "&", "#", "_")
             k = char_noad(iachar(s(2:2)), ALPH_RM, CL_ORD)
@@ -1219,6 +1373,7 @@ contains
         integer :: n, k, q, prev, cur
         real(dp) :: pen, sz
 
+        call settle_auto(head, style, cramped, size)
         n = 0
         q = head
         do while (q > 0)
@@ -1259,13 +1414,18 @@ contains
                 call make_bar(q, cur, cramped, size, bx(k))
             case (K_LR)
                 call make_lr(q, cur, cramped, size, bx(k))
+                ! An automatic pair is spaced as its delimiters would be.
+                if (NOADS(q)%auto > 0) then
+                    cls_l(k) = CL_OPEN
+                    cls_r(k) = CL_CLOSE
+                end if
             case (K_MID)
                 ! Spaced as a closing on its left and an opening on its
                 ! right, as e-TeX spaces \middle.
                 cls_l(k) = CL_CLOSE
                 cls_r(k) = CL_OPEN
                 if (LR_TARGET >= 0.0_dp) then
-                    call make_delim(NOADS(q)%cp, LR_TARGET, cur, size, bx(k))
+                    call make_delim(NOADS(q)%cp, LR_TARGET, cur, size, bx(k), LR_FULL)
                 else
                     bx(k) = empty_box()
                 end if
@@ -1966,22 +2126,96 @@ contains
         box%ital = 0.0_dp
     end subroutine make_bar
 
+    ! Decides the automatic pairs of a list, in the styles they are set
+    ! in. A pair grows, becoming a \left...\right, when what it encloses
+    ! is taller than the plain delimiters by Typst's measure (it spans
+    ! more than either delimiter's height and 0.1 em from the axis); it
+    ! then takes the closing delimiter's scripts, and its lone |s become
+    ! \middle. Otherwise the pair is put back as it was written, so that
+    ! f(x) is set exactly as without automatic delimiters.
+    recursive subroutine settle_auto(head, style, cramped, size)
+        integer, intent(in) :: head, style
+        logical, intent(in) :: cramped
+        real(dp), intent(in) :: size
+        type(mbox_t) :: inner
+        integer :: q, cur, i0, o, c, nxt, a, last
+        real(dp) :: sz, ax, full, save, x0, y0, x1, y1, hl, hr
+        logical :: grow
+
+        cur = style
+        q = head
+        do while (q > 0)
+            if (NOADS(q)%kind == K_STYLE) cur = NOADS(q)%style
+            if (NOADS(q)%kind == K_LR .and. NOADS(q)%auto == 1) then
+                sz = style_size(cur, size)
+                i0 = NI
+                save = LR_TARGET
+                LR_TARGET = -1.0_dp
+                call mlist_box(NOADS(q)%a, cur, cramped, size, inner)
+                LR_TARGET = save
+                NI = i0
+                ax = math_const(MC_AXIS_HEIGHT)*sz
+                full = 2.0_dp*max(inner%h - ax, inner%d + ax)
+                call glyph_bbox(math_gid(NOADS(q)%dl, FACE_MATH), x0, y0, x1, y1)
+                hl = (y1 - y0)*sz
+                call glyph_bbox(math_gid(NOADS(q)%dr, FACE_MATH), x0, y0, x1, y1)
+                hr = (y1 - y0)*sz
+                grow = full - AUTO_SHORTFALL*sz > max(hl, hr)
+                o = NOADS(q)%lo
+                c = NOADS(q)%lc
+                a = NOADS(q)%a
+                if (grow) then
+                    NOADS(q)%auto = 2
+                    NOADS(q)%sup = NOADS(c)%sup
+                    NOADS(q)%sub = NOADS(c)%sub
+                    NOADS(c)%sup = -1
+                    NOADS(c)%sub = -1
+                    last = a
+                    do while (last > 0)
+                        if (NOADS(last)%amid) NOADS(last)%kind = K_MID
+                        last = NOADS(last)%next
+                    end do
+                else
+                    ! The opening takes the pair's place in the list, and
+                    ! the contents and the closing follow it.
+                    nxt = NOADS(q)%next
+                    NOADS(q) = NOADS(o)
+                    if (a > 0) then
+                        NOADS(q)%next = a
+                        last = a
+                        do while (NOADS(last)%next > 0)
+                            last = NOADS(last)%next
+                        end do
+                        NOADS(last)%next = c
+                    else
+                        NOADS(q)%next = c
+                    end if
+                    NOADS(c)%next = nxt
+                end if
+            end if
+            q = NOADS(q)%next
+        end do
+    end subroutine settle_auto
+
     ! \left ... \right (rule 19): the group is laid out once to measure it,
     ! and its delimiters are made to cover it from the axis, by TeX's
     ! \delimiterfactor of 901 and \delimitershortfall of 5pt; then it is
-    ! laid out again with its \middle delimiters at that size.
+    ! laid out again with its \middle delimiters at that size. The
+    ! delimiters of an automatic pair cover it as Typst's do: all of it,
+    ! less 0.1 em, with an assembly built to cover all of it.
     recursive subroutine make_lr(q, style, cramped, size, box)
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
         real(dp), intent(in) :: size
         type(mbox_t), intent(out) :: box
         type(mbox_t) :: inner, dl, dr
-        real(dp) :: sz, a, d1, d2, target, save
+        real(dp) :: sz, a, d1, d2, target, full, save, save_full
         integer :: i0
 
         sz = style_size(style, size)
         i0 = NI + 1
         save = LR_TARGET
+        save_full = LR_FULL
         LR_TARGET = -1.0_dp
         call mlist_box(NOADS(q)%a, style, cramped, size, inner)
         NI = i0 - 1
@@ -1989,13 +2223,21 @@ contains
         d2 = inner%d + a
         d1 = inner%h + inner%d - d2
         if (d2 > d1) d1 = d2
-        target = max(DELIM_FACTOR*d1, 2.0_dp*d1 - SHORTFALL*size)
+        if (NOADS(q)%auto > 0) then
+            full = 2.0_dp*d1
+            target = full - AUTO_SHORTFALL*sz
+        else
+            target = max(DELIM_FACTOR*d1, 2.0_dp*d1 - SHORTFALL*size)
+            full = target
+        end if
 
-        call make_delim(NOADS(q)%dl, target, style, size, dl)
+        call make_delim(NOADS(q)%dl, target, style, size, dl, full)
         LR_TARGET = target
+        LR_FULL = full
         call mlist_box(NOADS(q)%a, style, cramped, size, inner)
         LR_TARGET = save
-        call make_delim(NOADS(q)%dr, target, style, size, dr)
+        LR_FULL = save_full
+        call make_delim(NOADS(q)%dr, target, style, size, dr, full)
         call move_box(inner, dl%w, 0.0_dp)
         call move_box(dr, dl%w + inner%w, 0.0_dp)
         box%i0 = i0
@@ -2024,11 +2266,13 @@ contains
     end subroutine make_big
 
     ! A delimiter at least target tall, centred on the axis; the null
-    ! delimiter is an empty box a null delimiter's space wide.
-    subroutine make_delim(code, target, style, size, box)
+    ! delimiter is an empty box a null delimiter's space wide. An assembly
+    ! is built to full, when given, rather than to target.
+    subroutine make_delim(code, target, style, size, box, full)
         integer, intent(in) :: code, style
         real(dp), intent(in) :: target, size
         type(mbox_t), intent(out) :: box
+        real(dp), intent(in), optional :: full
         real(dp) :: sz, dy
 
         sz = style_size(style, size)
@@ -2037,7 +2281,7 @@ contains
             box%w = NULL_DELIM*size
             return
         end if
-        call make_delim_box(math_gid(code, FACE_MATH), target, sz, box)
+        call make_delim_box(math_gid(code, FACE_MATH), target, sz, box, full)
         dy = math_const(MC_AXIS_HEIGHT)*sz - 0.5_dp*(box%h - box%d)
         call move_box(box, 0.0_dp, dy)
         box%h = box%h + dy
@@ -2047,10 +2291,11 @@ contains
     ! The glyph g at size sz, or the first of its vertical variants at
     ! least target tall, or its assembly when none is, or the largest
     ! variant when it has no assembly either; not yet centred.
-    subroutine make_delim_box(g, target, sz, box)
+    subroutine make_delim_box(g, target, sz, box, full)
         integer, intent(in) :: g
         real(dp), intent(in) :: target, sz
         type(mbox_t), intent(out) :: box
+        real(dp), intent(in), optional :: full
         integer, allocatable :: vg(:)
         real(dp), allocatable :: va(:)
         integer :: nvar, k, best
@@ -2070,7 +2315,11 @@ contains
             end if
         end do
         if (has_assembly(g, .true.)) then
-            call make_assembly(g, target, sz, .true., box)
+            if (present(full)) then
+                call make_assembly(g, max(target, full), sz, .true., box)
+            else
+                call make_assembly(g, target, sz, .true., box)
+            end if
         else
             call glyph_box(best, sz, box)
         end if

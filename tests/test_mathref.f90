@@ -6,15 +6,21 @@
 ! algorithm with the same MATH constants, so the two have to agree: every
 ! glyph is the same character at the same size, and it and every rule sit
 ! within TOL points of where XeTeX puts them.
+!
+! tests/delim_refs.txt holds the delimiters Typst sets around what they
+! enclose (tools/gen_delim_refs.py makes it). fplotlib grows matched
+! delimiters by Typst's rule, so it has to choose the same size variants:
+! the delimiters, from left to right, have the same advance widths.
 module test_mathref
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t
-    use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked
+    use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked, &
+                               glyph_adv
     implicit none
     private
 
-    public :: math_ref_check
+    public :: math_ref_check, delim_ref_check
 
     ! How far, in points, a glyph or rule may sit from XeTeX's.
     real(dp), parameter :: TOL = 0.02_dp
@@ -160,6 +166,88 @@ contains
         end do
         if (bad) nfail = nfail + 1
     end subroutine check_one
+
+    subroutine delim_ref_check(path, nfail)
+        character(len=*), intent(in) :: path
+        integer, intent(out) :: nfail
+        character(len=512) :: line, formula
+        integer :: u, ios, nd, ncase
+        integer :: dcp(MAXG)
+        real(dp) :: dw(MAXG)
+
+        nfail = 0
+        ncase = 0
+        open (newunit=u, file=path, status="old", action="read", iostat=ios)
+        if (ios /= 0) then
+            print "(a)", "delimiter refs: "//path//" not found"
+            nfail = 1
+            return
+        end if
+        formula = ""
+        nd = 0
+        do
+            read (u, "(a)", iostat=ios) line
+            if (ios /= 0) exit
+            if (len_trim(line) == 0 .or. line(1:1) == "#") cycle
+            select case (line(1:2))
+            case ("F ")
+                if (len_trim(formula) > 0) then
+                    call check_delims(trim(formula), nd, dcp, dw, nfail)
+                    ncase = ncase + 1
+                end if
+                formula = line(3:)
+                nd = 0
+            case ("D ")
+                nd = nd + 1
+                read (line(3:), *) dcp(nd), dw(nd)
+            end select
+        end do
+        close (u)
+        if (len_trim(formula) > 0) then
+            call check_delims(trim(formula), nd, dcp, dw, nfail)
+            ncase = ncase + 1
+        end if
+        print "(a,i0,a,i0,a)", "delimiter refs: ", ncase, " formulas, ", nfail, &
+            " differ from Typst"
+    end subroutine delim_ref_check
+
+    subroutine check_delims(formula, nd, dcp, dw, nfail)
+        character(len=*), intent(in) :: formula
+        integer, intent(in) :: nd, dcp(:)
+        real(dp), intent(in) :: dw(:)
+        integer, intent(inout) :: nfail
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        real(dp) :: w, ry(MAXG), sz(MAXG), x(MAXG)
+        integer :: g(MAXG), k, n
+        logical :: bad
+
+        call math_layout(formula, SIZE, run, rules, w)
+        n = 0
+        do k = 1, run%n
+            select case (glyph_char(run%gid(k)))
+            case (40, 41, 91, 93, 123, 125, 124, 8214, 10216, 10217, 8968:8971)
+                n = n + 1
+                g(n) = run%gid(k)
+                sz(n) = run%size(k)
+                x(n) = run%x(k)
+                ry(n) = -run%y(k)
+            end select
+        end do
+        call sort_glyphs(n, g, sz, x, ry)
+        bad = n /= nd
+        do k = 1, min(n, nd)
+            if (glyph_char(g(k)) /= dcp(k) .or. &
+                abs(glyph_adv(g(k))*sz(k) - dw(k)) > 0.005_dp) bad = .true.
+        end do
+        if (bad) then
+            print "(a)", "  "//formula//": delimiters"
+            print "(a,*(1x,i0,':',f0.3))", "    fplotlib", &
+                (glyph_char(g(k)), glyph_adv(g(k))*sz(k), k=1, n)
+            print "(a,*(1x,i0,':',f0.3))", "    Typst   ", (dcp(k), dw(k), k=1, nd)
+            nfail = nfail + 1
+        end if
+    end subroutine check_delims
 
     ! Sorts glyphs by x, and those within a hundredth of a point of each
     ! other in x from the top down.
