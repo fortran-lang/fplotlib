@@ -3,7 +3,7 @@
 !
 ! Helvetica has no greek in it, and neither has WinAnsi, so a label that
 ! says "alpha" in mathtext has nothing to be set in. Rather than embed a
-! font, the string is drawn: the same DejaVu outlines the PNG backend
+! font, the string is drawn: the same Lato outlines the PNG backend
 ! fills, in canvas coordinates, ready for draw_path. It is only reached
 ! for strings that need it, so ordinary labels stay selectable text.
 module fplotlib_textpath

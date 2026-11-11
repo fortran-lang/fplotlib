@@ -319,12 +319,15 @@ tests/         Fortran test plots, fingerprints, matplotlib refs, compare script
 
 ## License
 
-MIT, in `LICENSE`.
+The code is MIT, in `LICENSE`.
 
-The compiled-in glyph outlines in `src/fplotlib_glyphs_data.f90` are derived
-from DejaVu Sans, whose licence is in `LICENSE_DEJAVU`: the Bitstream Vera fonts
-are copyright Bitstream, and the DejaVu changes are in the public domain. The
-colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
+The generated glyph data in `src/fplotlib_glyphs_data.f90` (outlines, metrics
+and kerning) is derived from Lato, © tyPoland Łukasz Dziedzic with Reserved
+Font Name "Lato", and is licensed under the SIL Open Font License 1.1, in
+`LICENSE_LATO`. The OFL is permissive: a program built with fplotlib ships the
+OFL notice alongside the MIT one, and the plots fplotlib produces carry no
+obligations. `tools/gen_glyphs.py` regenerates the file from the pinned font
+files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.
 

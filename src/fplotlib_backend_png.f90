@@ -13,9 +13,8 @@
 ! Text is the one place this backend cannot follow the others. SVG and PDF
 ! hand the string over and let a font engine draw it; there is no font engine
 ! here, so the glyph outlines are compiled in (see fplotlib_glyphs) and text is
-! filled with exactly the code that fills any other path. They are DejaVu Sans
-! outlines, which is what matplotlib draws with, so the text lands in the same
-! place rather than merely a similar one.
+! filled with exactly the code that fills any other path. They are Lato
+! outlines, the face fplotlib sets all of its text in.
 
 module fplotlib_backend_png
     use fplotlib_style, only: dp, utf8_next
