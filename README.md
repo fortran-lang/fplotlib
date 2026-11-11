@@ -172,13 +172,23 @@ call suptitle("figure title")
   same number of ticks for the space available, and one decimal count
   shared by the whole axis. A log axis writes its decades as powers, and
   when it spans a decade or less it labels the multiples between them
-- Mathtext: `$10^{-3}$`, `$x_i$`, `$E = mc^2$`, `$\frac{a}{b}$`,
-  `$\sqrt{x}$` and the greek letters in any label, set in Lete Sans Math
-  with TeX's layout (The TeXbook, Appendix G) driven by the font's OpenType
-  MATH table, as XeTeX, LuaTeX and Typst do: script sizes and alternates,
-  script shifts, math kerns and italic corrections, fractions and radicals
-  all come from the font. `tests/math_refs.txt` holds where XeTeX puts every
-  glyph of the test formulas, and the layout is checked against it
+- Mathtext: TeX math in any label (`$E = mc^2$`, `$x_i^2$`,
+  `$\frac{a}{b}$`, `$\sqrt[3]{x}$`), set in Lete Sans Math with TeX's
+  layout (The TeXbook, Appendix G) driven by the font's OpenType MATH
+  table, as XeTeX, LuaTeX and Typst do: script sizes and alternates, script
+  shifts, math kerns and italic corrections, fractions, radicals, size
+  variants and assemblies all come from the font. Supported are the greek
+  letters, about two hundred operators, relations, arrows and other
+  symbols; primes; `\frac`, `\dfrac`, `\tfrac`, `\cfrac`, `\binom`,
+  `\over`, `\atop` and `\choose`; large operators with limits
+  (`\sum`, `\int`, `\lim`, `\limits`, `\nolimits`) and the named functions
+  (`\sin`, `\log`, `\operatorname{erf}`) in Lato; `\left`, `\middle` and
+  `\right`, and `\big` to `\Bigg`; accents (`\hat`, `\bar`, `\vec`,
+  `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
+  `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
+  Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
+  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 79 test formulas, and the layout is checked against it
 - Text is UTF-8 and set in Lato (regular, bold, italic, bold italic), with
   its kerning, in every European script except Cyrillic. The outlines are
   compiled in, so every format draws the same glyphs: PNG fills them, SVG

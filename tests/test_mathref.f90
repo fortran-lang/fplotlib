@@ -10,7 +10,7 @@ module test_mathref
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t
-    use fplotlib_glyphs, only: glyph_char
+    use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked
     implicit none
     private
 
@@ -75,16 +75,37 @@ contains
 
     subroutine check_one(formula, ng, gcp, gsz, gx, gy, nr, rb, nfail)
         character(len=*), intent(in) :: formula
-        integer, intent(in) :: ng, nr, gcp(:)
-        real(dp), intent(in) :: gsz(:), gx(:), gy(:), rb(:, :)
+        integer, intent(in) :: ng, nr
+        integer, intent(inout) :: gcp(:)
+        real(dp), intent(inout) :: gsz(:), gx(:), gy(:)
+        real(dp), intent(in) :: rb(:, :)
         integer, intent(inout) :: nfail
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         real(dp) :: w, err, worst, r(4)
         integer :: k, c, j
         logical :: bad, used(MAXG)
+        real(dp) :: ry(MAXG)
 
         call math_layout(formula, SIZE, run, rules, w)
+        ! A space is glue, which XeTeX does not write as a glyph.
+        j = 0
+        do k = 1, run%n
+            if (.not. glyph_inked(run%gid(k))) cycle
+            j = j + 1
+            run%gid(j) = run%gid(k)
+            run%x(j) = run%x(k)
+            run%y(j) = run%y(k)
+            run%size(j) = run%size(k)
+        end do
+        run%n = j
+        ! XeTeX writes a box's glyphs in its own order (the limits of a
+        ! display operator before the operator), so both sides are
+        ! compared from left to right.
+        ry(1:run%n) = -run%y(1:run%n)
+        call sort_glyphs(run%n, run%gid, run%size, run%x, ry)
+        run%y(1:run%n) = -ry(1:run%n)
+        call sort_glyphs(ng, gcp, gsz, gx, gy)
         bad = .false.
         worst = 0.0_dp
         if (run%n /= ng .or. rules%n /= nr) then
@@ -95,7 +116,9 @@ contains
         do k = 1, min(run%n, ng)
             c = glyph_char(run%gid(k))
             ! XeTeX names a glyph with no character of its own (a size
-            ! variant, a character variant) by a private-use code point.
+            ! variant, a character variant) by a code point of its own
+            ! choosing, so only the glyphs a character maps to are checked.
+            if (glyph_cmap(glyph_face(run%gid(k)), c) /= run%gid(k)) c = 0
             if (c /= 0 .and. gcp(k) /= 0 .and. c /= gcp(k) &
                 .and. (gcp(k) < 57344 .or. gcp(k) > 63743)) then
                 print "(a,i0,a,i0,a,i0)", "  "//formula//": glyph ", k, " is U+", c, &
@@ -137,5 +160,44 @@ contains
         end do
         if (bad) nfail = nfail + 1
     end subroutine check_one
+
+    ! Sorts glyphs by x, and those within a hundredth of a point of each
+    ! other in x from the top down.
+    subroutine sort_glyphs(n, g, sz, x, y)
+        integer, intent(in) :: n
+        integer, intent(inout) :: g(:)
+        real(dp), intent(inout) :: sz(:), x(:), y(:)
+        integer :: i, j, tg
+        real(dp) :: ts, tx, ty
+
+        do i = 2, n
+            tg = g(i)
+            ts = sz(i)
+            tx = x(i)
+            ty = y(i)
+            j = i - 1
+            do while (j >= 1)
+                if (.not. after(x(j), y(j), tx, ty)) exit
+                g(j + 1) = g(j)
+                sz(j + 1) = sz(j)
+                x(j + 1) = x(j)
+                y(j + 1) = y(j)
+                j = j - 1
+            end do
+            g(j + 1) = tg
+            sz(j + 1) = ts
+            x(j + 1) = tx
+            y(j + 1) = ty
+        end do
+    contains
+        logical function after(xa, ya, xb, yb)
+            real(dp), intent(in) :: xa, ya, xb, yb
+            if (abs(xa - xb) > 0.01_dp) then
+                after = xa > xb
+            else
+                after = ya < yb
+            end if
+        end function after
+    end subroutine sort_glyphs
 
 end module test_mathref

@@ -17,6 +17,7 @@ fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_mathsym
 fplotlib_mathtext
 fplotlib_png
 fplotlib_proj3d

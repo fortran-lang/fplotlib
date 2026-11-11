@@ -31,7 +31,7 @@ What is stored is each font's own representation, in integer font units:
     and the non-zero cells of the class matrix;
   * the math face carries its MATH table: the constants, and per glyph
     the italic correction, top accent attachment, math kerns, extended
-    shape flag, size variants (up to MAX_VARIANT ems) and assemblies.
+    shape flag, size variants and assemblies.
     Three GSUB features are baked in: cv11 (the single-story g) goes into
     the cmap, and ssty (script-size alternates) and dtls (dotless forms)
     become tables the layout looks glyphs up in.
@@ -163,10 +163,6 @@ MATH_REPERTOIRE = (
     | {0x2016, 0x27E8, 0x27E9, 0x2308, 0x2309, 0x230A, 0x230B,
        0x221A, 0x221B, 0x221C}
 )
-
-# Size variants are kept up to this advance, in ems: \Bigg asks for about
-# 1.8 ems, and a taller delimiter is built from its assembly instead.
-MAX_VARIANT = 2.5
 
 # The MATH constants, in the order the OpenType specification lists them.
 MATH_CONSTANTS = [
@@ -522,9 +518,7 @@ def load_math_face(path):
             return out
         for g, c in zip(cov.glyphs, cons):
             recs = c.MathGlyphVariantRecord or []
-            var = [(r.VariantGlyph, r.AdvanceMeasurement) for r in recs]
-            keep = [v for k, v in enumerate(var)
-                    if k < 2 or v[1] <= MAX_VARIANT * font["head"].unitsPerEm]
+            keep = [(r.VariantGlyph, r.AdvanceMeasurement) for r in recs]
             asm = None
             if c.GlyphAssembly is not None:
                 a = c.GlyphAssembly

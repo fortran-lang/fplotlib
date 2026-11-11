@@ -16,6 +16,7 @@ The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
 """
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,10 +66,75 @@ FORMULAS = [
     r"$T^{2}_{1} x$",
     r"$f^2(x)$",
     r"$y^{(n)}$",
+    # Large operators, limits and the integrals' side scripts.
+    r"$\displaystyle\sum_{i=1}^{n} i^2$",
+    r"$\sum_{i=1}^n x_i$",
+    r"$\int_0^1 f(x)\,dx$",
+    r"$\displaystyle\int_0^1 x\,dx$",
+    r"$\lim_{x \to 0} \frac{\sin x}{x}$",
+    r"$\displaystyle\lim_{n \to \infty} a_n$",
+    r"$\prod_k a_k$",
+    r"$\sum\limits_{k=0}^{N} k$",
+    # Fractions and stacks.
+    r"$\binom{n}{k}$",
+    r"$\dbinom{n}{k} + \tbinom{n}{k}$",
+    r"${a \atop b}$",
+    r"${a \over b}$",
+    r"$\dfrac{1}{2} + \tfrac{1}{2}$",
+    r"$\cfrac{1}{1+\cfrac{1}{x}}$",
+    # Radicals.
+    r"$\sqrt[3]{x}$",
+    r"$\sqrt{\frac{1}{1+x^2}}$",
+    r"$\sqrt{\displaystyle\sum_{k=1}^{n} \frac{a_k}{b_k}}$",
+    # Accents.
+    r"$\hat{x} + \tilde{y} + \bar{z}$",
+    r"$\vec{v} \cdot \dot{x} + \ddot{y}$",
+    r"$\widehat{xyz} + \widetilde{AB}$",
+    # fplotlib sets an i or j under an accent dotless (dtls), which XeTeX
+    # leaves to the font's own choice; written dotless, both agree.
+    r"$\hat{\imath} + \hat{\jmath}$",
+    r"$\check{c}\breve{u}$",
+    r"$\hat{x}^2$",
+    r"$\overrightarrow{AB}$",
+    # Delimiters.
+    r"$\left(\frac{a}{b}\right)$",
+    r"$\left[x\right]$",
+    r"$\left\{ x \middle| x > 0 \right\}$",
+    r"$\big( \Big( \bigg( \Bigg($",
+    r"$\bigl[ x \bigr]$",
+    r"$\left( \sum_{i} x_i \right)^2$",
+    # XeTeX scales a fraction's gaps by the font of the last character it
+    # set rather than by the fraction's own size, so the gap only comes out
+    # as the MATH table has it when that character is at the same size, as
+    # in a display fraction's denominator.
+    r"$\dfrac{\frac{a}{b}}{c}$",
+    r"$\left(\dfrac{\frac{a}{b}}{c + d}\right)$",
+    r"$\left(\displaystyle\sum_{k=1}^{n}\frac{1}{k^2}\right)$",
+    r"$\langle x, y \rangle$",
+    r"$\left\lfloor x \right\rfloor$",
+    # Alphabets, text and operator names.
+    r"$\mathbf{F} = m\mathbf{a}$",
+    r"$\mathbb{R}^n \times \mathbb{C}$",
+    r"$\mathcal{L}\{f\}$",
+    r"$\mathsf{A}\mathit{diff}$",
+    r"$\text{if } x > 0$",
+    r"$\operatorname{erf}(x)$",
+    # Symbols, primes and styles.
+    r"$a \leq b \neq c \approx d$",
+    r"$x \to \infty$",
+    r"$f'(x) + f''(x)$",
+    r"$y = f'(x)^2$",
+    r"$\alpha \pm \beta \cdot \gamma$",
+    r"$\hbar\omega = \nabla \times \vec{E}$",
+    r"$\partial_t u = \Delta u$",
+    r"$x \in \mathbb{N},\ y \notin A$",
+    r"$\textstyle \sum_i \scriptstyle x_i$",
+    r"$\$5$",
 ]
 
 PREAMBLE = r"""\documentclass{article}
 \usepackage[paperwidth=300bp,paperheight=100bp,margin=20bp]{geometry}
+\usepackage{amsmath}
 \usepackage{fontspec}
 \usepackage{unicode-math}
 \setmainfont{Lato}[Path=FONTS/, Extension=.ttf, UprightFont=*-Regular,
@@ -97,7 +163,25 @@ PREAMBLE = r"""\documentclass{article}
 MARK = 0.2
 
 
+# fplotlib's \mathbf, \mathsf, \mathit, \mathbb and \mathcal are the math
+# alphabets, which unicode-math calls \symbf and so on (its \mathbf is the
+# bold text font), so the formulas are spelled that way for XeTeX.
+ALPHABETS = {r"\mathbf": r"\symbf", r"\mathsf": r"\symsf", r"\mathit": r"\symit",
+             r"\mathbb": r"\symbb", r"\mathcal": r"\symcal"}
+
+
+# fplotlib's \binom is \atopwithdelims() as TeX sets it; amsmath's sizes
+# its parentheses by \fontdimen 20 and 21, which under XeTeX are unrelated
+# MATH constants.
+BINOM = re.compile(r"\\([dt]?)binom\{([^{}]*)\}\{([^{}]*)\}")
+BINOM_STYLE = {"": "", "d": r"\displaystyle", "t": r"\textstyle"}
+
+
 def page(formula):
+    for a, b in ALPHABETS.items():
+        formula = formula.replace(a + "{", b + "{")
+    formula = BINOM.sub(lambda m: r"{%s{{%s}\atopwithdelims(){%s}}}"
+                        % (BINOM_STYLE[m[1]], m[2], m[3]), formula)
     return (r"\vrule width %gbp height %gbp depth 0pt\kern-%gbp%s\newpage" "\n"
             % (MARK, MARK, MARK, formula))
 
