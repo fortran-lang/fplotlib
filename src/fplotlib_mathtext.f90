@@ -11,7 +11,8 @@
 ! for the letters of a math fragment and upright for everything else,
 ! which is TeX's own rule and matplotlib's.
 module fplotlib_mathtext
-    use fplotlib_glyphs, only: EM, XHEIGHT, glyph_advance, glyph_points
+    use fplotlib_glyphs, only: EM, XHEIGHT, glyph_points, FACE_REGULAR, FACE_ITALIC
+    use fplotlib_text, only: text_width
     use fplotlib_style, only: utf8_next, utf8_char
     implicit none
     private
@@ -271,8 +272,14 @@ contains
             case default
                 call utf8_next(s, i, code, nb)
                 call begin_atom(atom_kind(code), size, pen, st)
-                call emit_run(s(i:i + nb - 1), size, pen, y0, runs, nr, sx, &
-                              is_slanted(code, math))
+                if (code == iachar("-")) then
+                    ! A hyphen in math is a minus sign, as in TeX.
+                    code = 8722
+                    call emit_run(utf8_char(code), size, pen, y0, runs, nr, sx, .false.)
+                else
+                    call emit_run(s(i:i + nb - 1), size, pen, y0, runs, nr, sx, &
+                                  is_slanted(code, math))
+                end if
                 pen = sx
                 st%code = code
                 st%slanted = is_slanted(code, math)
@@ -738,7 +745,11 @@ contains
         do while (i <= run%n)
             call utf8_next(run%s, i, code, nb)
             i = i + nb
-            call glyph_points(code, x, y, n)
+            if (run%italic) then
+                call glyph_points(code, x, y, n, FACE_ITALIC)
+            else
+                call glyph_points(code, x, y, n, FACE_REGULAR)
+            end if
             if (n <= 0) cycle
             if (.not. any) then
                 ymin = minval(y(1:n))
@@ -976,7 +987,7 @@ contains
         logical, intent(in) :: italic
         integer :: n
 
-        xend = x0 + run_width(s, size)
+        xend = x0 + run_width(s, size, italic)
         n = min(len(s), 64)
         if (n <= 0) return
         ! Letters of one atom class sit against each other, so they can
@@ -988,8 +999,8 @@ contains
                 .and. abs(runs(nr)%dy - y0) <= 1.0e-9_dp &
                 .and. abs(runs(nr)%size - size) <= 1.0e-9_dp &
                 .and. runs(nr)%n + n <= 64) then
-                if (abs(runs(nr)%dx + run_width(runs(nr)%s(1:runs(nr)%n), size) &
-                        - x0) <= 1.0e-4_dp) then
+                if (abs(runs(nr)%dx + run_width(runs(nr)%s(1:runs(nr)%n), size, &
+                                                italic) - x0) <= 1.0e-4_dp) then
                     runs(nr)%s(runs(nr)%n + 1:runs(nr)%n + n) = s(1:n)
                     runs(nr)%n = runs(nr)%n + n
                     return
@@ -1007,19 +1018,18 @@ contains
         runs(nr)%line = .false.
     end subroutine emit_run
 
-    function run_width(s, size) result(w)
+    ! A run is set in the regular face, or the italic one for the letters
+    ! that slope.
+    function run_width(s, size, italic) result(w)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
+        logical, intent(in) :: italic
         real(dp) :: w
-        integer :: i, code, nb
-        w = 0.0_dp
-        i = 1
-        do while (i <= len(s))
-            call utf8_next(s, i, code, nb)
-            w = w + glyph_advance(code)
-            i = i + nb
-        end do
-        w = w*size/EM
+        if (italic) then
+            w = text_width(s, size, FACE_ITALIC)
+        else
+            w = text_width(s, size, FACE_REGULAR)
+        end if
     end function run_width
 
 end module fplotlib_mathtext

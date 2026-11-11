@@ -3,7 +3,7 @@
 [![CI](https://github.com/certik/fplotlib/actions/workflows/ci.yml/badge.svg)](https://github.com/certik/fplotlib/actions/workflows/ci.yml)
 
 Pure Fortran plotting library with a pylab-style API, writing SVG, PNG, PDF and EPS.
-No external graphics library: the PNG rasterizer and its font are part of fplotlib.
+No external graphics library: the PNG rasterizer and its fonts are part of fplotlib.
 
 ```fortran
 use fplotlib
@@ -175,10 +175,15 @@ call suptitle("figure title")
 - Mathtext: `$10^{-3}$`, `$x_i$`, `$E = mc^2$`, `$\frac{a}{b}$`,
   `$\sqrt{x}$` and the greek letters in any label, laid out once and
   drawn by every backend, with the letters sloped and the rest upright as
-  TeX sets them. Text is UTF-8; PDF and EPS fill the greek as outlines,
-  since no core font has it
+  TeX sets them
+- Text is UTF-8 and set in Lato (regular, bold, italic, bold italic), with
+  its kerning, in every European script except Cyrillic. The outlines are
+  compiled in, so every format draws the same glyphs: PNG fills them, SVG
+  defines each once and `<use>`s it, and PDF and EPS embed them as Type 3
+  fonts that keep the text selectable. Tick labels write their minus as
+  U+2212, as matplotlib does
 - `fontweight=` and `fontstyle=` on `title`, `suptitle`, `xlabel`,
-  `ylabel`, `text` and `annotate`: real bold and oblique faces, not a
+  `ylabel`, `text` and `annotate`: real bold and italic faces, not a
   smeared or sheared regular one
 - Categorical axes: `plot`, `bar` and `barh` take a list of names in place
   of the numbers, and place them at 0, 1, 2, ... with the names as ticks
@@ -353,14 +358,15 @@ difference. As of this writing, over 100 cases:
 
 | format | cases | mean difference |
 | --- | --- | --- |
-| PNG | 124 | 1.50/255 |
-| PDF | 123 | 2.05/255 |
-| EPS | 124 | 3.57/255 |
-| GIF | 20 frames | 0.60/255 |
+| PNG | 125 | 1.32/255 |
+| PDF | 124 | 0.87/255 |
+| EPS | 125 | 2.31/255 |
+| GIF | 20 frames | 0.58/255 |
 
-What is left is mostly antialiasing along edges, and text: fplotlib draws with
-its own compiled-in DejaVu Sans metrics and glyph outlines, so a stem lands
-on the same pixel column as matplotlib's but not always with the same
-coverage. The SVG is not matplotlib's SVG byte for byte, and is not meant to
-be: matplotlib writes every glyph as a path and attaches its own metadata,
-while fplotlib writes `<text>` and leaves the glyphs to the viewer.
+The references are made with matplotlib set to the same Lato files fplotlib's
+glyphs come from. What is left is mostly antialiasing along edges, and text:
+fplotlib fills the outlines unhinted where matplotlib hints them through
+FreeType, so a stem lands on the same pixel column as matplotlib's but not
+always with the same coverage. The SVG is not matplotlib's SVG byte for byte,
+and is not meant to be: both write every glyph as a path, but matplotlib
+attaches its own ids and metadata.

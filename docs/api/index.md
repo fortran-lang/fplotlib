@@ -26,8 +26,9 @@ fplotlib_scale
 fplotlib_state
 fplotlib_style
 fplotlib_svg
-fplotlib_textpath
+fplotlib_text
 fplotlib_ticks
 fplotlib_tri
+fplotlib_type3
 fplotlib
 ```

@@ -17,6 +17,7 @@ module fplotlib_backend_svg
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num, xml_escape_to
     use fplotlib_png, only: png_encode
+    use fplotlib_glyphs, only: NGLYPH, glyph_outline, glyph_inked
     implicit none
     private
 
@@ -33,6 +34,9 @@ module fplotlib_backend_svg
         type(clip_t) :: cur_clip
         integer :: cur_clip_id = 0
         logical :: in_clip = .false.
+        ! The glyphs already defined in a <defs>, each of which every later
+        ! string that uses it refers back to.
+        logical, allocatable :: glyph_defined(:)
     contains
         procedure :: open_canvas => svg_open_canvas
         procedure :: close_canvas => svg_close_canvas
@@ -41,7 +45,7 @@ module fplotlib_backend_svg
         procedure :: draw_rect => svg_draw_rect
         procedure :: draw_circle => svg_draw_circle
         procedure :: draw_markers => svg_draw_markers
-        procedure :: draw_text => svg_draw_text
+        procedure :: draw_glyphs => svg_draw_glyphs
         procedure :: draw_image => svg_draw_image
         procedure :: begin_group => svg_begin_group
         procedure :: end_group => svg_end_group
@@ -222,6 +226,9 @@ contains
         if (present(y0)) oy = y0
 
         call builder_init(self%b)
+        if (allocated(self%glyph_defined)) deallocate (self%glyph_defined)
+        allocate (self%glyph_defined(NGLYPH))
+        self%glyph_defined = .false.
         call put(self, '<?xml version="1.0" encoding="utf-8" standalone="no"?>')
         call put_eol(self)
         call put(self, '<svg xmlns="http://www.w3.org/2000/svg" ')
@@ -418,44 +425,61 @@ contains
         end do
     end subroutine svg_draw_markers
 
-    subroutine svg_draw_text(self, x, y, s, font, paint, anchor, baseline, angle)
+    ! Text as matplotlib writes it with svg.fonttype = "path": each glyph
+    ! is a path defined once, in glyph space (a thousandth of an em, y up),
+    ! and every occurrence is a <use> of it, scaled to its size and flipped
+    ! into the canvas. No font is named, so no viewer can substitute one.
+    ! The string itself goes on the group as its accessible name.
+    subroutine svg_draw_glyphs(self, x, y, run, paint, angle)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
+        type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
         real(dp), intent(in) :: angle
-        character(len=6*len(s)) :: esc
-        integer :: en
+        integer, allocatable :: gv(:)
+        real(dp), allocatable :: gx(:), gy(:)
+        character(len=:), allocatable :: esc
+        integer :: i, nv, np, en, g
+        logical :: opened
+        real(dp) :: ca, sa, k
 
+        if (run%n == 0) return
         call sync_clip(self, paint%clip)
-        call put(self, '<text x="')
-        call put_num(self, x)
-        call put(self, '" y="')
-        call put_num(self, y)
-        call put(self, '" text-anchor="')
-        select case (anchor)
-        case (ANCHOR_START); call put(self, "start")
-        case (ANCHOR_END); call put(self, "end")
-        case default; call put(self, "middle")
-        end select
-        call put(self, '"')
-        select case (baseline)
-        case (BASE_MIDDLE); call put(self, ' dominant-baseline="middle"')
-        case (BASE_TOP); call put(self, ' dominant-baseline="hanging"')
-        end select
-        call put(self, ' font-family="')
-        select case (font%family)
-        case (FAMILY_SERIF); call put(self, "DejaVu Serif, serif")
-        case (FAMILY_MONO); call put(self, "DejaVu Sans Mono, monospace")
-        case default; call put(self, "DejaVu Sans, sans-serif")
-        end select
-        call put(self, '" font-size="')
-        call put_num(self, font%size)
-        call put(self, '"')
-        if (font%weight == WEIGHT_BOLD) call put(self, ' font-weight="bold"')
-        if (font%slant == SLANT_ITALIC) call put(self, ' font-style="italic"')
+
+        ! The glyphs this string is the first to use.
+        opened = .false.
+        do i = 1, run%n
+            g = run%gid(i)
+            if (g < 1 .or. g > NGLYPH) cycle
+            if (self%glyph_defined(g)) cycle
+            self%glyph_defined(g) = .true.
+            call glyph_outline(g, gv, nv, gx, gy, np)
+            if (nv == 0) cycle
+            if (.not. opened) then
+                call put(self, "<defs>")
+                call put_eol(self)
+                opened = .true.
+            end if
+            call put(self, '<path id="g')
+            call put_int(self, g)
+            call put(self, '" d="')
+            call put_path_data(self, 1000.0_dp*gx, 1000.0_dp*gy, gv, nv)
+            call put(self, '"/>')
+            call put_eol(self)
+        end do
+        if (opened) then
+            call put(self, "</defs>")
+            call put_eol(self)
+        end if
+
+        call put(self, "<g")
+        if (allocated(run%text)) then
+            allocate (character(len=6*len(run%text)) :: esc)
+            call xml_escape_to(run%text, esc, en)
+            call put(self, ' aria-label="')
+            call put(self, esc(1:en))
+            call put(self, '"')
+        end if
         call put(self, ' fill="')
         if (paint%filled) then
             call put_color(self, paint%fill_rgb)
@@ -468,27 +492,37 @@ contains
             call put_num(self, paint%fill_alpha)
             call put(self, '"')
         end if
-        if (angle /= 0.0_dp) then
-            call put(self, ' transform="rotate(')
-            call put_num(self, angle)
-            call put(self, " ")
-            call put_num(self, x)
-            call put(self, " ")
-            call put_num(self, y)
-            call put(self, ')"')
-        end if
-        ! The default whitespace rule throws away a leading space, so a
-        ! run that starts with one draws its first glyph where the space
-        ! should have been. preserve keeps the space the layout measured.
-        call put(self, ' xml:space="preserve"')
         call put(self, ">")
-        ! Escaping is the backend's business: the caller hands over the text
-        ! the user asked for, and each format spells it its own way.
-        call xml_escape_to(s, esc, en)
-        call put(self, esc(1:en))
-        call put(self, "</text>")
         call put_eol(self)
-    end subroutine svg_draw_text
+
+        ca = cos(angle*3.141592653589793_dp/180.0_dp)
+        sa = sin(angle*3.141592653589793_dp/180.0_dp)
+        do i = 1, run%n
+            g = run%gid(i)
+            if (.not. glyph_inked(g)) cycle
+            k = run%size(i)/1000.0_dp
+            call put(self, '<use xlink:href="#g')
+            call put_int(self, g)
+            call put(self, '" transform="translate(')
+            call put_num(self, x + run%x(i)*ca - run%y(i)*sa)
+            call put(self, " ")
+            call put_num(self, y + run%x(i)*sa + run%y(i)*ca)
+            call put(self, ")")
+            if (angle /= 0.0_dp) then
+                call put(self, " rotate(")
+                call put_num(self, angle)
+                call put(self, ")")
+            end if
+            call put(self, " scale(")
+            call put_num(self, k)
+            call put(self, " ")
+            call put_num(self, -k)
+            call put(self, ')"/>')
+            call put_eol(self)
+        end do
+        call put(self, "</g>")
+        call put_eol(self)
+    end subroutine svg_draw_glyphs
 
     ! A raster becomes a PNG in a base64 data URI, which is what matplotlib
     ! emits and what lets the whole image be one element. Smoothing is turned

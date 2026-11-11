@@ -6,14 +6,11 @@ both sides are handed to the same rasterizer and the resulting images are
 compared, which asks the only question that matters, whether the page looks
 the same.
 
-Text is the expected difference and it is a real one, not an artifact of the
-measurement. Matplotlib embeds a subset of DejaVu Sans and draws text with
-the same outlines it uses everywhere else. fplotliblib's PDF backend refers to the
-base-14 Helvetica instead, so the file needs no embedded font at all, but the
-glyphs are a different typeface and are spaced by Helvetica's widths while
-the surrounding layout was computed from DejaVu's. Everything that is not
-text should agree closely, and the per-case limit is set to catch it when it
-does not.
+Both sides set their text in the same Lato outlines: matplotlib embeds a
+subset of the font, and fplotlib embeds Type 3 fonts built from its own
+compiled-in copy of the same glyphs. What is left is the layout itself, and
+rasterizer antialiasing, and the per-case limit is set to catch a page that
+is actually drawn wrongly.
 
     pixi run compare-pdf
 """
@@ -33,8 +30,9 @@ OUT = ROOT / "out"
 
 DPI = 100
 
-# Mean absolute channel difference out of 255. Looser than the PNG limit
-# because a whole typeface differs, not just its hinting.
+# Mean absolute channel difference out of 255. Looser than the PNG limit,
+# which it no longer needs to be now that both sides draw the same glyphs:
+# the worst case measures under 7.
 MEAN_LIMIT = 12.0
 
 SIZE_TOLERANCE = {"savefig_tight": 0.02}

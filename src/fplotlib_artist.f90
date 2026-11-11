@@ -10,8 +10,8 @@ module fplotlib_artist
     use fplotlib_render
     use fplotlib_state
     use fplotlib_mathtext
-    use fplotlib_state
-    use fplotlib_state
+    use fplotlib_text, only: text_face, text_layout, text_width, run_shift
+    use fplotlib_glyphs, only: face_ascent, face_descent, FACE_REGULAR
     implicit none
     public
 
@@ -385,8 +385,9 @@ contains
         real(dp), intent(in), optional :: rot
         integer, intent(in), optional :: weight, slant, baseline
         type(font_t) :: f
+        type(glyphrun_t) :: run
         integer :: an, bl
-        real(dp) :: ang
+        real(dp) :: ang, w
 
         select case (anchor)
         case ("left", "start"); an = ANCHOR_START
@@ -401,63 +402,137 @@ contains
         ang = 0.0_dp
         ! The API turns angles clockwise, matplotlib counterclockwise.
         if (present(rot)) ang = -rot
+        if (len_trim(s) == 0) return
         if (math_is(s)) then
-            call append_math(b, x, y, s, f, brush(color), an, ang)
+            call append_math(b, x, y, s, f, brush(color), an, bl, ang)
         else
-            call b%draw_text(x, y, s, f, brush(color), an, bl, ang)
+            run%text = s
+            call text_layout(s, f%size, text_face(f%weight, f%slant), 0.0_dp, &
+                             0.0_dp, run, w)
+            call align_run(run, w, f, an, bl)
+            call b%draw_glyphs(x, y, run, brush(color), ang)
         end if
     end subroutine append_text
 
-    ! Mathtext is laid out into plain runs here, so that the backends only
-    ! ever see text they already know how to draw. The runs are placed
-    ! along the text direction, which is why the offsets are rotated by
-    ! the same angle as the string itself.
-    subroutine append_math(b, x, y, s, f, p, anchor, ang)
-        class(renderer_t), intent(inout) :: b
-        real(dp), intent(in) :: x, y, ang
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: f
-        type(paint_t), intent(in) :: p
-        integer, intent(in) :: anchor
-        type(mrun_t) :: runs(MAX_RUNS)
-        type(font_t) :: rf
-        type(paint_t) :: lp
-        integer :: nr, i
-        real(dp) :: w, x0, ca, sa, rad
+    ! The extent of a line of text above and below its baseline, in points:
+    ! the font's ascender and descender, which is what matplotlib sizes a
+    ! line of text by and aligns it with. A line is their sum, 1.2 ems in
+    ! Lato.
+    pure real(dp) function text_ascent(size)
+        real(dp), intent(in) :: size
+        text_ascent = face_ascent(FACE_REGULAR)*size
+    end function text_ascent
 
-        call math_layout(s, f%size, runs, nr, w)
+    pure real(dp) function text_descent(size)
+        real(dp), intent(in) :: size
+        text_descent = -face_descent(FACE_REGULAR)*size
+    end function text_descent
+
+    ! Where the baseline goes for text centred on y, below it: matplotlib's
+    ! "center" puts the middle of the line there.
+    pure real(dp) function text_mid(size)
+        real(dp), intent(in) :: size
+        text_mid = 0.5_dp*(text_ascent(size) - text_descent(size))
+    end function text_mid
+
+    ! Width of a label in points, mathtext or not, as append_text sets it.
+    function str_width(s, size, weight, slant) result(w)
+        character(len=*), intent(in) :: s
+        real(dp), intent(in) :: size
+        integer, intent(in), optional :: weight, slant
+        real(dp) :: w
+        integer :: wt, sl
+        wt = WEIGHT_NORMAL
+        sl = SLANT_ROMAN
+        if (present(weight)) wt = weight
+        if (present(slant)) sl = slant
+        if (math_is(s)) then
+            w = math_width(s, size)
+        else
+            w = text_width(s, size, text_face(wt, sl))
+        end if
+    end function str_width
+
+    ! Slide a laid out run so that its anchor sits at the origin: across
+    ! by its width for the horizontal alignment, and down to the baseline
+    ! for the vertical one, which goes by the line's ascent and descent as
+    ! matplotlib's does.
+    subroutine align_run(run, w, f, anchor, baseline, dx, dy)
+        type(glyphrun_t), intent(inout) :: run
+        real(dp), intent(in) :: w
+        type(font_t), intent(in) :: f
+        integer, intent(in) :: anchor, baseline
+        real(dp), intent(out), optional :: dx, dy
+        real(dp) :: x0, y0
+
         select case (anchor)
         case (ANCHOR_MIDDLE); x0 = -0.5_dp*w
         case (ANCHOR_END); x0 = -w
         case default; x0 = 0.0_dp
         end select
+        select case (baseline)
+        case (BASE_TOP); y0 = text_ascent(f%size)
+        case (BASE_BOTTOM); y0 = -text_descent(f%size)
+        case (BASE_MIDDLE); y0 = text_mid(f%size)
+        case default; y0 = 0.0_dp
+        end select
+        call run_shift(run, 1, x0, y0)
+        if (present(dx)) dx = x0
+        if (present(dy)) dy = y0
+    end subroutine align_run
+
+    ! Mathtext is laid out into runs of plain text and strokes, the text
+    ! set into one run of glyphs and the strokes drawn as paths. The
+    ! strokes are placed along the text direction, which is why their
+    ! offsets are rotated by the same angle as the glyphs.
+    subroutine append_math(b, x, y, s, f, p, anchor, baseline, ang)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x, y, ang
+        character(len=*), intent(in) :: s
+        type(font_t), intent(in) :: f
+        type(paint_t), intent(in) :: p
+        integer, intent(in) :: anchor, baseline
+        type(mrun_t) :: runs(MAX_RUNS)
+        type(glyphrun_t) :: run
+        type(paint_t) :: lp
+        type(font_t) :: mf
+        integer :: nr, i, face
+        real(dp) :: w, x0, y0, ca, sa, rad, xe
+
+        call math_layout(s, f%size, runs, nr, w)
+        run%text = s
+        do i = 1, nr
+            if (runs(i)%line .or. runs(i)%n <= 0) cycle
+            face = text_face(WEIGHT_NORMAL, SLANT_ROMAN)
+            if (runs(i)%italic) face = text_face(WEIGHT_NORMAL, SLANT_ITALIC)
+            call text_layout(runs(i)%s(1:runs(i)%n), runs(i)%size, face, &
+                             runs(i)%dx, runs(i)%dy, run, xe)
+        end do
+        ! The math is set in the regular faces whatever the weight asks
+        ! for, so it is aligned by them too.
+        mf = f
+        mf%weight = WEIGHT_NORMAL
+        mf%slant = SLANT_ROMAN
+        call align_run(run, w, mf, anchor, baseline, x0, y0)
+        call b%draw_glyphs(x, y, run, p, ang)
+
         rad = ang*PI/180.0_dp
         ca = cos(rad)
         sa = sin(rad)
-        rf = f
         do i = 1, nr
-            if (runs(i)%line) then
-                lp = p
-                lp%filled = .false.
-                lp%stroked = .true.
-                lp%stroke_rgb = p%fill_rgb
-                lp%stroke_alpha = p%fill_alpha
-                lp%line_width = runs(i)%lw
-                lp%cap = CAP_BUTT
-                call b%draw_path([x + (x0 + runs(i)%dx)*ca - runs(i)%dy*sa, &
-                                  x + (x0 + runs(i)%x2)*ca - runs(i)%y2*sa], &
-                                 [y + (x0 + runs(i)%dx)*sa + runs(i)%dy*ca, &
-                                  y + (x0 + runs(i)%x2)*sa + runs(i)%y2*ca], &
-                                 [VERB_MOVE, VERB_LINE], 2, lp)
-                cycle
-            end if
-            rf%size = runs(i)%size
-            rf%slant = SLANT_ROMAN
-            if (runs(i)%italic) rf%slant = SLANT_ITALIC
-            call b%draw_text(x + (x0 + runs(i)%dx)*ca - runs(i)%dy*sa, &
-                             y + (x0 + runs(i)%dx)*sa + runs(i)%dy*ca, &
-                             runs(i)%s(1:runs(i)%n), rf, p, ANCHOR_START, &
-                             BASE_ALPHABETIC, ang)
+            if (.not. runs(i)%line) cycle
+            lp = p
+            lp%filled = .false.
+            lp%stroked = .true.
+            lp%stroke_rgb = p%fill_rgb
+            lp%stroke_alpha = p%fill_alpha
+            lp%line_width = runs(i)%lw
+            lp%cap = CAP_BUTT
+            call b%draw_path([x + (x0 + runs(i)%dx)*ca - (y0 + runs(i)%dy)*sa, &
+                              x + (x0 + runs(i)%x2)*ca - (y0 + runs(i)%y2)*sa], &
+                             [y + (x0 + runs(i)%dx)*sa + (y0 + runs(i)%dy)*ca, &
+                              y + (x0 + runs(i)%x2)*sa + (y0 + runs(i)%y2)*ca], &
+                             [VERB_MOVE, VERB_LINE], 2, lp)
         end do
     end subroutine append_math
 
@@ -606,7 +681,8 @@ contains
             wmax = 0.0_dp
             do k = 1, nl
                 call line_bounds(t%s, k, i0, i1)
-                if (i1 >= i0) wmax = max(wmax, math_width(t%s(i0:i1), t%fontsize))
+                if (i1 >= i0) wmax = max(wmax, str_width(t%s(i0:i1), t%fontsize, &
+                                                         t%weight, t%slant))
             end do
             pad = t%box_pad*t%fontsize
             hgt = (nl - 1)*lh + t%fontsize
@@ -615,7 +691,7 @@ contains
             case ("right", "end"); x0 = px - wmax
             case default; x0 = px
             end select
-            y0 = py + dy - 0.76_dp*t%fontsize
+            y0 = py + dy - text_ascent(t%fontsize)
             if (base == BASE_MIDDLE) y0 = py + dy - 0.5_dp*t%fontsize
             if (base == BASE_TOP) y0 = py + dy
             if (base == BASE_BOTTOM) y0 = py + dy - hgt

@@ -17,10 +17,31 @@ from matplotlib.path import Path as MPath
 import datetime
 import io
 
+import os
+import sys
+
 import numpy as np
 from PIL import Image
+from matplotlib import font_manager
 
 ROOT = Path(__file__).resolve().parent
+
+# fplotlib sets its text in Lato, so matplotlib is given the same pinned
+# files the glyph tables were generated from, fetched and checked by the
+# generator (FPLOTLIB_FONTS names a directory holding them instead).
+# Mathtext gets Lato too, through the custom font set, so that the letters
+# of a formula are the same faces in both.
+sys.path.insert(0, str(ROOT.parent / "tools"))
+from gen_glyphs import font_file  # noqa: E402
+
+for _face in ("Lato-Regular.ttf", "Lato-Bold.ttf", "Lato-Italic.ttf",
+              "Lato-BoldItalic.ttf"):
+    font_manager.fontManager.addfont(str(font_file(_face, os.environ.get("FPLOTLIB_FONTS"))))
+plt.rcParams["font.family"] = "Lato"
+plt.rcParams["mathtext.fontset"] = "custom"
+plt.rcParams["mathtext.rm"] = "Lato"
+plt.rcParams["mathtext.it"] = "Lato:italic"
+plt.rcParams["mathtext.bf"] = "Lato:bold"
 REF = ROOT / "refs"
 OUT_NAMES = [
     "quiverkey",

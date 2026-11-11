@@ -4,12 +4,12 @@ Same argument as tests/compare_pdfs.py: PostScript is a program, not a
 picture, so two files that draw the same page share almost nothing textually.
 Both sides go through Ghostscript and the images are compared.
 
-Two differences from the PDF comparison are expected and are properties of
-the format, not defects. Text is a different typeface, because matplotlib
-embeds a DejaVu Sans subset and fplotlib names the base-13 Helvetica; and
-PostScript has no transparency, so fplotlib composites every alpha against the
-page colour while matplotlib simply drops it. The limit below is set to
-allow both and still catch a page that is actually drawn wrongly.
+One difference from the PDF comparison is expected and is a property of the
+format, not a defect: PostScript has no transparency, so fplotlib composites
+every alpha against the page colour while matplotlib simply drops it. Text
+is the same Lato outlines on both sides, embedded as fonts. The limit below
+is set to allow the transparency and still catch a page that is actually
+drawn wrongly.
 
     pixi run compare-eps
 """

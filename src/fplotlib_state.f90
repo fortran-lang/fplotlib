@@ -51,6 +51,8 @@ module fplotlib_state
     ! Default figure margins (matplotlib rcParams), in figure fractions.
     ! Tick geometry and label size, matching matplotlib's rcParams.
     real(dp), parameter :: TICK_LEN = 3.5_dp
+    ! matplotlib's xtick.major.pad: the gap between a tick and its label.
+    real(dp), parameter :: TICK_PAD = 3.5_dp
     real(dp), parameter :: TICK_FONT = 10.0_dp
     ! Minor ticks are shorter than majors by this factor.
     real(dp), parameter :: MINOR_FRAC = 2.0_dp / 3.5_dp
@@ -67,17 +69,12 @@ module fplotlib_state
     ! Suptitle baseline (matplotlib figure.suptitle default y), in figure
     ! fractions measured from the bottom.
     real(dp), parameter :: SUPTITLE_Y = 0.98_dp
-    ! Mean advance width of DejaVu Sans at the 10 pt legend font size, used
-    ! to size the legend box to its labels.
-    real(dp), parameter :: LEGEND_CHAR_W = 5.6_dp
-    ! Points per inch, matplotlib's font sizes, and the width of one digit
-    ! in DejaVu Sans as a fraction of the font size.
+    ! Points per inch, and matplotlib's font sizes.
     real(dp), parameter :: PT_PER_IN = 72.0_dp
     real(dp), parameter :: TITLE_FONT = 12.0_dp
     real(dp), parameter :: SUPTITLE_FONT = 12.0_dp
     real(dp), parameter :: LABEL_FONT = 11.0_dp
     real(dp), parameter :: LEGEND_FONT = 10.0_dp
-    real(dp), parameter :: DIGIT_W = 0.636_dp
     ! Height of a one-line label including its leading, in font sizes.
     real(dp), parameter :: LABEL_BOX = 1.45_dp
     ! matplotlib's axes.labelpad, the gap between the tick labels and the

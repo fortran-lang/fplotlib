@@ -68,7 +68,7 @@ module fplotlib_glyphs
     public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_BOLD_ITALIC
     public :: FACE_OBLIQUE, FACE_BOLD_OBLIQUE
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
-              glyph_kern, glyph_char, glyph_recompose
+              glyph_kern, glyph_char, glyph_recompose, glyph_inked
     public :: face_ascent, face_descent, face_xheight, face_capheight
     public :: EM, ASCENT, DESCENT, XHEIGHT
     public :: glyph_advance, glyph_verbs, glyph_points
@@ -199,6 +199,15 @@ contains
         end if
         call outline_of(gid, 1.0_dp/real(FACE_EM(GFACE(gid)), dp), v, nv, x, y, np)
     end subroutine glyph_outline
+
+    ! Whether a glyph draws anything at all; a space does not.
+    logical function glyph_inked(gid)
+        integer, intent(in) :: gid
+        call ensure_loaded()
+        glyph_inked = .false.
+        if (gid < 1 .or. gid > NGLYPH) return
+        glyph_inked = OBEG(gid + 1) > OBEG(gid) .or. PBEG(gid + 1) > PBEG(gid)
+    end function glyph_inked
 
     ! The pair kerning between two glyphs of a face, in ems.
     function glyph_kern(face, g1, g2) result(k)
