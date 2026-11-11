@@ -173,9 +173,12 @@ call suptitle("figure title")
   shared by the whole axis. A log axis writes its decades as powers, and
   when it spans a decade or less it labels the multiples between them
 - Mathtext: `$10^{-3}$`, `$x_i$`, `$E = mc^2$`, `$\frac{a}{b}$`,
-  `$\sqrt{x}$` and the greek letters in any label, laid out once and
-  drawn by every backend, with the letters sloped and the rest upright as
-  TeX sets them
+  `$\sqrt{x}$` and the greek letters in any label, set in Lete Sans Math
+  with TeX's layout (The TeXbook, Appendix G) driven by the font's OpenType
+  MATH table, as XeTeX, LuaTeX and Typst do: script sizes and alternates,
+  script shifts, math kerns and italic corrections, fractions and radicals
+  all come from the font. `tests/math_refs.txt` holds where XeTeX puts every
+  glyph of the test formulas, and the layout is checked against it
 - Text is UTF-8 and set in Lato (regular, bold, italic, bold italic), with
   its kerning, in every European script except Cyrillic. The outlines are
   compiled in, so every format draws the same glyphs: PNG fills them, SVG
@@ -326,10 +329,12 @@ tests/         Fortran test plots, fingerprints, matplotlib refs, compare script
 
 The code is MIT, in `LICENSE`.
 
-The generated glyph data in `src/fplotlib_glyphs_data.f90` (outlines, metrics
-and kerning) is derived from Lato, © tyPoland Łukasz Dziedzic with Reserved
-Font Name "Lato", and is licensed under the SIL Open Font License 1.1, in
-`LICENSE_LATO`. The OFL is permissive: a program built with fplotlib ships the
+The generated glyph data in `src/fplotlib_glyphs_data.f90` (outlines, metrics,
+kerning and the math table) is OFL-1.1, derived from two fonts under the SIL
+Open Font License 1.1: Lato, © tyPoland Łukasz Dziedzic with Reserved Font
+Name "Lato" (`LICENSE_LATO`), and Lete Sans Math, © Chenjing Bu and Daniel
+Flipo, built on Fira Math (© Xiangdong Zeng) and Lato (`LICENSE_LETE`). The
+OFL is permissive: a program built with fplotlib ships the
 OFL notice alongside the MIT one, and the plots fplotlib produces carry no
 obligations. `tools/gen_glyphs.py` regenerates the file from the pinned font
 files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is

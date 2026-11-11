@@ -1,0 +1,184 @@
+"""Regenerate tests/math_refs.txt: how XeTeX lays out the test formulas.
+
+fplotlib's math layout is TeX's, driven by the MATH table of the same
+font, so XeTeX setting the same formulas with the same font files is the
+reference it is checked against. Each formula is typeset by Tectonic
+(XeTeX with unicode-math) at 10 bp, one to a page, after a tiny rule that
+marks where the formula starts; the glyph origins, sizes and rules are
+read back from the PDF relative to that mark, and written out for
+tests/test_mathref.f90 to compare fplotlib's layout with.
+
+    pixi exec --spec tectonic --spec pdfminer.six --spec fonttools \\
+        --spec python=3.12 -- python tools/gen_math_refs.py
+
+The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
+--fonts DIR).
+"""
+
+import argparse
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from fontTools.ttLib import TTFont
+from pdfminer.high_level import extract_pages
+from pdfminer.layout import LTChar, LTCurve, LTLine, LTRect
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gen_glyphs import font_file  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "tests" / "math_refs.txt"
+
+# The formulas, as fplotlib is given them. Each is set in text style, the
+# way an inline formula in a label is.
+FORMULAS = [
+    r"$x^2$",
+    r"$x_i$",
+    r"$x_i^2$",
+    r"$T^{2}_{n}$",
+    r"$10^{-3}$",
+    r"$10^{3}$",
+    r"$E = mc^2$",
+    r"$a + b - c$",
+    r"$-x$",
+    r"$e^{-x^2}$",
+    r"$x_{i,j}$",
+    r"$f(x) = x^2$",
+    r"$\alpha_1 \times \beta^2$",
+    r"$\Omega = \alpha + \beta$",
+    r"$\frac{a}{b}$",
+    r"$\frac{x}{2}$",
+    r"$\frac{x+1}{y_k}$",
+    r"$\sqrt{y}$",
+    r"$\sqrt{x+1}$",
+    r"$T = 2\pi\sqrt{\frac{L}{g}}$",
+    r"$\mathrm{d}x$",
+    r"$\sin x$",
+    r"$a\,b\;c\ d$",
+    r"$T^2 + 1$",
+    r"$P_k + 1$",
+    # Both scripts on a base without a top-right math kern: Tectonic's
+    # XeTeX leaves that kern out when there is a subscript too (it tests
+    # the wrong field), where TeX Live's XeTeX and fplotlib apply it.
+    r"$T^{2}_{1} x$",
+    r"$f^2(x)$",
+    r"$y^{(n)}$",
+]
+
+PREAMBLE = r"""\documentclass{article}
+\usepackage[paperwidth=300bp,paperheight=100bp,margin=20bp]{geometry}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\setmainfont{Lato}[Path=FONTS/, Extension=.ttf, UprightFont=*-Regular,
+  ItalicFont=*-Italic, BoldFont=*-Bold, BoldItalicFont=*-BoldItalic]
+\setmathfont{LeteSansMath.otf}[Path=FONTS/, CharacterVariant=11]
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\makeatletter
+% The script sizes are the font's own percentages rather than LaTeX's
+% table, which would make the scriptscript size 5pt instead of 55%.
+\fontsize{10bp}{12bp}\selectfont
+\dimen0=\f@size pt
+\dimen2=0.SCRIPT\dimen0
+\dimen4=0.SCRIPTSCRIPT\dimen0
+\edef\x{\noexpand\DeclareMathSizes{\f@size}{\f@size}{\strip@pt\dimen2}{\strip@pt\dimen4}}\x
+\makeatother
+% The space after a script is the font's SpaceAfterScript at the size of
+% the formula, as fplotlib sets it.
+\scriptspace=SPACEAFTERbp
+\begin{document}
+\fontsize{10bp}{12bp}\selectfont
+"""
+
+# The mark: a rule this wide and high, standing on the baseline at the
+# start of the formula and taking no room.
+MARK = 0.2
+
+
+def page(formula):
+    return (r"\vrule width %gbp height %gbp depth 0pt\kern-%gbp%s\newpage" "\n"
+            % (MARK, MARK, MARK, formula))
+
+
+def walk(o, chars, rules):
+    if isinstance(o, LTChar):
+        chars.append(o)
+    elif isinstance(o, (LTRect, LTLine, LTCurve)):
+        rules.append(o)
+    if hasattr(o, "__iter__"):
+        for c in o:
+            walk(c, chars, rules)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--fonts", help="the directory holding the pinned font files")
+    args = ap.parse_args()
+    fonts = font_file("LeteSansMath.otf", args.fonts).parent
+    for f in ("Lato-Regular.ttf", "Lato-Italic.ttf", "Lato-Bold.ttf",
+              "Lato-BoldItalic.ttf"):
+        font_file(f, args.fonts)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tex = Path(tmp) / "refs.tex"
+        mc = TTFont(fonts / "LeteSansMath.otf")["MATH"].table.MathConstants
+        pre = (PREAMBLE.replace("FONTS", str(fonts))
+               .replace("SCRIPTSCRIPT", "%02d" % mc.ScriptScriptPercentScaleDown)
+               .replace("SCRIPT", "%02d" % mc.ScriptPercentScaleDown)
+               .replace("SPACEAFTER", "%g" % (mc.SpaceAfterScript.Value / 100)))
+        tex.write_text(pre
+                       + "".join(page(f) for f in FORMULAS) + r"\end{document}" "\n",
+                       encoding="utf-8")
+        subprocess.run(["tectonic", "--chatter", "minimal", str(tex)], check=True)
+        pages = list(extract_pages(str(Path(tmp) / "refs.pdf")))
+
+    if len(pages) != len(FORMULAS):
+        raise SystemExit(f"{len(pages)} pages for {len(FORMULAS)} formulas")
+    L = [
+        "# How XeTeX (Tectonic, unicode-math) lays out the formulas of",
+        "# tools/gen_math_refs.py with Lato and Lete Sans Math at 10 bp.",
+        "# Generated by tools/gen_math_refs.py; do not edit.",
+        "#",
+        "# F formula",
+        "# G code point (0 for none), size, x, y: a glyph's origin, y up",
+        "# R x0, y0, x1, y1: a rule's box",
+        "# All relative to where the formula starts on its baseline.",
+    ]
+    for formula, p in zip(FORMULAS, pages):
+        chars, rules = [], []
+        walk(p, chars, rules)
+        # The mark is the first rule drawn, and the only one this small.
+        marks = [r for r in rules if abs(r.x1 - r.x0) <= MARK + 1e-3
+                 and abs(r.y1 - r.y0) <= MARK + 1e-3]
+        if not marks:
+            raise SystemExit(f"no mark found for {formula}")
+        mark = marks[0]
+        ox = min(mark.x0, mark.x1)
+        oy = min(mark.y0, mark.y1)
+        # A rule this thin comes back as a stroked line along its middle.
+        if abs(mark.x1 - mark.x0) < 1e-6:
+            ox -= MARK / 2
+        L.append("F " + formula)
+        for c in chars:
+            t = c.get_text()
+            cp = ord(t) if len(t) == 1 else 0
+            L.append("G %d %.4f %.4f %.4f" % (cp, c.size, c.matrix[4] - ox, c.matrix[5] - oy))
+        for r in rules:
+            if r is mark:
+                continue
+            lw = getattr(r, "linewidth", 0.0) or 0.0
+            x0, y0, x1, y1 = r.bbox
+            # A thin rule may come back as a stroked line: its box is
+            # then its centre line, and its width is the line's.
+            if isinstance(r, LTLine) and abs(y1 - y0) < 1e-6:
+                y0 -= lw / 2
+                y1 += lw / 2
+            L.append("R %.4f %.4f %.4f %.4f" % (x0 - ox, y0 - oy, x1 - ox, y1 - oy))
+    OUT.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+    print(f"wrote {OUT}: {len(FORMULAS)} formulas")
+
+
+if __name__ == "__main__":
+    main()

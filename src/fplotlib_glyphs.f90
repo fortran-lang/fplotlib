@@ -3,7 +3,8 @@
 ! The outlines, metrics and kerning of the fonts are compiled in, packed
 ! into one base85 string in fplotlib_glyphs_data (written by
 ! tools/gen_glyphs.py) and unpacked here the first time anything is asked
-! for. Text is Lato, in four faces: regular, bold, italic and bold italic.
+! for. Text is Lato, in four faces: regular, bold, italic and bold italic;
+! math is Lete Sans Math, the fifth face, whose MATH table comes with it.
 !
 ! Glyphs are numbered: a glyph id (gid) runs over all the faces, one after
 ! another, and a face's cmap takes a code point to one of its gids. A
@@ -37,7 +38,20 @@
 !   * the pair kerning: the numbers of left and right classes plus one,
 !     each glyph's left and right class in raw bits, then per left class
 !     its non-zero cells plus one, gamma coded, and per cell the step to
-!     its right class, gamma coded, and the adjustment as a delta.
+!     its right class, gamma coded, and the adjustment as a delta;
+!   * for the math face (FACE_HAS_MATH), its MATH table: per glyph a bit
+!     and a delta for an italic correction, a bit and a delta from half
+!     the advance for a top accent attachment, a bit for an extended
+!     shape and a bit for math kerns, followed by the four corners (top
+!     right, top left, bottom right, bottom left), each its number of
+!     heights plus one and the heights and kerns as running deltas; then
+!     the vertical and the horizontal constructions, each a count plus one
+!     and per glyph its index, its variants (count plus one, then glyph and
+!     advance as a running delta) and a bit for an assembly, followed by
+!     its italic correction and parts (count, then glyph, start and end
+!     connector lengths, full advance and an extender bit); then the
+!     script-size alternates as triples of indices, and the dotless forms
+!     as pairs.
 !
 ! A face is TrueType (quadratic) or CFF (cubic), FACE_CUBIC says which.
 ! A quadratic contour may start anywhere and may leave an on-curve point
@@ -60,12 +74,16 @@ module fplotlib_glyphs
                                  FACE_XH, FACE_CAP, FACE_CUBIC, FACE_PRED, &
                                  NCLASS, CLEN, NRECOMP, RECOMP_BASE, &
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
-                                 BLOB_ROWS, BLOB_LEN
+                                 BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
+                                 NPART, NMKH, NMKV, MATH_CONSTANT
     implicit none
     private
 
     public :: NFACE, NGLYPH
-    public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_BOLD_ITALIC
+    public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_BOLD_ITALIC, FACE_MATH
+    public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
+              glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
+              glyph_ssty, glyph_dotless
     public :: FACE_OBLIQUE, FACE_BOLD_OBLIQUE
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
               glyph_kern, glyph_char, glyph_recompose, glyph_inked
@@ -77,6 +95,8 @@ module fplotlib_glyphs
     integer, parameter :: FACE_BOLD = 2
     integer, parameter :: FACE_ITALIC = 3
     integer, parameter :: FACE_BOLD_ITALIC = 4
+    ! Lete Sans Math, the face with the MATH table.
+    integer, parameter :: FACE_MATH = 5
     ! The names the faces had when the slanted ones were obliques.
     integer, parameter :: FACE_OBLIQUE = FACE_ITALIC
     integer, parameter :: FACE_BOLD_OBLIQUE = FACE_BOLD_ITALIC
@@ -111,14 +131,34 @@ module fplotlib_glyphs
     integer :: KNR(NFACE), KOFF(NFACE)      ! right classes, matrix offset
     integer(int16) :: KVAL(NKERN)           ! the class matrices, font units
 
+    ! The MATH table, by gid. A glyph outside the math face has none of it.
+    integer :: GITAL(NGLYPH), GACC(NGLYPH)  ! italic correction, top accent x
+    logical :: GEXT(NGLYPH)                 ! extended shape
+    ! Math kerns: for each corner the first height in MKH and the first
+    ! value in MKV, and the number of heights, -1 for no kern at all.
+    integer :: MKH0(4, NGLYPH), MKV0(4, NGLYPH), MKN(4, NGLYPH)
+    integer :: MKH(max(NMKH, 1)), MKV(max(NMKV, 1))
+    ! Constructions, vertical (1) and horizontal (2): the first variant and
+    ! how many, and the assembly, 0 for none.
+    integer :: CV0(2, NGLYPH), CVN(2, NGLYPH), CASM(2, NGLYPH)
+    integer :: VARG(max(NVAR, 1)), VARA(max(NVAR, 1))
+    integer :: ASMI(max(NASM, 1)), ASMP0(max(NASM, 1)), ASMN(max(NASM, 1))
+    integer :: PARTG(max(NPART, 1)), PARTST(max(NPART, 1)), PARTEN(max(NPART, 1))
+    integer :: PARTF(max(NPART, 1))
+    logical :: PARTX(max(NPART, 1))
+    ! Script and scriptscript alternates, and dotless forms; 0 for none.
+    integer :: SSTY(2, NGLYPH), DTLS(NGLYPH)
+
     ! The canonical prefix code for the magnitude classes, built from
     ! CLEN: how many codes have each length, the smallest of them, and the
     ! symbols in the order the codes run.
     integer :: NLEN(MAXLEN), FIRST(MAXLEN), CBASE(MAXLEN), CSYM(NCLASS)
 
-    ! The bit stream while it is being read.
+    ! The bit stream while it is being read, and how far into the MATH
+    ! arrays it has got.
     integer, allocatable :: BUF(:)
     integer :: BPOS
+    integer :: nmkh_, nmkv_, nvar_, nasm_, npart_
 
 contains
 
@@ -268,6 +308,154 @@ contains
         integer, intent(in) :: face
         face_capheight = real(FACE_CAP(face), dp)/real(FACE_EM(face), dp)
     end function face_capheight
+
+    ! --- the MATH table ----------------------------------------------
+
+    ! A MATH constant in ems. The three that are percentages are read with
+    ! math_percent instead.
+    pure real(dp) function math_const(i)
+        integer, intent(in) :: i
+        math_const = real(MATH_CONSTANT(i), dp)/real(FACE_EM(FACE_MATH), dp)
+    end function math_const
+
+    pure real(dp) function math_percent(i)
+        integer, intent(in) :: i
+        math_percent = real(MATH_CONSTANT(i), dp)
+    end function math_percent
+
+    ! The italic correction of a glyph, in ems.
+    function glyph_italic(gid) result(v)
+        integer, intent(in) :: gid
+        real(dp) :: v
+        call ensure_loaded()
+        v = 0.0_dp
+        if (gid < 1 .or. gid > NGLYPH) return
+        v = real(GITAL(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+    end function glyph_italic
+
+    ! Where an accent over a glyph is centred, in ems from its origin: the
+    ! MATH table's attachment point, or half the advance without one.
+    function glyph_top_accent(gid) result(v)
+        integer, intent(in) :: gid
+        real(dp) :: v
+        call ensure_loaded()
+        v = 0.0_dp
+        if (gid < 1 .or. gid > NGLYPH) return
+        if (FACE_HAS_MATH(GFACE(gid))) then
+            v = real(GACC(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        else
+            v = 0.5_dp*glyph_adv(gid)
+        end if
+    end function glyph_top_accent
+
+    ! The math kern at a corner of a glyph (1 top right, 2 top left, 3
+    ! bottom right, 4 bottom left) for a height in ems: the step of the
+    ! staircase that height falls on.
+    function glyph_math_kern(gid, corner, height) result(v)
+        integer, intent(in) :: gid, corner
+        real(dp), intent(in) :: height
+        real(dp) :: v, em
+        integer :: n, i
+        call ensure_loaded()
+        v = 0.0_dp
+        if (gid < 1 .or. gid > NGLYPH) return
+        n = MKN(corner, gid)
+        if (n < 0) return
+        em = real(FACE_EM(GFACE(gid)), dp)
+        i = 0
+        do while (i < n)
+            if (height*em < real(MKH(MKH0(corner, gid) + i), dp)) exit
+            i = i + 1
+        end do
+        v = real(MKV(MKV0(corner, gid) + i), dp)/em
+    end function glyph_math_kern
+
+    logical function glyph_extended(gid)
+        integer, intent(in) :: gid
+        call ensure_loaded()
+        glyph_extended = .false.
+        if (gid >= 1 .and. gid <= NGLYPH) glyph_extended = GEXT(gid)
+    end function glyph_extended
+
+    ! The size variants of a glyph along one direction, smallest first,
+    ! with the advance each measures in ems along it. Empty for a glyph
+    ! with none.
+    subroutine glyph_variants(gid, vertical, n, gids, adv)
+        integer, intent(in) :: gid
+        logical, intent(in) :: vertical
+        integer, intent(out) :: n
+        integer, allocatable, intent(out) :: gids(:)
+        real(dp), allocatable, intent(out) :: adv(:)
+        integer :: d, k
+        call ensure_loaded()
+        n = 0
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            d = merge(1, 2, vertical)
+            n = CVN(d, gid)
+        end if
+        allocate (gids(n), adv(n))
+        do k = 1, n
+            gids(k) = VARG(CV0(d, gid) + k - 1)
+            adv(k) = real(VARA(CV0(d, gid) + k - 1), dp)/real(FACE_EM(GFACE(gid)), dp)
+        end do
+    end subroutine glyph_variants
+
+    ! The assembly a glyph is built from along one direction, n = 0 for
+    ! none: the parts bottom to top (or left to right), their connector
+    ! lengths at the start and the end and full advances in ems, whether
+    ! each is an extender, and the italic correction of the whole.
+    subroutine glyph_assembly(gid, vertical, n, parts, starts, ends, fulls, &
+                              exts, italic)
+        integer, intent(in) :: gid
+        logical, intent(in) :: vertical
+        integer, intent(out) :: n
+        integer, allocatable, intent(out) :: parts(:)
+        real(dp), allocatable, intent(out) :: starts(:), ends(:), fulls(:)
+        logical, allocatable, intent(out) :: exts(:)
+        real(dp), intent(out) :: italic
+        integer :: d, a, k, p
+        real(dp) :: em
+        call ensure_loaded()
+        n = 0
+        italic = 0.0_dp
+        a = 0
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            d = merge(1, 2, vertical)
+            a = CASM(d, gid)
+            if (a > 0) n = ASMN(a)
+        end if
+        allocate (parts(n), starts(n), ends(n), fulls(n), exts(n))
+        if (a == 0) return
+        em = real(FACE_EM(GFACE(gid)), dp)
+        italic = real(ASMI(a), dp)/em
+        do k = 1, n
+            p = ASMP0(a) + k - 1
+            parts(k) = PARTG(p)
+            starts(k) = real(PARTST(p), dp)/em
+            ends(k) = real(PARTEN(p), dp)/em
+            fulls(k) = real(PARTF(p), dp)/em
+            exts(k) = PARTX(p)
+        end do
+    end subroutine glyph_assembly
+
+    ! The script (level 1) or scriptscript (level 2) alternate of a glyph,
+    ! the glyph itself when it has none.
+    integer function glyph_ssty(gid, level)
+        integer, intent(in) :: gid, level
+        call ensure_loaded()
+        glyph_ssty = gid
+        if (gid < 1 .or. gid > NGLYPH .or. level < 1 .or. level > 2) return
+        if (SSTY(level, gid) > 0) glyph_ssty = SSTY(level, gid)
+    end function glyph_ssty
+
+    ! The dotless form of a glyph, for under an accent; itself if none.
+    integer function glyph_dotless(gid)
+        integer, intent(in) :: gid
+        call ensure_loaded()
+        glyph_dotless = gid
+        if (gid < 1 .or. gid > NGLYPH) return
+        if (DTLS(gid) > 0) glyph_dotless = DTLS(gid)
+    end function glyph_dotless
 
     ! --- the code point interface ------------------------------------
 
@@ -549,6 +737,23 @@ contains
         CBEG(1) = 1
         PBEG(1) = 1
         GCHAR = 0
+        GITAL = 0
+        GACC = 0
+        GEXT = .false.
+        MKN = -1
+        MKH0 = 0
+        MKV0 = 0
+        CV0 = 0
+        CVN = 0
+        CASM = 0
+        SSTY = 0
+        DTLS = 0
+        nmkh_ = 0
+        nmkv_ = 0
+        nvar_ = 0
+        nasm_ = 0
+        npart_ = 0
+        if (.not. FACE_HAS_MATH(FACE_MATH)) error stop "fplotlib_glyphs: the math face is not face 5"
         do f = 1, NFACE
             base = FBASE(f)
             ng = FACE_NG(f)
@@ -639,15 +844,114 @@ contains
                 end do
             end do
             ikv = ikv + (nl + 1)*(nr + 1)
+            if (FACE_HAS_MATH(f)) call unpack_math(base, ng, lbits)
         end do
         CMB(NFACE + 1) = icp + 1
 
         if (ip /= NPT .or. ic /= NCONT .or. ik /= NCOMP .or. icp /= NCMAP &
-            .or. ikv /= NKERN) then
+            .or. ikv /= NKERN .or. nmkh_ /= NMKH .or. nmkv_ /= NMKV &
+            .or. nvar_ /= NVAR .or. nasm_ /= NASM .or. npart_ /= NPART) then
             error stop "fplotlib_glyphs: blob does not fill the tables"
         end if
         deallocate (BUF)
     end subroutine unpack
+
+    ! The MATH section of the face whose gids follow base.
+    subroutine unpack_math(base, ng, lbits)
+        integer, intent(in) :: base, ng, lbits
+        integer :: k, gid, c, n, j, prev, dim, ncons, nv, np_, a, b
+
+        do k = 1, ng
+            gid = base + k
+            if (get_bit() == 1) GITAL(gid) = get_delta()
+            GACC(gid) = GADV(gid)/2
+            if (get_bit() == 1) GACC(gid) = GADV(gid)/2 + get_delta()
+            GEXT(gid) = get_bit() == 1
+            if (get_bit() == 1) then
+                do c = 1, 4
+                    n = get_gamma() - 1
+                    MKN(c, gid) = n
+                    MKH0(c, gid) = nmkh_ + 1
+                    MKV0(c, gid) = nmkv_ + 1
+                    prev = 0
+                    do j = 1, n
+                        prev = prev + get_delta()
+                        nmkh_ = nmkh_ + 1
+                        MKH(nmkh_) = prev
+                    end do
+                    prev = 0
+                    do j = 1, n + 1
+                        prev = prev + get_delta()
+                        nmkv_ = nmkv_ + 1
+                        MKV(nmkv_) = prev
+                    end do
+                end do
+            end if
+        end do
+        do dim = 1, 2
+            ncons = get_gamma() - 1
+            do k = 1, ncons
+                gid = base + get_bits(lbits) + 1
+                nv = get_gamma() - 1
+                CV0(dim, gid) = nvar_ + 1
+                CVN(dim, gid) = nv
+                prev = 0
+                do j = 1, nv
+                    nvar_ = nvar_ + 1
+                    VARG(nvar_) = base + get_bits(lbits) + 1
+                    prev = prev + get_delta()
+                    VARA(nvar_) = prev
+                end do
+                if (get_bit() == 1) then
+                    nasm_ = nasm_ + 1
+                    CASM(dim, gid) = nasm_
+                    ASMI(nasm_) = get_delta()
+                    np_ = get_gamma()
+                    ASMP0(nasm_) = npart_ + 1
+                    ASMN(nasm_) = np_
+                    do j = 1, np_
+                        npart_ = npart_ + 1
+                        PARTG(npart_) = base + get_bits(lbits) + 1
+                        PARTST(npart_) = get_delta()
+                        PARTEN(npart_) = get_delta()
+                        PARTF(npart_) = get_delta()
+                        PARTX(npart_) = get_bit() == 1
+                    end do
+                end if
+            end do
+        end do
+        n = get_gamma() - 1
+        do k = 1, n
+            a = base + get_bits(lbits) + 1
+            SSTY(1, a) = base + get_bits(lbits) + 1
+            SSTY(2, a) = base + get_bits(lbits) + 1
+        end do
+        n = get_gamma() - 1
+        do k = 1, n
+            a = base + get_bits(lbits) + 1
+            b = base + get_bits(lbits) + 1
+            DTLS(a) = b
+        end do
+
+        ! A script-size alternate or a size variant stands for the same
+        ! character as its base, which is what a PDF's map back to
+        ! Unicode has to say for it.
+        do k = 1, ng
+            gid = base + k
+            if (GCHAR(gid) == 0) cycle
+            do j = 1, 2
+                if (SSTY(j, gid) > 0) then
+                    if (GCHAR(SSTY(j, gid)) == 0) GCHAR(SSTY(j, gid)) = GCHAR(gid)
+                end if
+            end do
+            do dim = 1, 2
+                do j = 1, CVN(dim, gid)
+                    if (GCHAR(VARG(CV0(dim, gid) + j - 1)) == 0) &
+                        GCHAR(VARG(CV0(dim, gid) + j - 1)) = GCHAR(gid)
+                end do
+            end do
+        end do
+    end subroutine unpack_math
 
     ! Bits for a number in 0..n.
     pure integer function nbits(n)

@@ -481,10 +481,9 @@ contains
         if (present(dy)) dy = y0
     end subroutine align_run
 
-    ! Mathtext is laid out into runs of plain text and strokes, the text
-    ! set into one run of glyphs and the strokes drawn as paths. The
-    ! strokes are placed along the text direction, which is why their
-    ! offsets are rotated by the same angle as the glyphs.
+    ! Mathtext is laid out into glyphs and rules: the glyphs are drawn as
+    ! any other text and the rules (fraction bars, radical bars) as filled
+    ! rectangles, turned with the text about the same origin.
     subroutine append_math(b, x, y, s, f, p, anchor, baseline, ang)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, ang
@@ -492,22 +491,15 @@ contains
         type(font_t), intent(in) :: f
         type(paint_t), intent(in) :: p
         integer, intent(in) :: anchor, baseline
-        type(mrun_t) :: runs(MAX_RUNS)
         type(glyphrun_t) :: run
-        type(paint_t) :: lp
+        type(mrules_t) :: rules
+        type(paint_t) :: rp
         type(font_t) :: mf
-        integer :: nr, i, face
-        real(dp) :: w, x0, y0, ca, sa, rad, xe
+        integer :: i
+        real(dp) :: w, x0, y0, ca, sa, rad, rx(4), ry(4)
 
-        call math_layout(s, f%size, runs, nr, w)
+        call math_layout(s, f%size, run, rules, w)
         run%text = s
-        do i = 1, nr
-            if (runs(i)%line .or. runs(i)%n <= 0) cycle
-            face = text_face(WEIGHT_NORMAL, SLANT_ROMAN)
-            if (runs(i)%italic) face = text_face(WEIGHT_NORMAL, SLANT_ITALIC)
-            call text_layout(runs(i)%s(1:runs(i)%n), runs(i)%size, face, &
-                             runs(i)%dx, runs(i)%dy, run, xe)
-        end do
         ! The math is set in the regular faces whatever the weight asks
         ! for, so it is aligned by them too.
         mf = f
@@ -519,20 +511,15 @@ contains
         rad = ang*PI/180.0_dp
         ca = cos(rad)
         sa = sin(rad)
-        do i = 1, nr
-            if (.not. runs(i)%line) cycle
-            lp = p
-            lp%filled = .false.
-            lp%stroked = .true.
-            lp%stroke_rgb = p%fill_rgb
-            lp%stroke_alpha = p%fill_alpha
-            lp%line_width = runs(i)%lw
-            lp%cap = CAP_BUTT
-            call b%draw_path([x + (x0 + runs(i)%dx)*ca - (y0 + runs(i)%dy)*sa, &
-                              x + (x0 + runs(i)%x2)*ca - (y0 + runs(i)%y2)*sa], &
-                             [y + (x0 + runs(i)%dx)*sa + (y0 + runs(i)%dy)*ca, &
-                              y + (x0 + runs(i)%x2)*sa + (y0 + runs(i)%y2)*ca], &
-                             [VERB_MOVE, VERB_LINE], 2, lp)
+        rp = p
+        rp%filled = .true.
+        rp%stroked = .false.
+        do i = 1, rules%n
+            rx = x0 + rules%x(i) + [0.0_dp, rules%w(i), rules%w(i), 0.0_dp]
+            ry = y0 + rules%y(i) + [0.0_dp, 0.0_dp, rules%h(i), rules%h(i)]
+            call b%draw_path(x + rx*ca - ry*sa, y + rx*sa + ry*ca, &
+                             [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE], &
+                             5, rp)
         end do
     end subroutine append_math
 

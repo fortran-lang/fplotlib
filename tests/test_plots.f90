@@ -1,8 +1,9 @@
 program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
+    use test_mathref, only: math_ref_check
     implicit none
-    integer :: fig1
+    integer :: fig1, nmath
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1560,9 +1561,13 @@ program test_plots
 
     print *, "All test plots written."
 
+    ! The math layout against XeTeX's; see test_mathref.f90.
+    call math_ref_check("tests/math_refs.txt", nmath)
+
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
+    if (nmath > 0) error stop "math layout differs from XeTeX"
 
 contains
 

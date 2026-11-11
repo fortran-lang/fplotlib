@@ -3,107 +3,145 @@
 ! matplotlib lets any label contain a TeX fragment between dollar signs,
 ! and that is by far the most used piece of it: exponents in "$10^{3}$"
 ! and indices in "$x_i$". The layout is done here, once, and turned into
-! a list of plain text runs with an offset and a size each. Every backend
-! then draws the runs it already knows how to draw, so none of them needs
-! to know what mathtext is.
+! a list of positioned glyphs and rules (fraction bars, radical bars)
+! that every backend draws the way it draws any other text.
 !
-! Only the layout is TeX. The glyphs are the ordinary text font, sloped
-! for the letters of a math fragment and upright for everything else,
-! which is TeX's own rule and matplotlib's.
+! The layout is TeX's (The TeXbook, Appendix G), with every dimension
+! read from the OpenType MATH table of the math font, Lete Sans Math, as
+! LuaTeX, XeTeX and Typst do:
+!
+!   * a fragment is parsed into a list of noads -- atoms with a nucleus
+!     and optional scripts, fractions, radicals and explicit spaces;
+!   * the list is turned into boxes in a style (display, text, script,
+!     scriptscript, each possibly cramped), which decides the size and
+!     which MATH constants apply;
+!   * the boxes are set side by side with TeX's inter-atom glue.
+!
+! A box is a range of items in one arena (glyphs and rules, positioned
+! relative to the box's origin, y up) together with its width, height and
+! depth. Laying a sub-list out appends its items contiguously, so placing
+! a box is moving its range. Nothing is truncated: the arenas grow.
+!
+! Text outside the dollar signs is set in Lato, as any other text.
 module fplotlib_mathtext
-    use fplotlib_glyphs, only: EM, XHEIGHT, glyph_points, FACE_REGULAR, FACE_ITALIC
-    use fplotlib_text, only: text_width
-    use fplotlib_style, only: utf8_next, utf8_char
+    use fplotlib_style, only: dp, utf8_next
+    use fplotlib_render, only: glyphrun_t
+    use fplotlib_text, only: text_layout, run_add
+    use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_bbox, glyph_italic, &
+                               glyph_variants, glyph_ssty, glyph_math_kern, &
+                               math_const, math_percent, &
+                               FACE_MATH, FACE_REGULAR
+    use fplotlib_glyphs_data, only: MC_SCRIPT_PERCENT_SCALE_DOWN, &
+                               MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN, MC_AXIS_HEIGHT, &
+                               MC_SUBSCRIPT_SHIFT_DOWN, MC_SUBSCRIPT_TOP_MAX, &
+                               MC_SUBSCRIPT_BASELINE_DROP_MIN, MC_SUPERSCRIPT_SHIFT_UP, &
+                               MC_SUPERSCRIPT_SHIFT_UP_CRAMPED, &
+                               MC_SUPERSCRIPT_BOTTOM_MIN, &
+                               MC_SUPERSCRIPT_BASELINE_DROP_MAX, &
+                               MC_SUB_SUPERSCRIPT_GAP_MIN, &
+                               MC_SUPERSCRIPT_BOTTOM_MAX_WITH_SUBSCRIPT, &
+                               MC_SPACE_AFTER_SCRIPT, &
+                               MC_FRACTION_NUMERATOR_SHIFT_UP, &
+                               MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP, &
+                               MC_FRACTION_DENOMINATOR_SHIFT_DOWN, &
+                               MC_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN, &
+                               MC_FRACTION_NUMERATOR_GAP_MIN, &
+                               MC_FRACTION_NUM_DISPLAY_STYLE_GAP_MIN, &
+                               MC_FRACTION_RULE_THICKNESS, &
+                               MC_FRACTION_DENOMINATOR_GAP_MIN, &
+                               MC_FRACTION_DENOM_DISPLAY_STYLE_GAP_MIN, &
+                               MC_RADICAL_VERTICAL_GAP, &
+                               MC_RADICAL_DISPLAY_STYLE_VERTICAL_GAP, &
+                               MC_RADICAL_RULE_THICKNESS, MC_RADICAL_EXTRA_ASCENDER
     implicit none
     private
 
-    integer, parameter :: dp = kind(0.0d0)
+    public :: math_is, math_width, math_layout, mrules_t
 
-    public :: mrun_t, math_layout, math_width, math_is
-
-    ! One run of plain text: draw s(1:n) at size, offset by (dx, dy) from
-    ! the origin of the whole string. dy grows downwards, as the canvas does.
-    !
-    ! A run with line = .true. is not text at all but a straight stroke of
-    ! width lw from (dx, dy) to (x2, y2): the bar of a fraction and the
-    ! radical of a root are drawn, not set, and there is no sensible glyph
-    ! to borrow for either.
-    integer, parameter, public :: MAX_RUNS = 64
-    type :: mrun_t
-        character(len=64) :: s = ""
+    ! Rules, in the same frame as the glyphs of a run: (x, y) is the top
+    ! left corner, y down, w and h the width and height.
+    type :: mrules_t
         integer :: n = 0
-        real(dp) :: dx = 0.0_dp
-        real(dp) :: dy = 0.0_dp
-        real(dp) :: size = 10.0_dp
-        logical :: italic = .false.
-        logical :: line = .false.
-        real(dp) :: x2 = 0.0_dp
-        real(dp) :: y2 = 0.0_dp
-        real(dp) :: lw = 0.0_dp
-    end type mrun_t
+        real(dp), allocatable :: x(:), y(:), w(:), h(:)
+    end type mrules_t
 
-    ! matplotlib's mathtext constants: a script is 0.7 of its parent, a
-    ! superscript sits 0.44 em above the baseline and a subscript 0.2 em
-    ! below it, both measured in the parent's size.
-    real(dp), parameter :: SCRIPT = 0.7_dp
-    real(dp), parameter :: SUP_RISE = 0.44_dp
-    real(dp), parameter :: SUB_DROP = 0.20_dp
-    real(dp), parameter :: MIN_SIZE = 0.4_dp
-    ! Fractions and roots, measured off matplotlib's own output at 20 pt
-    ! and written here as fractions of the size. The bar of a fraction is
-    ! RULE thick and sits AXIS above the baseline, which is TeX's axis
-    ! height; the two halves are set a script smaller, PAD clear of the
-    ! ends of the bar.
-    real(dp), parameter :: RULE = 0.0625_dp
-    real(dp), parameter :: AXIS = 0.2544_dp
-    real(dp), parameter :: NUM_RISE = 0.3581_dp
-    real(dp), parameter :: DEN_DROP = 0.3712_dp
-    real(dp), parameter :: PAD = 0.0625_dp
-    ! The root sign: how wide it is, how far it reaches above and below
-    ! the baseline, and the gap it leaves around what is under it.
-    real(dp), parameter :: ROOT_W = 0.62_dp
-    real(dp), parameter :: ROOT_TOP = 1.08_dp
-    real(dp), parameter :: ROOT_BOT = 0.22_dp
-    real(dp), parameter :: ROOT_PAD = 0.125_dp
-    ! TeX's math glue, in em. A mu is 1/18 em: thin is 3 mu, medium 4 mu
-    ! and thick 5 mu. \, and \; are the same two widths written by hand.
-    ! The medium space is what a binary operator takes, the thick space
-    ! what a relation takes, and both are dropped in a script.
-    real(dp), parameter :: THIN = 0.167_dp
-    real(dp), parameter :: MED = 4.0_dp/18.0_dp
-    real(dp), parameter :: THICK = 0.278_dp
-    ! Matplotlib's DejaVu constants for where a script sits sideways.
-    ! delta and script_space are fractions of the x-height; delta_slanted
-    ! is a fraction of how far the last letter rises above two thirds of it.
-    real(dp), parameter :: DELTA = 0.025_dp
-    real(dp), parameter :: DELTA_SLANT = 0.2_dp
-    real(dp), parameter :: SCRIPT_GAP = 0.05_dp
-    ! Atom classes, in the order of TeX's spacing table. AT_NONE is "no
+    ! Styles, in TeX's order. A cramped style is the same style with its
+    ! superscripts held lower; it travels as a separate flag.
+    integer, parameter :: ST_D = 0, ST_T = 1, ST_S = 2, ST_SS = 3
+
+    ! Atom classes, in the order of TeX's spacing table. CL_NONE is "no
     ! atom yet", which is not a class: a binary operator in that position
     ! is set as ordinary, the way a leading minus is.
-    integer, parameter :: AT_NONE = 0
-    integer, parameter :: AT_ORD = 1
-    integer, parameter :: AT_OP = 2
-    integer, parameter :: AT_BIN = 3
-    integer, parameter :: AT_REL = 4
-    integer, parameter :: AT_OPEN = 5
-    integer, parameter :: AT_CLOSE = 6
-    integer, parameter :: AT_PUNCT = 7
-    integer, parameter :: AT_INNER = 8
+    integer, parameter :: CL_NONE = 0, CL_ORD = 1, CL_OP = 2, CL_BIN = 3, &
+                          CL_REL = 4, CL_OPEN = 5, CL_CLOSE = 6, &
+                          CL_PUNCT = 7, CL_INNER = 8
+
+    ! What a noad is. An atom has a class; the rest are spaced as one.
+    integer, parameter :: K_ATOM = 1, K_FRAC = 2, K_RAD = 3, K_SPACE = 4
+
+    ! What a nucleus is.
+    integer, parameter :: NUC_NONE = 0, NUC_CHAR = 1, NUC_LIST = 2, NUC_TEXT = 3
+
+    ! Alphabets: what a letter typed in math becomes.
+    integer, parameter :: ALPH_MATH = 0, ALPH_RM = 1
+
+    ! TeX's math glue, in mu (an eighteenth of an em). \, and \; are the
+    ! thin and thick spaces written by hand, \: the medium one.
+    real(dp), parameter :: THIN = 3.0_dp, MED = 4.0_dp, THICK = 5.0_dp
+
     ! Spelled this way because a backslash inside a string literal is not
     ! portable: some compilers read it as the start of an escape.
     character, parameter :: BS = achar(92)
 
-    ! The atom the next one is spaced against, and the last character of
-    ! the nucleus a script would attach to.
-    type :: math_st
-        integer :: atom = AT_NONE
-        integer :: code = 0
-        logical :: slanted = .false.
-        ! 0 is text style. 1 and 2 are script and scriptscript, where TeX
-        ! drops the spaces that its table writes in parentheses.
-        integer :: style = 0
-    end type math_st
+    type :: noad_t
+        integer :: kind = K_ATOM
+        integer :: cls = CL_ORD
+        integer :: next = 0
+        integer :: nuc = NUC_NONE
+        ! NUC_CHAR: the code point and the face it is set in.
+        integer :: cp = 0
+        integer :: face = 0
+        ! NUC_LIST: the head of the list, 0 for an empty one.
+        integer :: list = 0
+        ! NUC_TEXT: the text, s(t0:t1) of the text pool.
+        integer :: t0 = 1, t1 = 0
+        ! The scripts' lists, -1 for none.
+        integer :: sup = -1, sub = -1
+        ! K_FRAC: numerator and denominator; K_RAD: the radicand.
+        integer :: a = 0, b = 0
+        ! K_SPACE: the width, in mu when mu is true and ems otherwise.
+        real(dp) :: amount = 0.0_dp
+        logical :: mu = .true.
+    end type noad_t
+
+    ! A box: items i0..i1 of the arena, and its dimensions in points. A box
+    ! made of a single character remembers which glyph it is, at what
+    ! size, and its italic correction, which a superscript is moved out by;
+    ! a box whose list is a single character remembers the glyph too, for
+    ! the math kern of a script made of it.
+    type :: mbox_t
+        integer :: i0 = 1, i1 = 0
+        real(dp) :: w = 0.0_dp, h = 0.0_dp, d = 0.0_dp
+        real(dp) :: ital = 0.0_dp
+        logical :: is_char = .false.
+        integer :: gid = 0
+        real(dp) :: sz = 0.0_dp
+        ! The glyph the math kerns are read from: the character's own,
+        ! before any script-size alternate took its place.
+        integer :: kgid = 0
+    end type mbox_t
+
+    ! The noads of the fragment being laid out, and the text of the
+    ! operator names among them.
+    type(noad_t), allocatable :: NOADS(:)
+    integer :: NN = 0
+    character(len=:), allocatable :: TPOOL
+
+    ! The items, glyphs (kind 1) and rules (kind 2). A glyph's (x, y) is
+    ! its origin; a rule's is its bottom left corner.
+    integer, allocatable :: IT_KIND(:), IT_GID(:)
+    real(dp), allocatable :: IT_X(:), IT_Y(:), IT_S(:), IT_W(:), IT_H(:)
+    integer :: NI = 0
 
 contains
 
@@ -111,14 +149,7 @@ contains
     pure function math_is(s) result(yes)
         character(len=*), intent(in) :: s
         logical :: yes
-        integer :: i
-        yes = .false.
-        do i = 1, len(s)
-            if (s(i:i) == "$") then
-                yes = .true.
-                return
-            end if
-        end do
+        yes = index(s, "$") > 0
     end function math_is
 
     ! Width of a string in points, mathtext or not.
@@ -126,24 +157,24 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         real(dp) :: w
-        type(mrun_t) :: runs(MAX_RUNS)
-        integer :: nr
-        call math_layout(s, size, runs, nr, w)
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        call math_layout(s, size, run, rules, w)
     end function math_width
 
-    ! Lay a string out into runs. Text outside the dollar signs is copied
-    ! through unchanged, so a string with no mathtext in it comes back as
-    ! a single run and costs nothing.
-    subroutine math_layout(s, size, runs, nr, width)
+    ! Lay a string out: its glyphs are appended to run and its rules to
+    ! rules, starting at the origin, and width is how far it reaches.
+    ! Text outside the dollar signs is copied through as ordinary text.
+    subroutine math_layout(s, size, run, rules, width)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
-        type(mrun_t), intent(out) :: runs(MAX_RUNS)
-        integer, intent(out) :: nr
+        type(glyphrun_t), intent(inout) :: run
+        type(mrules_t), intent(inout) :: rules
         real(dp), intent(out) :: width
-        integer :: i, j
+        type(mbox_t) :: box
+        integer :: i, j, head, k
         real(dp) :: pen, xnew
 
-        nr = 0
         pen = 0.0_dp
         i = 1
         do while (i <= len(s))
@@ -154,9 +185,18 @@ contains
                     j = j + 1
                 end do
                 if (j > i + 1) then
-                    call layout_math(s(i + 1:j - 1), size, pen, 0.0_dp, &
-                                     runs, nr, xnew)
-                    pen = xnew
+                    call reset_arenas()
+                    head = parse_list(s(i + 1:j - 1), ALPH_MATH)
+                    call mlist_box(head, ST_T, .false., size, box)
+                    do k = box%i0, box%i1
+                        if (IT_KIND(k) == 1) then
+                            call run_add(run, IT_GID(k), pen + IT_X(k), -IT_Y(k), IT_S(k))
+                        else
+                            call rule_add(rules, pen + IT_X(k), -(IT_Y(k) + IT_H(k)), &
+                                          IT_W(k), IT_H(k))
+                        end if
+                    end do
+                    pen = pen + box%w
                 end if
                 i = j + 1
             else
@@ -165,7 +205,7 @@ contains
                     if (s(j:j) == "$") exit
                     j = j + 1
                 end do
-                call emit(s(i:j - 1), size, pen, 0.0_dp, runs, nr, xnew)
+                call text_layout(s(i:j - 1), size, FACE_REGULAR, pen, 0.0_dp, run, xnew)
                 pen = xnew
                 i = j
             end if
@@ -173,397 +213,926 @@ contains
         width = pen
     end subroutine math_layout
 
+    subroutine rule_add(rules, x, y, w, h)
+        type(mrules_t), intent(inout) :: rules
+        real(dp), intent(in) :: x, y, w, h
+        real(dp), allocatable :: t(:)
+        integer :: cap
+        if (.not. allocated(rules%x)) then
+            allocate (rules%x(4), rules%y(4), rules%w(4), rules%h(4))
+        else if (rules%n >= size(rules%x)) then
+            cap = 2*size(rules%x)
+            allocate (t(cap))
+            t(1:rules%n) = rules%x(1:rules%n)
+            call move_alloc(t, rules%x)
+            allocate (t(cap))
+            t(1:rules%n) = rules%y(1:rules%n)
+            call move_alloc(t, rules%y)
+            allocate (t(cap))
+            t(1:rules%n) = rules%w(1:rules%n)
+            call move_alloc(t, rules%w)
+            allocate (t(cap))
+            t(1:rules%n) = rules%h(1:rules%n)
+            call move_alloc(t, rules%h)
+        end if
+        rules%n = rules%n + 1
+        rules%x(rules%n) = x
+        rules%y(rules%n) = y
+        rules%w(rules%n) = w
+        rules%h(rules%n) = h
+    end subroutine rule_add
+
     ! ------------------------------------------------------------------
-    ! The math mode itself
+    ! Parsing: a fragment into a list of noads
     ! ------------------------------------------------------------------
 
-    ! Lay out one math fragment starting at pen x = x0, baseline y = y0.
-    ! xend comes back as the pen position after the fragment.
-    recursive subroutine layout_math(s, size, x0, y0, runs, nr, xend, math)
+    subroutine reset_arenas()
+        if (.not. allocated(NOADS)) allocate (NOADS(64))
+        NN = 0
+        TPOOL = ""
+        if (.not. allocated(IT_KIND)) then
+            allocate (IT_KIND(64), IT_GID(64), IT_X(64), IT_Y(64), IT_S(64), &
+                      IT_W(64), IT_H(64))
+        end if
+        NI = 0
+    end subroutine reset_arenas
+
+    integer function new_noad(kind, cls) result(k)
+        integer, intent(in) :: kind, cls
+        type(noad_t), allocatable :: t(:)
+        if (NN >= size(NOADS)) then
+            allocate (t(2*size(NOADS)))
+            t(1:NN) = NOADS(1:NN)
+            call move_alloc(t, NOADS)
+        end if
+        NN = NN + 1
+        k = NN
+        NOADS(k) = noad_t()
+        NOADS(k)%kind = kind
+        NOADS(k)%cls = cls
+    end function new_noad
+
+    ! A character as an ordinary-or-whatever atom, set in the math font.
+    integer function char_noad(code, alph) result(k)
+        integer, intent(in) :: code, alph
+        integer :: c
+        c = code
+        ! A hyphen in math is a minus sign, as in TeX.
+        if (c == iachar("-")) c = 8722
+        k = new_noad(K_ATOM, char_class(c))
+        NOADS(k)%nuc = NUC_CHAR
+        NOADS(k)%cp = math_alphabet(c, alph)
+        NOADS(k)%face = FACE_MATH
+    end function char_noad
+
+    ! An atom whose nucleus is a list. A list that is a single ordinary
+    ! atom without scripts is that atom, as TeX simplifies a group, so
+    ! that {x}^2 is set exactly as x^2.
+    integer function list_noad(head, cls) result(k)
+        integer, intent(in) :: head, cls
+        if (head > 0 .and. cls == CL_ORD) then
+            if (plain_ord(head)) then
+                k = head
+                return
+            end if
+        end if
+        k = new_noad(K_ATOM, cls)
+        NOADS(k)%nuc = NUC_LIST
+        NOADS(k)%list = head
+    end function list_noad
+
+    logical function plain_ord(head)
+        integer, intent(in) :: head
+        plain_ord = NOADS(head)%next == 0 .and. NOADS(head)%kind == K_ATOM &
+                    .and. NOADS(head)%cls == CL_ORD .and. NOADS(head)%sup < 0 &
+                    .and. NOADS(head)%sub < 0
+    end function plain_ord
+
+    ! The list s describes. Spaces are dropped, as TeX drops them: the
+    ! glue between atoms comes from their classes.
+    recursive function parse_list(s, alph) result(head)
         character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        ! \mathrm and its relatives turn the sloping off for their group.
-        logical, intent(in), optional :: math
-        type(math_st) :: st
-        logical :: mm
+        integer, intent(in) :: alph
+        integer :: head, tail, cur, i, j, k, code, nb, sl
 
-        mm = .true.
-        if (present(math)) mm = math
-        call layout_list(s, size, x0, y0, runs, nr, xend, mm, st)
-    end subroutine layout_math
-
-    ! The list itself. Spaces are dropped, each symbol is an atom, and
-    ! the glue between two atoms is TeX's: thick around a relation, medium
-    ! around a binary operator, thin around an operator name and after a
-    ! punctuation mark. A braced group is one ordinary atom, whatever is
-    ! inside it.
-    recursive subroutine layout_list(s, size, x0, y0, runs, nr, xend, math, st)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in) :: math
-        type(math_st), intent(inout) :: st
-        type(math_st) :: inner
-        real(dp) :: pen, smax, sx, ssize, superk, subk
-        integer :: i, j, code, nb, nstyle
-        logical :: placed
-
-        pen = x0
+        head = 0
+        tail = 0
+        cur = 0
         i = 1
         do while (i <= len(s))
             select case (s(i:i))
             case (" ", achar(9))
-                ! TeX throws a typed space away and puts its own back
-                ! from the atom classes. Keeping the typed one is what
-                ! made "E = mc^2" depend on where the space happened to sit.
                 i = i + 1
             case ("^", "_")
-                ! The scripts share the nucleus. A slanted letter pushes
-                ! the superscript out by its italic correction and leaves
-                ! the subscript on the advance; an upright nucleus shifts
-                ! both by a hair. The following atom starts past both,
-                ! plus the small gap matplotlib leaves after a script.
-                ssize = max(size*SCRIPT, MIN_SIZE*size)
-                call script_kern(st%code, st%slanted, size, superk, subk)
-                nstyle = min(st%style + 1, 2)
-                smax = pen
-                placed = .false.
-                do
-                    call unit_end(s, i + 1, j)
-                    if (j > i) then
-                        if (s(i:i) == "^") then
-                            call layout_unit(s(i + 1:j), ssize, pen + superk, &
-                                             y0 - SUP_RISE*size, runs, nr, sx, &
-                                             math, nstyle)
-                        else
-                            call layout_unit(s(i + 1:j), ssize, pen + subk, &
-                                             y0 + SUB_DROP*size, runs, nr, sx, &
-                                             math, nstyle)
-                        end if
-                        smax = max(smax, sx)
-                        placed = .true.
+                ! A script with nothing before it hangs off an empty atom.
+                if (cur == 0) then
+                    cur = new_noad(K_ATOM, CL_ORD)
+                    call append(head, tail, cur)
+                end if
+                call unit_end(s, i + 1, j)
+                sl = parse_arg(s(i + 1:j), alph)
+                if (s(i:i) == "^") then
+                    if (NOADS(cur)%sup >= 0) then
+                        cur = new_noad(K_ATOM, CL_ORD)
+                        call append(head, tail, cur)
                     end if
-                    i = j + 1
-                    if (i > len(s)) exit
-                    if (s(i:i) /= "^" .and. s(i:i) /= "_") exit
-                end do
-                if (placed) pen = smax + SCRIPT_GAP*(XHEIGHT/EM)*size
+                    NOADS(cur)%sup = sl
+                else
+                    if (NOADS(cur)%sub >= 0) then
+                        cur = new_noad(K_ATOM, CL_ORD)
+                        call append(head, tail, cur)
+                    end if
+                    NOADS(cur)%sub = sl
+                end if
+                i = j + 1
             case ("{")
                 call group_end(s, i, j)
-                call begin_atom(AT_ORD, size, pen, st)
-                call fresh_state(inner, st%style)
-                call layout_list(s(i + 1:j - 1), size, pen, y0, runs, nr, sx, &
-                                 math, inner)
-                pen = sx
-                st%code = inner%code
-                st%slanted = inner%slanted
-                i = j + 1
-            case (BS)
-                call command_end(s, i, j)
-                call layout_command(s(i:j), size, pen, y0, runs, nr, math, st)
+                k = list_noad(parse_list(s(i + 1:j - 1), alph), CL_ORD)
+                call append(head, tail, k)
+                cur = k
                 i = j + 1
             case ("}")
                 i = i + 1
+            case (BS)
+                call command_end(s, i, j)
+                k = parse_command(s(i:j), alph)
+                if (k > 0) then
+                    call append(head, tail, k)
+                    cur = k
+                    if (NOADS(k)%kind == K_SPACE) cur = 0
+                end if
+                i = j + 1
             case default
                 call utf8_next(s, i, code, nb)
-                call begin_atom(atom_kind(code), size, pen, st)
-                if (code == iachar("-")) then
-                    ! A hyphen in math is a minus sign, as in TeX.
-                    code = 8722
-                    call emit_run(utf8_char(code), size, pen, y0, runs, nr, sx, .false.)
-                else
-                    call emit_run(s(i:i + nb - 1), size, pen, y0, runs, nr, sx, &
-                                  is_slanted(code, math))
-                end if
-                pen = sx
-                st%code = code
-                st%slanted = is_slanted(code, math)
+                k = char_noad(code, alph)
+                call append(head, tail, k)
+                cur = k
                 i = i + nb
             end select
         end do
-        xend = pen
-    end subroutine layout_list
+    end function parse_list
 
-    ! One unit: a group, a command, or a single character. A script is a
-    ! fresh list in the next style down, so its atoms do not see the nucleus.
-    recursive subroutine layout_unit(s, size, x0, y0, runs, nr, xend, math, style)
+    subroutine append(head, tail, k)
+        integer, intent(inout) :: head, tail
+        integer, intent(in) :: k
+        if (head == 0) then
+            head = k
+        else
+            NOADS(tail)%next = k
+        end if
+        tail = k
+    end subroutine append
+
+    ! The argument of a script or a command: a braced group is its
+    ! contents, anything else is itself.
+    recursive function parse_arg(s, alph) result(head)
         character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in) :: math
-        integer, intent(in) :: style
-        type(math_st) :: inner
-        integer :: j
-
-        call fresh_state(inner, style)
+        integer, intent(in) :: alph
+        integer :: head, j
         if (len(s) == 0) then
-            xend = x0
+            head = 0
         else if (s(1:1) == "{") then
             call group_end(s, 1, j)
-            call layout_list(s(2:j - 1), size, x0, y0, runs, nr, xend, math, inner)
+            head = parse_list(s(2:j - 1), alph)
         else
-            call layout_list(s, size, x0, y0, runs, nr, xend, math, inner)
+            head = parse_list(s, alph)
         end if
-    end subroutine layout_unit
+    end function parse_arg
 
-    ! The handful of commands worth having without a math font: the
-    ! spaces, and the wrappers that only change the style of a group.
-    recursive subroutine layout_command(s, size, pen, y0, runs, nr, math, st)
+    ! One command, as a noad; 0 when it makes nothing.
+    recursive function parse_command(s, alph) result(k)
         character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, y0
-        real(dp), intent(inout) :: pen
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        logical, intent(in) :: math
-        type(math_st), intent(inout) :: st
-        type(math_st) :: inner
-        real(dp) :: sx
-        integer :: j, name
+        integer, intent(in) :: alph
+        integer :: k, j, code, a0, a1, b0, b1
+        character(len=16) :: name
 
+        k = 0
         if (len(s) < 2) return
         ! An explicit skip is not an atom: the next symbol is still spaced
         ! against whatever came before the skip.
         select case (s(2:2))
         case (",")
-            pen = pen + THIN*size
+            k = space_noad(THIN, .true.)
+            return
+        case (":", ">")
+            k = space_noad(MED, .true.)
             return
         case (";")
-            pen = pen + THICK*size
+            k = space_noad(THICK, .true.)
+            return
+        case ("!")
+            k = space_noad(-THIN, .true.)
             return
         case (" ")
-            pen = pen + 0.333_dp*size
+            ! The interword space of the text font.
+            k = space_noad(glyph_adv(glyph_cmap(FACE_REGULAR, 32)), .false.)
             return
-        case ("$")
-            call begin_atom(AT_ORD, size, pen, st)
-            call emit_run("$", size, pen, y0, runs, nr, sx, .false.)
-            pen = sx
-            st%code = iachar("$")
-            st%slanted = .false.
+        case ("$", "{", "}", "%", "&", "#", "_")
+            k = char_noad(iachar(s(2:2)), ALPH_RM)
             return
         end select
 
-        name = 0
-        if (cmd_name(s) == "times") name = 215
-        if (name == 0) name = greek_code(cmd_name(s))
-        if (name > 0) then
-            ! \times is a binary operator. A greek letter is ordinary:
-            ! lowercase slopes and uppercase stands upright.
-            if (name == 215) then
-                call begin_atom(AT_BIN, size, pen, st)
-            else
-                call begin_atom(AT_ORD, size, pen, st)
-            end if
-            call emit_run(utf8_char(name), size, pen, y0, runs, nr, sx, &
-                          name >= 945 .and. name /= 215)
-            pen = sx
-            st%code = name
-            st%slanted = name >= 945 .and. name /= 215
+        name = cmd_name(s)
+        select case (name)
+        case ("quad")
+            k = space_noad(1.0_dp, .false.)
             return
-        end if
-        if (cmd_name(s) == "frac") then
-            ! A fraction is an inner atom, so text style puts a thin space
-            ! between it and an ordinary symbol beside it.
-            call begin_atom(AT_INNER, size, pen, st)
-            call layout_frac(s, size, pen, y0, runs, nr, sx, math, st%style)
-            pen = sx
-            st%code = 0
-            st%slanted = .false.
+        case ("qquad")
+            k = space_noad(2.0_dp, .false.)
             return
-        end if
-        if (cmd_name(s) == "sqrt") then
-            ! A radical is spaced as an ordinary atom.
-            call begin_atom(AT_ORD, size, pen, st)
-            call layout_sqrt(s, size, pen, y0, runs, nr, sx, math, st%style)
-            pen = sx
-            st%code = 0
-            st%slanted = .false.
+        case ("frac")
+            call cmd_arg(s, 1, a0, a1)
+            call cmd_arg(s, 2, b0, b1)
+            k = new_noad(K_FRAC, CL_INNER)
+            NOADS(k)%a = parse_list(s(a0:a1), alph)
+            NOADS(k)%b = parse_list(s(b0:b1), alph)
+            return
+        case ("sqrt")
+            call cmd_arg(s, 1, a0, a1)
+            k = new_noad(K_RAD, CL_ORD)
+            NOADS(k)%a = parse_list(s(a0:a1), alph)
+            return
+        case ("mathrm")
+            call cmd_arg(s, 1, a0, a1)
+            k = list_noad(parse_list(s(a0:a1), ALPH_RM), CL_ORD)
+            return
+        end select
+
+        code = symbol_code(name)
+        if (code > 0) then
+            k = char_noad(code, alph)
             return
         end if
 
-        ! \mathrm{...} sets its group upright. Any other command with a
-        ! group drops the name and sets the group, so \hat{x} is x.
+        ! Any other command with a group sets the group, so \hat{x} is x.
         ! A name with no group is an operator: \sin, \cos, \log.
         j = index(s, "{")
         if (j > 0) then
-            call begin_atom(AT_ORD, size, pen, st)
-            call fresh_state(inner, st%style)
-            call layout_list(s(j + 1:len(s) - 1), size, pen, y0, runs, nr, sx, &
-                             math .and. s(2:j - 1) /= "mathrm", inner)
-            pen = sx
-            st%code = inner%code
-            st%slanted = inner%slanted
+            k = list_noad(parse_list(s(j + 1:len(s) - 1), alph), CL_ORD)
         else
-            call begin_atom(AT_OP, size, pen, st)
-            call emit_run(s(2:), size, pen, y0, runs, nr, sx, .false.)
-            pen = sx
-            st%code = iachar(s(len(s):len(s)))
-            st%slanted = .false.
+            k = new_noad(K_ATOM, CL_OP)
+            NOADS(k)%nuc = NUC_TEXT
+            NOADS(k)%t0 = len(TPOOL) + 1
+            TPOOL = TPOOL//trim(name)
+            NOADS(k)%t1 = len(TPOOL)
         end if
-    end subroutine layout_command
+    end function parse_command
 
-    ! \frac{a}{b}: the two halves a script smaller, each centred over the
-    ! bar. They are laid out at the left edge and then slid across, which
-    ! is the only way to centre something whose width is not known until
-    ! it has been laid out.
-    recursive subroutine layout_frac(s, size, x0, y0, runs, nr, xend, math, style)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in) :: math
-        integer, intent(in) :: style
-        type(math_st) :: inner
-        integer :: n0, n1, d0, d1, kn, kd, nnum
-        real(dp) :: ssize, xl, xn, xd, wn, wd, w, yb
-        real(dp) :: ytop, ybot, gap, need, edge
-        logical :: ink
+    integer function space_noad(amount, mu) result(k)
+        real(dp), intent(in) :: amount
+        logical, intent(in) :: mu
+        k = new_noad(K_SPACE, CL_NONE)
+        NOADS(k)%amount = amount
+        NOADS(k)%mu = mu
+    end function space_noad
 
-        call cmd_arg(s, 1, n0, n1)
-        call cmd_arg(s, 2, d0, d1)
-        ssize = max(size*SCRIPT, MIN_SIZE*size)
-        xl = x0 + PAD*size
-        ! The halves are one style down, so a plus in a denominator of a
-        ! text-style fraction is in script style and takes no medium space.
-        call fresh_state(inner, min(style + 1, 2))
+    ! ------------------------------------------------------------------
+    ! Characters
+    ! ------------------------------------------------------------------
 
-        kn = nr + 1
-        call layout_list(s(n0:n1), ssize, xl, y0 - NUM_RISE*size, runs, nr, xn, &
-                         math, inner)
-        wn = xn - xl
-        nnum = nr
-        call fresh_state(inner, min(style + 1, 2))
-        kd = nr + 1
-        call layout_list(s(d0:d1), ssize, xl, y0 + DEN_DROP*size, runs, nr, xd, &
-                         math, inner)
-        wd = xd - xl
+    ! The class of an atom made of one character.
+    pure integer function char_class(code) result(c)
+        integer, intent(in) :: code
+        select case (code)
+        case (iachar("+"), iachar("*"), 215, 177, 247, 8722, 8723, 8901, 8728)
+            c = CL_BIN
+        case (iachar("="), iachar("<"), iachar(">"), iachar(":"), &
+              8804, 8805, 8800, 8776, 8764, 8801, 8594, 8592)
+            c = CL_REL
+        case (iachar("("), iachar("["), iachar("{"))
+            c = CL_OPEN
+        case (iachar(")"), iachar("]"), iachar("}"), iachar("!"), iachar("?"))
+            c = CL_CLOSE
+        case (iachar(","), iachar(";"))
+            c = CL_PUNCT
+        case default
+            c = CL_ORD
+        end select
+    end function char_class
 
-        w = max(wn, wd)
-        call shift_runs(runs, kn, nnum, 0.5_dp*(w - wn))
-        call shift_runs(runs, kd, nr, 0.5_dp*(w - wd))
-
-        ! The fixed rise and drop were measured for a single character.
-        ! A nested fraction is taller than that, so open the gap until the
-        ! ink clears the bar by twice the rule, and leave a short fraction
-        ! where the fixed position already put it.
-        yb = y0 - AXIS*size
-        need = 2.0_dp*RULE*size
-        if (nnum >= kn) then
-            call runs_ink(runs, kn, nnum, ytop, ybot, ink)
-            edge = yb - 0.5_dp*RULE*size
-            if (ink) then
-                gap = edge - ybot
-                if (gap < need) call shift_y(runs, kn, nnum, gap - need)
-            end if
+    ! The character a typed one is set as. In math, Latin letters and
+    ! lowercase Greek are the math italic ones and everything else stands
+    ! upright, which is TeX's convention; \mathrm keeps them all upright.
+    pure integer function math_alphabet(code, alph) result(c)
+        integer, intent(in) :: code, alph
+        c = code
+        if (alph /= ALPH_MATH) return
+        if (code >= iachar("A") .and. code <= iachar("Z")) then
+            c = 119860 + code - iachar("A")
+        else if (code == iachar("h")) then
+            ! Planck's constant stands in for the italic h, which is
+            ! missing from the math italic block.
+            c = 8462
+        else if (code >= iachar("a") .and. code <= iachar("z")) then
+            c = 119886 + code - iachar("a")
+        else if (code >= 945 .and. code <= 969) then
+            c = 120572 + code - 945
+        else
+            select case (code)
+            case (1013); c = 120598     ! lunate epsilon
+            case (977); c = 120599      ! theta symbol
+            case (1008); c = 120600     ! kappa symbol
+            case (981); c = 120601      ! phi symbol
+            case (1009); c = 120602     ! rho symbol
+            case (982); c = 120603      ! pi symbol
+            end select
         end if
-        if (nr >= kd) then
-            call runs_ink(runs, kd, nr, ytop, ybot, ink)
-            edge = yb + 0.5_dp*RULE*size
-            if (ink) then
-                gap = ytop - edge
-                if (gap < need) call shift_y(runs, kd, nr, need - gap)
-            end if
-        end if
+    end function math_alphabet
 
-        call emit_line(xl, yb, xl + w, yb, RULE*size, runs, nr)
-        xend = xl + w + PAD*size
-    end subroutine layout_frac
+    ! The code point a symbol command stands for, 0 for none. The Greek
+    ! letters follow TeX: \epsilon and \phi are the lunate and the
+    ! stroked forms, and the var- forms the others.
+    pure integer function symbol_code(name) result(code)
+        character(len=*), intent(in) :: name
+        select case (name)
+        case ("alpha"); code = 945
+        case ("beta"); code = 946
+        case ("gamma"); code = 947
+        case ("delta"); code = 948
+        case ("epsilon"); code = 1013
+        case ("varepsilon"); code = 949
+        case ("zeta"); code = 950
+        case ("eta"); code = 951
+        case ("theta"); code = 952
+        case ("vartheta"); code = 977
+        case ("iota"); code = 953
+        case ("kappa"); code = 954
+        case ("varkappa"); code = 1008
+        case ("lambda"); code = 955
+        case ("mu"); code = 956
+        case ("nu"); code = 957
+        case ("xi"); code = 958
+        case ("omicron"); code = 959
+        case ("pi"); code = 960
+        case ("varpi"); code = 982
+        case ("rho"); code = 961
+        case ("varrho"); code = 1009
+        case ("sigma"); code = 963
+        case ("varsigma"); code = 962
+        case ("tau"); code = 964
+        case ("upsilon"); code = 965
+        case ("phi"); code = 981
+        case ("varphi"); code = 966
+        case ("chi"); code = 967
+        case ("psi"); code = 968
+        case ("omega"); code = 969
+        case ("Gamma"); code = 915
+        case ("Delta"); code = 916
+        case ("Theta"); code = 920
+        case ("Lambda"); code = 923
+        case ("Xi"); code = 926
+        case ("Pi"); code = 928
+        case ("Sigma"); code = 931
+        case ("Upsilon"); code = 933
+        case ("Phi"); code = 934
+        case ("Psi"); code = 936
+        case ("Omega"); code = 937
+        ! The multiplication sign, which log tick labels are written with.
+        case ("times"); code = 215
+        case default; code = 0
+        end select
+    end function symbol_code
 
-    ! \sqrt{a}: the sign is drawn rather than set, since the text font has
-    ! no radical in it, and the bar over it is one more stroke.
-    recursive subroutine layout_sqrt(s, size, x0, y0, runs, nr, xend, math, style)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in) :: math
+    ! The glyph for a code point: the math font's, or Lato's for a
+    ! character the math font does not have.
+    integer function math_gid(cp, face) result(g)
+        integer, intent(in) :: cp, face
+        g = glyph_cmap(face, cp)
+        if (g == 0) g = glyph_cmap(FACE_REGULAR, cp)
+        if (g == 0) g = glyph_cmap(FACE_MATH, 32)
+    end function math_gid
+
+    ! ------------------------------------------------------------------
+    ! Boxes
+    ! ------------------------------------------------------------------
+
+    ! The font size of a style, for a formula set at size.
+    pure real(dp) function style_size(style, size) result(sz)
         integer, intent(in) :: style
-        type(math_st) :: inner
-        integer :: a0, a1
-        real(dp) :: top, bot, wr, th, xb, xe
-
-        call cmd_arg(s, 1, a0, a1)
-        th = RULE*size
-        wr = ROOT_W*size
-        top = y0 - ROOT_TOP*size
-        bot = y0 + ROOT_BOT*size
-        xb = x0 + wr + ROOT_PAD*size
-        ! The radicand stays in the surrounding style: \sqrt{a+b} keeps
-        ! the medium space around the plus.
-        call fresh_state(inner, style)
-        call layout_list(s(a0:a1), size, xb, y0, runs, nr, xe, math, inner)
-
-        ! The sign itself: a short rise to the foot, a long rise to the
-        ! top, then the bar across whatever is under the root.
-        call emit_line(x0, y0 - 0.35_dp*size, x0 + 0.24_dp*wr, bot, th, runs, nr)
-        call emit_line(x0 + 0.24_dp*wr, bot, x0 + wr, top, th, runs, nr)
-        call emit_line(x0 + wr, top, xe + ROOT_PAD*size, top, th, runs, nr)
-        xend = xe + ROOT_PAD*size
-    end subroutine layout_sqrt
-
-    ! Slide runs k0..k1 across by dx, once their width is known.
-    pure subroutine shift_runs(runs, k0, k1, dx)
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(in) :: k0, k1
-        real(dp), intent(in) :: dx
-        integer :: k
-        do k = max(k0, 1), min(k1, MAX_RUNS)
-            runs(k)%dx = runs(k)%dx + dx
-            runs(k)%x2 = runs(k)%x2 + dx
-        end do
-    end subroutine shift_runs
-
-    ! Slide runs k0..k1 down by dy. dy grows downwards, with the canvas.
-    pure subroutine shift_y(runs, k0, k1, dy)
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(in) :: k0, k1
-        real(dp), intent(in) :: dy
-        integer :: k
-        do k = max(k0, 1), min(k1, MAX_RUNS)
-            runs(k)%dy = runs(k)%dy + dy
-            runs(k)%y2 = runs(k)%y2 + dy
-        end do
-    end subroutine shift_y
-
-    pure subroutine fresh_state(st, style)
-        type(math_st), intent(out) :: st
-        integer, intent(in) :: style
-        st%atom = AT_NONE
-        st%code = 0
-        st%slanted = .false.
-        st%style = style
-    end subroutine fresh_state
-
-    ! Glue before an atom, and the class it leaves behind. A binary
-    ! operator with nothing, or with an operator, relation, opening or
-    ! punctuation before it, is ordinary: that is the unary minus.
-    pure subroutine begin_atom(kind, size, pen, st)
-        integer, intent(in) :: kind
         real(dp), intent(in) :: size
-        real(dp), intent(inout) :: pen
-        type(math_st), intent(inout) :: st
+        select case (style)
+        case (ST_S)
+            sz = size*math_percent(MC_SCRIPT_PERCENT_SCALE_DOWN)/100.0_dp
+        case (ST_SS)
+            sz = size*math_percent(MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN)/100.0_dp
+        case default
+            sz = size
+        end select
+    end function style_size
+
+    ! The style of a superscript, and of a fraction's halves.
+    pure integer function sup_style(style)
+        integer, intent(in) :: style
+        select case (style)
+        case (ST_D, ST_T); sup_style = ST_S
+        case default; sup_style = ST_SS
+        end select
+    end function sup_style
+
+    pure integer function frac_style(style)
+        integer, intent(in) :: style
+        select case (style)
+        case (ST_D); frac_style = ST_T
+        case (ST_T); frac_style = ST_S
+        case default; frac_style = ST_SS
+        end select
+    end function frac_style
+
+    subroutine need_items(n)
+        integer, intent(in) :: n
+        integer, allocatable :: ti(:)
+        real(dp), allocatable :: t(:)
+        integer :: cap
+        if (NI + n <= size(IT_KIND)) return
+        cap = max(2*size(IT_KIND), NI + n)
+        allocate (ti(cap))
+        ti(1:NI) = IT_KIND(1:NI)
+        call move_alloc(ti, IT_KIND)
+        allocate (ti(cap))
+        ti(1:NI) = IT_GID(1:NI)
+        call move_alloc(ti, IT_GID)
+        allocate (t(cap))
+        t(1:NI) = IT_X(1:NI)
+        call move_alloc(t, IT_X)
+        allocate (t(cap))
+        t(1:NI) = IT_Y(1:NI)
+        call move_alloc(t, IT_Y)
+        allocate (t(cap))
+        t(1:NI) = IT_S(1:NI)
+        call move_alloc(t, IT_S)
+        allocate (t(cap))
+        t(1:NI) = IT_W(1:NI)
+        call move_alloc(t, IT_W)
+        allocate (t(cap))
+        t(1:NI) = IT_H(1:NI)
+        call move_alloc(t, IT_H)
+    end subroutine need_items
+
+    subroutine add_glyph(gid, x, y, sz)
+        integer, intent(in) :: gid
+        real(dp), intent(in) :: x, y, sz
+        call need_items(1)
+        NI = NI + 1
+        IT_KIND(NI) = 1
+        IT_GID(NI) = gid
+        IT_X(NI) = x
+        IT_Y(NI) = y
+        IT_S(NI) = sz
+        IT_W(NI) = 0.0_dp
+        IT_H(NI) = 0.0_dp
+    end subroutine add_glyph
+
+    subroutine add_rule(x, y, w, h)
+        real(dp), intent(in) :: x, y, w, h
+        call need_items(1)
+        NI = NI + 1
+        IT_KIND(NI) = 2
+        IT_GID(NI) = 0
+        IT_X(NI) = x
+        IT_Y(NI) = y
+        IT_S(NI) = 0.0_dp
+        IT_W(NI) = w
+        IT_H(NI) = h
+    end subroutine add_rule
+
+    ! Move a box's items by (dx, dy), y up.
+    subroutine move_box(b, dx, dy)
+        type(mbox_t), intent(in) :: b
+        real(dp), intent(in) :: dx, dy
         integer :: k
+        do k = b%i0, b%i1
+            IT_X(k) = IT_X(k) + dx
+            IT_Y(k) = IT_Y(k) + dy
+        end do
+    end subroutine move_box
 
-        k = kind
-        if (k == AT_BIN) then
-            if (st%atom == AT_NONE .or. st%atom == AT_BIN .or. st%atom == AT_OP &
-                .or. st%atom == AT_REL .or. st%atom == AT_OPEN &
-                .or. st%atom == AT_PUNCT) k = AT_ORD
+    ! Move items k0..k1 to start at i0, sliding i0..k0-1 after them, for a
+    ! box whose later part has to come first in reading order.
+    subroutine to_front(i0, k0, k1)
+        integer, intent(in) :: i0, k0, k1
+        integer :: n
+        n = k1 - i0 + 1
+        if (k0 <= i0 .or. n <= 0) return
+        IT_KIND(i0:k1) = cshift(IT_KIND(i0:k1), k0 - i0)
+        IT_GID(i0:k1) = cshift(IT_GID(i0:k1), k0 - i0)
+        IT_X(i0:k1) = cshift(IT_X(i0:k1), k0 - i0)
+        IT_Y(i0:k1) = cshift(IT_Y(i0:k1), k0 - i0)
+        IT_S(i0:k1) = cshift(IT_S(i0:k1), k0 - i0)
+        IT_W(i0:k1) = cshift(IT_W(i0:k1), k0 - i0)
+        IT_H(i0:k1) = cshift(IT_H(i0:k1), k0 - i0)
+    end subroutine to_front
+
+    ! An empty box at the end of the arena.
+    pure function empty_box() result(b)
+        type(mbox_t) :: b
+        b%i0 = NI + 1
+        b%i1 = NI
+    end function empty_box
+
+    ! The glyph a style sets: the script and scriptscript styles take the
+    ! math font's alternates drawn for those sizes (ssty), where it has
+    ! them.
+    integer function script_glyph(gid, style) result(g)
+        integer, intent(in) :: gid, style
+        select case (style)
+        case (ST_S); g = glyph_ssty(gid, 1)
+        case (ST_SS); g = glyph_ssty(gid, 2)
+        case default; g = gid
+        end select
+    end function script_glyph
+
+    ! One glyph as a box: its advance, and its ink above and below the
+    ! baseline.
+    subroutine glyph_box(gid, sz, b)
+        integer, intent(in) :: gid
+        real(dp), intent(in) :: sz
+        type(mbox_t), intent(out) :: b
+        real(dp) :: x0, y0, x1, y1
+        b%i0 = NI + 1
+        call add_glyph(gid, 0.0_dp, 0.0_dp, sz)
+        b%i1 = NI
+        call glyph_bbox(gid, x0, y0, x1, y1)
+        b%w = glyph_adv(gid)*sz
+        b%h = y1*sz
+        b%d = -y0*sz
+        b%ital = glyph_italic(gid)*sz
+        b%is_char = .true.
+        b%gid = gid
+        b%sz = sz
+    end subroutine glyph_box
+
+    ! A list of noads as a box, in a style: TeX's mlist_to_hlist. The
+    ! first pass turns every noad into a box and settles the classes; the
+    ! second sets the boxes side by side with the glue between classes.
+    recursive subroutine mlist_box(head, style, cramped, size, box)
+        integer, intent(in) :: head, style
+        logical, intent(in) :: cramped
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(out) :: box
+        type(mbox_t), allocatable :: bx(:)
+        integer, allocatable :: cls(:), idx(:)
+        integer :: n, k, q, prev
+        real(dp) :: pen, sz, mu
+
+        n = 0
+        q = head
+        do while (q > 0)
+            n = n + 1
+            q = NOADS(q)%next
+        end do
+        allocate (bx(n), cls(n), idx(n))
+        box = empty_box()
+        if (n == 0) return
+
+        sz = style_size(style, size)
+        mu = sz/18.0_dp
+        q = head
+        prev = 0
+        do k = 1, n
+            idx(k) = q
+            cls(k) = NOADS(q)%cls
+            select case (NOADS(q)%kind)
+            case (K_SPACE)
+                bx(k) = empty_box()
+                if (NOADS(q)%mu) then
+                    bx(k)%w = NOADS(q)%amount*mu
+                else
+                    bx(k)%w = NOADS(q)%amount*sz
+                end if
+            case (K_FRAC)
+                call make_frac(q, style, cramped, size, bx(k))
+            case (K_RAD)
+                call make_rad(q, style, size, bx(k))
+            case default
+                ! A binary operator with nothing, or with an operator,
+                ! relation, opening or punctuation before it, is ordinary;
+                ! and so is one followed by a relation, closing or
+                ! punctuation (rules 5 and 6).
+                if (cls(k) == CL_BIN) then
+                    if (prev == 0) then
+                        cls(k) = CL_ORD
+                    else if (any(cls(prev) == [CL_BIN, CL_OP, CL_REL, CL_OPEN, &
+                                               CL_PUNCT])) then
+                        cls(k) = CL_ORD
+                    end if
+                end if
+                if (prev > 0) then
+                    if (cls(prev) == CL_BIN .and. any(cls(k) == [CL_REL, CL_CLOSE, &
+                                                               CL_PUNCT])) then
+                        cls(prev) = CL_ORD
+                    end if
+                end if
+                call make_atom(q, style, cramped, size, bx(k))
+            end select
+            if (NOADS(q)%kind /= K_SPACE) prev = k
+            q = NOADS(q)%next
+        end do
+        ! A binary operator at the very end has nothing to operate on.
+        if (prev > 0) then
+            if (cls(prev) == CL_BIN) cls(prev) = CL_ORD
         end if
-        if (st%atom /= AT_NONE) pen = pen + muskip(st%atom, k, st%style)*size
-        st%atom = k
-    end subroutine begin_atom
 
-    ! TeX's spacing table. The parenthesised entries are the ones that
-    ! exist only in text style; a script returns zero for those.
+        pen = 0.0_dp
+        prev = 0
+        box%h = 0.0_dp
+        box%d = 0.0_dp
+        do k = 1, n
+            if (NOADS(idx(k))%kind == K_SPACE) then
+                pen = pen + bx(k)%w
+                cycle
+            end if
+            if (prev > 0) pen = pen + muskip(cls(prev), cls(k), style)*mu
+            call move_box(bx(k), pen, 0.0_dp)
+            pen = pen + bx(k)%w
+            box%h = max(box%h, bx(k)%h)
+            box%d = max(box%d, bx(k)%d)
+            prev = k
+        end do
+        box%w = pen
+        box%i1 = NI
+        if (n == 1) then
+            box%gid = bx(1)%gid
+            box%kgid = bx(1)%kgid
+            box%sz = bx(1)%sz
+        end if
+    end subroutine mlist_box
+
+    ! An atom: its nucleus, and its scripts if it has any.
+    recursive subroutine make_atom(q, style, cramped, size, box)
+        integer, intent(in) :: q, style
+        logical, intent(in) :: cramped
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(out) :: box
+        type(mbox_t) :: g
+        integer :: k, code, nb, i0
+        real(dp) :: sz, pen
+
+        sz = style_size(style, size)
+        select case (NOADS(q)%nuc)
+        case (NUC_CHAR)
+            call glyph_box(script_glyph(math_gid(NOADS(q)%cp, NOADS(q)%face), style), &
+                           sz, box)
+            box%kgid = math_gid(NOADS(q)%cp, NOADS(q)%face)
+            ! TeX's rule for a character of a math font: its italic
+            ! correction is part of its width unless a subscript is going
+            ! to tuck in under it.
+            if (NOADS(q)%sub < 0) then
+                box%w = box%w + box%ital
+                box%ital = 0.0_dp
+            end if
+        case (NUC_LIST)
+            call mlist_box(NOADS(q)%list, style, cramped, size, box)
+        case (NUC_TEXT)
+            ! An operator name, upright, its letters side by side.
+            box = empty_box()
+            i0 = NI + 1
+            pen = 0.0_dp
+            k = NOADS(q)%t0
+            do while (k <= NOADS(q)%t1)
+                call utf8_next(TPOOL, k, code, nb)
+                k = k + nb
+                call glyph_box(script_glyph(math_gid(code, FACE_MATH), style), sz, g)
+                call move_box(g, pen, 0.0_dp)
+                pen = pen + g%w
+                box%h = max(box%h, g%h)
+                box%d = max(box%d, g%d)
+            end do
+            box%i0 = i0
+            box%i1 = NI
+            box%w = pen
+            box%gid = 0
+        case default
+            box = empty_box()
+        end select
+        if (NOADS(q)%sup >= 0 .or. NOADS(q)%sub >= 0) then
+            call make_scripts(q, style, cramped, size, box)
+        end if
+    end subroutine make_atom
+
+    ! The scripts of an atom set against its nucleus (rule 18, with the
+    ! MATH table's constants). A superscript is raised by at least its
+    ! shift and far enough for its bottom to clear the baseline's minimum;
+    ! a subscript is lowered by at least its shift and far enough for its
+    ! top to stay under its maximum; with both, they are pulled apart to
+    ! the minimum gap, the subscript going down until the superscript's
+    ! bottom has risen as far as it may. A superscript is moved out by the
+    ! nucleus's italic correction and a subscript is not.
+    recursive subroutine make_scripts(q, style, cramped, size, box)
+        integer, intent(in) :: q, style
+        logical, intent(in) :: cramped
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(inout) :: box
+        type(mbox_t) :: sup, sub
+        real(dp) :: sz, ssz, u, v, gap, psi, w, x_sup, x_sub
+        logical :: has_sup, has_sub
+
+        sz = style_size(style, size)
+        ssz = style_size(sup_style(style), size)
+        has_sup = NOADS(q)%sup >= 0
+        has_sub = NOADS(q)%sub >= 0
+        if (box%is_char) then
+            u = 0.0_dp
+            v = 0.0_dp
+        else
+            u = box%h - math_const(MC_SUPERSCRIPT_BASELINE_DROP_MAX)*ssz
+            v = box%d + math_const(MC_SUBSCRIPT_BASELINE_DROP_MIN)*ssz
+        end if
+        x_sup = box%w + box%ital
+
+        if (has_sup) call mlist_box(NOADS(q)%sup, sup_style(style), cramped, size, sup)
+        if (has_sub) call mlist_box(NOADS(q)%sub, sup_style(style), .true., size, sub)
+
+        if (has_sup) then
+            if (cramped) then
+                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP_CRAMPED)*sz)
+            else
+                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP)*sz)
+            end if
+            u = max(u, sup%d + math_const(MC_SUPERSCRIPT_BOTTOM_MIN)*sz)
+        end if
+        if (has_sub .and. .not. has_sup) then
+            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN)*sz, &
+                    sub%h - math_const(MC_SUBSCRIPT_TOP_MAX)*sz)
+        else if (has_sub) then
+            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN)*sz)
+            gap = (u - sup%d) - (sub%h - v)
+            if (gap < math_const(MC_SUB_SUPERSCRIPT_GAP_MIN)*sz) then
+                v = v + math_const(MC_SUB_SUPERSCRIPT_GAP_MIN)*sz - gap
+                psi = math_const(MC_SUPERSCRIPT_BOTTOM_MAX_WITH_SUBSCRIPT)*sz - (u - sup%d)
+                if (psi > 0.0_dp) then
+                    u = u + psi
+                    v = v - psi
+                end if
+            end if
+        end if
+
+        ! The math kerns at the nucleus's corners and the scripts' facing
+        ! ones, where both are single glyphs.
+        if (has_sup) x_sup = x_sup + script_kern(box, sup, u, .true.)
+        x_sub = box%w
+        if (has_sub) x_sub = x_sub + script_kern(box, sub, -v, .false.)
+
+        w = box%w
+        if (has_sup) then
+            call move_box(sup, x_sup, u)
+            w = max(w, x_sup + sup%w)
+            box%h = max(box%h, u + sup%h)
+            box%d = max(box%d, sup%d - u)
+        end if
+        if (has_sub) then
+            call move_box(sub, x_sub, -v)
+            w = max(w, x_sub + sub%w)
+            box%h = max(box%h, sub%h - v)
+            box%d = max(box%d, sub%d + v)
+        end if
+        ! The space after the scripts is the formula's, as TeX's
+        ! \scriptspace is, whatever the style of the nucleus.
+        box%w = w + math_const(MC_SPACE_AFTER_SCRIPT)*size
+        box%i1 = NI
+        box%is_char = .false.
+        box%ital = 0.0_dp
+    end subroutine make_scripts
+
+    ! How far a script moves in towards its nucleus, from the math kerns
+    ! (OpenType's cut-ins): the nucleus's kern at its top or bottom right
+    ! corner plus the script's at its facing left corner, each read at two
+    ! heights -- the nucleus's top and the script's bottom for a
+    ! superscript, the script's top and the nucleus's bottom for a
+    ! subscript -- and the    ! smaller of the two sums taken, as XeTeX takes it. The kerns are the
+    ! characters' own, not those of their script-size alternates. shift is
+    ! how far the script's baseline sits above the nucleus's.
+    function script_kern(base, scr, shift, sup) result(k)
+        type(mbox_t), intent(in) :: base, scr
+        real(dp), intent(in) :: shift
+        logical, intent(in) :: sup
+        real(dp) :: k, h1, h2
+        k = 0.0_dp
+        if (.not. base%is_char .or. base%kgid == 0) return
+        if (sup) then
+            h1 = base%h
+            h2 = shift - scr%d
+            k = min(corner(h1, 1, 4), corner(h2, 1, 4))
+        else
+            h1 = shift + scr%h
+            h2 = -base%d
+            k = min(corner(h1, 3, 2), corner(h2, 3, 2))
+        end if
+
+    contains
+
+        real(dp) function corner(h, cb, cs)
+            real(dp), intent(in) :: h
+            integer, intent(in) :: cb, cs
+            corner = glyph_math_kern(base%kgid, cb, h/base%sz)*base%sz
+            if (scr%kgid > 0) corner = corner + &
+                glyph_math_kern(scr%kgid, cs, (h - shift)/scr%sz)*scr%sz
+        end function corner
+
+    end function script_kern
+
+    ! \frac{a}{b} (rule 15, with the MATH table's constants): the halves
+    ! one style down, the denominator cramped, each centred over the rule,
+    ! which sits on the axis. Each half is moved out until it clears the
+    ! rule by the minimum gap. A null delimiter's space is left on either
+    ! side, as TeX leaves it.
+    recursive subroutine make_frac(q, style, cramped, size, box)
+        integer, intent(in) :: q, style
+        logical, intent(in) :: cramped
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(out) :: box
+        type(mbox_t) :: num, den
+        real(dp) :: sz, u, v, a, th, phi_n, phi_d, w, nds
+        integer :: i0
+
+        sz = style_size(style, size)
+        nds = 0.12_dp*size
+        i0 = NI + 1
+        call mlist_box(NOADS(q)%a, frac_style(style), cramped, size, num)
+        call mlist_box(NOADS(q)%b, frac_style(style), .true., size, den)
+        a = math_const(MC_AXIS_HEIGHT)*sz
+        th = math_const(MC_FRACTION_RULE_THICKNESS)*sz
+        if (style == ST_D) then
+            u = math_const(MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP)*sz
+            v = math_const(MC_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN)*sz
+            phi_n = math_const(MC_FRACTION_NUM_DISPLAY_STYLE_GAP_MIN)*sz
+            phi_d = math_const(MC_FRACTION_DENOM_DISPLAY_STYLE_GAP_MIN)*sz
+        else
+            u = math_const(MC_FRACTION_NUMERATOR_SHIFT_UP)*sz
+            v = math_const(MC_FRACTION_DENOMINATOR_SHIFT_DOWN)*sz
+            phi_n = math_const(MC_FRACTION_NUMERATOR_GAP_MIN)*sz
+            phi_d = math_const(MC_FRACTION_DENOMINATOR_GAP_MIN)*sz
+        end if
+        if ((u - num%d) - (a + 0.5_dp*th) < phi_n) u = phi_n + a + 0.5_dp*th + num%d
+        if ((a - 0.5_dp*th) - (den%h - v) < phi_d) v = phi_d - a + 0.5_dp*th + den%h
+
+        w = max(num%w, den%w)
+        call move_box(num, nds + 0.5_dp*(w - num%w), u)
+        call move_box(den, nds + 0.5_dp*(w - den%w), -v)
+        call add_rule(nds, a - 0.5_dp*th, w, th)
+        box%i0 = i0
+        box%i1 = NI
+        box%w = w + 2.0_dp*nds
+        box%h = max(u + num%h, a + 0.5_dp*th)
+        box%d = max(v + den%d, -(a - 0.5_dp*th))
+    end subroutine make_frac
+
+    ! \sqrt{a} (rule 11, with the MATH table's constants): the radicand in
+    ! the same style, cramped; the smallest variant of the radical sign
+    ! that covers it with the gap and the rule above; any height the sign
+    ! has to spare split evenly above and below; and the rule along the
+    ! top of the sign, with the extra ascender above it.
+    recursive subroutine make_rad(q, style, size, box)
+        integer, intent(in) :: q, style
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(out) :: box
+        type(mbox_t) :: x, sign
+        integer, allocatable :: vg(:)
+        real(dp), allocatable :: va(:)
+        real(dp) :: sz, th, phi, need, x0, y0, x1, y1, hg, dg, extra, rise
+        integer :: nvar, k, g, i0
+
+        sz = style_size(style, size)
+        th = math_const(MC_RADICAL_RULE_THICKNESS)*sz
+        if (style == ST_D) then
+            phi = math_const(MC_RADICAL_DISPLAY_STYLE_VERTICAL_GAP)*sz
+        else
+            phi = math_const(MC_RADICAL_VERTICAL_GAP)*sz
+        end if
+        i0 = NI + 1
+        ! The sign goes into the box before the radicand, as TeX puts it;
+        ! the radicand is laid out first to know how tall a sign it needs,
+        ! and then moved behind it.
+        call mlist_box(NOADS(q)%a, style, .true., size, x)
+        need = x%h + x%d + phi + th
+
+        g = glyph_cmap(FACE_MATH, 8730)
+        call glyph_variants(g, .true., nvar, vg, va)
+        do k = 1, nvar
+            g = vg(k)
+            if (va(k)*sz >= need) exit
+        end do
+        call glyph_bbox(g, x0, y0, x1, y1)
+        hg = y1*sz
+        dg = -y0*sz
+        extra = (hg + dg) - need
+        if (extra > 0.0_dp) phi = phi + 0.5_dp*extra
+        ! The top of the sign is where the rule's top goes.
+        rise = x%h + phi + th - hg
+        call glyph_box(g, sz, sign)
+        call move_box(sign, 0.0_dp, rise)
+        call move_box(x, sign%w, 0.0_dp)
+        call to_front(x%i0, sign%i0, sign%i1)
+        call add_rule(sign%w, x%h + phi, x%w, th)
+        box%i0 = i0
+        box%i1 = NI
+        box%w = sign%w + x%w
+        box%h = x%h + phi + th + math_const(MC_RADICAL_EXTRA_ASCENDER)*sz
+        box%d = max(x%d, dg - rise)
+    end subroutine make_rad
+
+    ! TeX's spacing table, in mu. The parenthesised entries are the ones
+    ! that exist only in display and text style; a script returns zero
+    ! for those.
     pure function muskip(left, right, style) result(w)
         integer, intent(in) :: left, right, style
         real(dp) :: w
@@ -574,212 +1143,61 @@ contains
         kind = 0
         text_only = .false.
         select case (left)
-        case (AT_ORD)
+        case (CL_ORD)
             select case (right)
-            case (AT_OP); kind = 1
-            case (AT_BIN); kind = 2; text_only = .true.
-            case (AT_REL); kind = 3; text_only = .true.
-            case (AT_INNER); kind = 1; text_only = .true.
+            case (CL_OP); kind = 1
+            case (CL_BIN); kind = 2; text_only = .true.
+            case (CL_REL); kind = 3; text_only = .true.
+            case (CL_INNER); kind = 1; text_only = .true.
             end select
-        case (AT_OP)
+        case (CL_OP)
             select case (right)
-            case (AT_ORD, AT_OP); kind = 1
-            case (AT_REL); kind = 3; text_only = .true.
-            case (AT_INNER); kind = 1; text_only = .true.
+            case (CL_ORD, CL_OP); kind = 1
+            case (CL_REL); kind = 3; text_only = .true.
+            case (CL_INNER); kind = 1; text_only = .true.
             end select
-        case (AT_BIN)
+        case (CL_BIN)
             select case (right)
-            case (AT_ORD, AT_OP, AT_OPEN, AT_INNER)
+            case (CL_ORD, CL_OP, CL_OPEN, CL_INNER)
                 kind = 2
                 text_only = .true.
             end select
-        case (AT_REL)
+        case (CL_REL)
             select case (right)
-            case (AT_ORD, AT_OP, AT_OPEN, AT_INNER)
+            case (CL_ORD, CL_OP, CL_OPEN, CL_INNER)
                 kind = 3
                 text_only = .true.
             end select
-        case (AT_CLOSE)
+        case (CL_CLOSE)
             select case (right)
-            case (AT_OP); kind = 1
-            case (AT_BIN); kind = 2; text_only = .true.
-            case (AT_REL); kind = 3; text_only = .true.
-            case (AT_INNER); kind = 1; text_only = .true.
+            case (CL_OP); kind = 1
+            case (CL_BIN); kind = 2; text_only = .true.
+            case (CL_REL); kind = 3; text_only = .true.
+            case (CL_INNER); kind = 1; text_only = .true.
             end select
-        case (AT_PUNCT)
+        case (CL_PUNCT)
             kind = 1
             text_only = .true.
-        case (AT_INNER)
+        case (CL_INNER)
             select case (right)
-            case (AT_OP); kind = 1
-            case (AT_ORD, AT_OPEN, AT_PUNCT, AT_INNER)
+            case (CL_OP); kind = 1
+            case (CL_ORD, CL_OPEN, CL_PUNCT, CL_INNER)
                 kind = 1
                 text_only = .true.
-            case (AT_BIN); kind = 2; text_only = .true.
-            case (AT_REL); kind = 3; text_only = .true.
+            case (CL_BIN); kind = 2; text_only = .true.
+            case (CL_REL); kind = 3; text_only = .true.
             end select
         end select
         if (kind == 0) return
-        if (text_only .and. style > 0) return
+        if (text_only .and. style > ST_T) return
         if (kind == 1) w = THIN
         if (kind == 2) w = MED
         if (kind == 3) w = THICK
     end function muskip
 
-    pure integer function atom_kind(code) result(k)
-        integer, intent(in) :: code
-        select case (code)
-        case (iachar("+"), iachar("-"), iachar("*"), 215, 8722)
-            k = AT_BIN
-        case (iachar("="), iachar("<"), iachar(">"), iachar(":"))
-            k = AT_REL
-        case (iachar("("), iachar("["))
-            k = AT_OPEN
-        case (iachar(")"), iachar("]"))
-            k = AT_CLOSE
-        case (iachar(","), iachar(";"))
-            k = AT_PUNCT
-        case default
-            k = AT_ORD
-        end select
-    end function atom_kind
-
-    ! ASCII letters and lowercase greek slope. Digits, uppercase greek
-    ! and the multiplication sign stay upright.
-    pure logical function is_slanted(code, math) result(yes)
-        integer, intent(in) :: code
-        logical, intent(in) :: math
-        yes = math .and. ((code >= iachar("A") .and. code <= iachar("Z")) .or. &
-                          (code >= iachar("a") .and. code <= iachar("z")) .or. &
-                          (code >= 945 .and. code <= 969))
-    end function is_slanted
-
-    ! Horizontal offset of a superscript and a subscript from the
-    ! nucleus advance. Matplotlib's rule for DejaVu, which has no
-    ! italic-correction field of its own: an upright nucleus moves both
-    ! scripts by delta times the x-height, and a slanted one moves only
-    ! the superscript, by twice that plus a share of the letter's height.
-    subroutine script_kern(code, slanted, size, superk, subk)
-        integer, intent(in) :: code
-        logical, intent(in) :: slanted
-        real(dp), intent(in) :: size
-        real(dp), intent(out) :: superk, subk
-        real(dp) :: xh, h
-
-        xh = XHEIGHT/EM*size
-        superk = DELTA*xh
-        subk = DELTA*xh
-        if (.not. slanted) return
-        h = xh
-        if (code > 0) h = glyph_ascent(code)/EM*size
-        superk = superk + DELTA*xh + DELTA_SLANT*(h - xh*2.0_dp/3.0_dp)
-        if (superk < 0.0_dp) superk = 0.0_dp
-        subk = 0.0_dp
-    end subroutine script_kern
-
-    ! How far a glyph rises above the baseline, in font units.
-    function glyph_ascent(code) result(h)
-        integer, intent(in) :: code
-        real(dp) :: h
-        real(dp), allocatable :: x(:), y(:)
-        integer :: n
-
-        call glyph_points(code, x, y, n)
-        if (n <= 0) then
-            h = XHEIGHT
-        else
-            h = maxval(y(1:n))
-            if (h <= 0.0_dp) h = XHEIGHT
-        end if
-    end function glyph_ascent
-
-    ! Ink of runs k0..k1, in canvas coordinates (y grows downwards).
-    subroutine runs_ink(runs, k0, k1, ytop, ybot, any)
-        type(mrun_t), intent(in) :: runs(MAX_RUNS)
-        integer, intent(in) :: k0, k1
-        real(dp), intent(out) :: ytop, ybot
-        logical, intent(out) :: any
-        integer :: k
-        real(dp) :: t, b
-        logical :: one
-
-        any = .false.
-        ytop = 0.0_dp
-        ybot = 0.0_dp
-        do k = max(k0, 1), min(k1, MAX_RUNS)
-            call run_ink(runs(k), t, b, one)
-            if (.not. one) cycle
-            if (.not. any) then
-                ytop = t
-                ybot = b
-                any = .true.
-            else
-                ytop = min(ytop, t)
-                ybot = max(ybot, b)
-            end if
-        end do
-    end subroutine runs_ink
-
-    subroutine run_ink(run, ytop, ybot, any)
-        type(mrun_t), intent(in) :: run
-        real(dp), intent(out) :: ytop, ybot
-        logical, intent(out) :: any
-        real(dp), allocatable :: x(:), y(:)
-        integer :: i, n, code, nb
-        real(dp) :: sc, ymin, ymax
-
-        ymin = 0.0_dp
-        ymax = 0.0_dp
-        any = .false.
-        ytop = run%dy
-        ybot = run%dy
-        if (run%line) then
-            ytop = min(run%dy, run%y2) - 0.5_dp*run%lw
-            ybot = max(run%dy, run%y2) + 0.5_dp*run%lw
-            any = .true.
-            return
-        end if
-        if (run%n <= 0) return
-        sc = run%size/EM
-        i = 1
-        do while (i <= run%n)
-            call utf8_next(run%s, i, code, nb)
-            i = i + nb
-            if (run%italic) then
-                call glyph_points(code, x, y, n, FACE_ITALIC)
-            else
-                call glyph_points(code, x, y, n, FACE_REGULAR)
-            end if
-            if (n <= 0) cycle
-            if (.not. any) then
-                ymin = minval(y(1:n))
-                ymax = maxval(y(1:n))
-                any = .true.
-            else
-                ymin = min(ymin, minval(y(1:n)))
-                ymax = max(ymax, maxval(y(1:n)))
-            end if
-        end do
-        if (.not. any) return
-        ytop = run%dy - ymax*sc
-        ybot = run%dy - ymin*sc
-    end subroutine run_ink
-
-    subroutine emit_line(x1, y1, x2, y2, lw, runs, nr)
-        real(dp), intent(in) :: x1, y1, x2, y2, lw
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        if (nr >= MAX_RUNS) return
-        nr = nr + 1
-        runs(nr)%n = 0
-        runs(nr)%line = .true.
-        runs(nr)%dx = x1
-        runs(nr)%dy = y1
-        runs(nr)%x2 = x2
-        runs(nr)%y2 = y2
-        runs(nr)%lw = lw
-    end subroutine emit_line
-
+    ! ------------------------------------------------------------------
+    ! Scanning
+    ! ------------------------------------------------------------------
 
     ! The letters of the command that s starts with, without the backslash.
     pure function cmd_name(s) result(name)
@@ -830,6 +1248,10 @@ contains
         integer :: depth
         depth = 0
         do j = i, len(s)
+            if (s(j:j) == BS) cycle
+            if (j > 1) then
+                if (s(j - 1:j - 1) == BS) cycle
+            end if
             if (s(j:j) == "{") depth = depth + 1
             if (s(j:j) == "}") then
                 depth = depth - 1
@@ -875,6 +1297,7 @@ contains
         character(len=*), intent(in) :: s
         integer, intent(in) :: i
         integer, intent(out) :: j
+        integer :: code, nb
         if (i > len(s)) then
             j = i - 1
         else if (s(i:i) == "{") then
@@ -882,7 +1305,8 @@ contains
         else if (s(i:i) == BS) then
             call command_end(s, i, j)
         else
-            j = i
+            call utf8_next(s, i, code, nb)
+            j = i + nb - 1
         end if
     end subroutine unit_end
 
@@ -891,145 +1315,5 @@ contains
         logical :: yes
         yes = (c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z")
     end function is_alpha
-
-    ! The greek letters, by their TeX names. Everything else is left to
-    ! degrade to its own name, which at least shows what was asked for.
-    pure function greek_code(name) result(code)
-        character(len=*), intent(in) :: name
-        integer :: code
-        select case (name)
-        case ("alpha"); code = 945
-        case ("beta"); code = 946
-        case ("gamma"); code = 947
-        case ("delta"); code = 948
-        case ("epsilon", "varepsilon"); code = 949
-        case ("zeta"); code = 950
-        case ("eta"); code = 951
-        case ("theta", "vartheta"); code = 952
-        case ("iota"); code = 953
-        case ("kappa"); code = 954
-        case ("lambda"); code = 955
-        case ("mu"); code = 956
-        case ("nu"); code = 957
-        case ("xi"); code = 958
-        case ("pi"); code = 960
-        case ("rho", "varrho"); code = 961
-        case ("varsigma"); code = 962
-        case ("sigma"); code = 963
-        case ("tau"); code = 964
-        case ("upsilon"); code = 965
-        case ("phi", "varphi"); code = 966
-        case ("chi"); code = 967
-        case ("psi"); code = 968
-        case ("omega"); code = 969
-        case ("Gamma"); code = 915
-        case ("Delta"); code = 916
-        case ("Theta"); code = 920
-        case ("Lambda"); code = 923
-        case ("Xi"); code = 926
-        case ("Pi"); code = 928
-        case ("Sigma"); code = 931
-        case ("Upsilon"); code = 933
-        case ("Phi"); code = 934
-        case ("Psi"); code = 936
-        case ("Omega"); code = 937
-        ! The multiplication sign, which log tick labels are written with.
-        case ("times"); code = 215
-        case default; code = 0
-        end select
-    end function greek_code
-
-    ! ------------------------------------------------------------------
-    ! Runs
-    ! ------------------------------------------------------------------
-
-    ! In math mode the letters slope and everything else stays upright, so
-    ! the text is broken at every change of class and each piece emitted on
-    ! its own. Outside math mode it is one run, as it always was.
-    subroutine emit(s, size, x0, y0, runs, nr, xend, math)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in), optional :: math
-        logical :: mm
-        real(dp) :: pen, nxt
-        integer :: i, j
-
-        mm = .false.
-        if (present(math)) mm = math
-        if (.not. mm) then
-            call emit_run(s, size, x0, y0, runs, nr, xend, .false.)
-            return
-        end if
-        pen = x0
-        i = 1
-        do while (i <= len(s))
-            j = i
-            do while (j < len(s))
-                if (is_alpha(s(j + 1:j + 1)) .neqv. is_alpha(s(i:i))) exit
-                j = j + 1
-            end do
-            call emit_run(s(i:j), size, pen, y0, runs, nr, nxt, is_alpha(s(i:i)))
-            pen = nxt
-            i = j + 1
-        end do
-        xend = pen
-    end subroutine emit
-
-    subroutine emit_run(s, size, x0, y0, runs, nr, xend, italic)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size, x0, y0
-        type(mrun_t), intent(inout) :: runs(MAX_RUNS)
-        integer, intent(inout) :: nr
-        real(dp), intent(out) :: xend
-        logical, intent(in) :: italic
-        integer :: n
-
-        xend = x0 + run_width(s, size, italic)
-        n = min(len(s), 64)
-        if (n <= 0) return
-        ! Letters of one atom class sit against each other, so they can
-        ! share a run. A glue gap leaves the pen short of x0 and starts
-        ! a new one. The tests are nested because .and. does not
-        ! short-circuit, and runs(nr) is not there when nr is 0.
-        if (nr > 0) then
-            if (.not. runs(nr)%line .and. runs(nr)%italic .eqv. italic &
-                .and. abs(runs(nr)%dy - y0) <= 1.0e-9_dp &
-                .and. abs(runs(nr)%size - size) <= 1.0e-9_dp &
-                .and. runs(nr)%n + n <= 64) then
-                if (abs(runs(nr)%dx + run_width(runs(nr)%s(1:runs(nr)%n), size, &
-                                                italic) - x0) <= 1.0e-4_dp) then
-                    runs(nr)%s(runs(nr)%n + 1:runs(nr)%n + n) = s(1:n)
-                    runs(nr)%n = runs(nr)%n + n
-                    return
-                end if
-            end if
-        end if
-        if (nr >= MAX_RUNS) return
-        nr = nr + 1
-        runs(nr)%s = s(1:n)
-        runs(nr)%n = n
-        runs(nr)%dx = x0
-        runs(nr)%dy = y0
-        runs(nr)%size = size
-        runs(nr)%italic = italic
-        runs(nr)%line = .false.
-    end subroutine emit_run
-
-    ! A run is set in the regular face, or the italic one for the letters
-    ! that slope.
-    function run_width(s, size, italic) result(w)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size
-        logical, intent(in) :: italic
-        real(dp) :: w
-        if (italic) then
-            w = text_width(s, size, FACE_ITALIC)
-        else
-            w = text_width(s, size, FACE_REGULAR)
-        end if
-    end function run_width
 
 end module fplotlib_mathtext

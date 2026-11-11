@@ -13,9 +13,10 @@
 ! thousandth of an em, with y up, which is what the font matrix
 ! [0.001 0 0 0.001 0 0] says.
 !
-! The fonts get neutral names: the outlines are derived from Lato, and its
-! licence reserves that name, so the files call them FplotlibSans-Regular,
-! FplotlibSans-Bold, FplotlibSans-Italic and FplotlibSans-BoldItalic.
+! The fonts get neutral names: the outlines are derived from Lato and Lete
+! Sans Math, whose licences reserve the name Lato, so the files call them
+! FplotlibSans-Regular, FplotlibSans-Bold, FplotlibSans-Italic,
+! FplotlibSans-BoldItalic and FplotlibMath.
 module fplotlib_type3
     use fplotlib_style, only: dp
     use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
@@ -113,6 +114,7 @@ contains
         case (2); name = "FplotlibSans-Bold"
         case (3); name = "FplotlibSans-Italic"
         case (4); name = "FplotlibSans-BoldItalic"
+        case (5); name = "FplotlibMath"
         case default; name = "FplotlibSans-Regular"
         end select
         k = 0

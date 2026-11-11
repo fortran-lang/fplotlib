@@ -2,7 +2,8 @@
 
 Every backend draws text from outlines compiled into the library, so the
 outlines, metrics and kerning of the fonts fplotlib uses have to be part of
-it. Text is set in Lato (regular, bold, italic, bold italic).
+it. Text is set in Lato (regular, bold, italic, bold italic) and math in
+Lete Sans Math, whose OpenType MATH table drives the math layout.
 
 The fonts are pinned to exact commits and checked against their SHA-256
 hashes. They are downloaded into a cache directory, or read from a
@@ -27,7 +28,13 @@ What is stored is each font's own representation, in integer font units:
     bounds of the curves rounded outwards;
   * each face has a cmap, the code points it maps to gids, and its pair
     kerning, reduced to a left class per glyph, a right class per glyph
-    and the non-zero cells of the class matrix.
+    and the non-zero cells of the class matrix;
+  * the math face carries its MATH table: the constants, and per glyph
+    the italic correction, top accent attachment, math kerns, extended
+    shape flag, size variants (up to MAX_VARIANT ems) and assemblies.
+    Three GSUB features are baked in: cv11 (the single-story g) goes into
+    the cmap, and ssty (script-size alternates) and dtls (dotless forms)
+    become tables the layout looks glyphs up in.
 
 Every point is a delta from the one before it, coded as a magnitude class
 through a prefix code plus the raw bits under the leading one, which is
@@ -79,6 +86,8 @@ TEXT_FACES = [
     ("Lato-Italic.ttf", 0),
     ("Lato-BoldItalic.ttf", 2),
 ]
+# The math face comes after them.
+MATH_FACE = "LeteSansMath.otf"
 
 
 def _r(a, b):
@@ -107,6 +116,83 @@ TEXT_REPERTOIRE = (
 # U+2103 (degree Celsius) is two glyphs and is spelled out by the text
 # layout instead; U+20BD (ruble) is left out.
 TEXT_FALLBACK = {0x2011: 0x2D, 0x2206: 0x394}
+
+# The math repertoire, set in Lete Sans Math: the math alphabets (italic,
+# upright, bold, double-struck, script, sans-serif), the operators,
+# relations and arrows, the big operators, delimiters, radicals and
+# accents. Code points the font does not have are left out.
+MATH_REPERTOIRE = (
+    _r(0x20, 0x7E) | {0xAC, 0xB0, 0xB1, 0xB7, 0xD7, 0xF7}
+    | _r(0x391, 0x3A9) | _r(0x3B1, 0x3C9) | {0x3D1, 0x3D5, 0x3D6, 0x3F0, 0x3F1, 0x3F5}
+    | {0x131, 0x237}
+    | _r(0x1D400, 0x1D433)                          # bold
+    | _r(0x1D434, 0x1D467) | {0x210E}               # italic
+    | _r(0x1D49C, 0x1D4B5)                          # script capitals
+    | {0x212C, 0x2130, 0x2131, 0x210B, 0x2110, 0x2112, 0x2133, 0x211B}
+    | _r(0x1D538, 0x1D551)                          # double-struck capitals
+    | {0x2102, 0x210D, 0x2115, 0x2119, 0x211A, 0x211D, 0x2124}
+    | _r(0x1D5A0, 0x1D5D3)                          # sans-serif
+    | {0x1D6A4, 0x1D6A5}                            # dotless italic i, j
+    | _r(0x1D6A8, 0x1D6E1)                          # bold greek
+    | _r(0x1D6E2, 0x1D71B)                          # italic greek
+    | _r(0x1D7CE, 0x1D7D7) | _r(0x1D7E2, 0x1D7EB)  # bold and sans digits
+    # accents
+    | _r(0x300, 0x308) | {0x30A, 0x30C, 0x20D6, 0x20D7}
+    # binary operators
+    | {0x2212, 0x2213, 0x2216, 0x2217, 0x2218, 0x2219, 0x22C5, 0x22C6, 0x2229,
+       0x222A, 0x2227, 0x2228, 0x228E, 0x2293, 0x2294, 0x2020, 0x2021,
+       0x22C4, 0x25E6, 0x2022} | _r(0x2295, 0x2299)
+    # relations
+    | {0x2208, 0x2209, 0x220B, 0x2264, 0x2265, 0x2260, 0x2248, 0x223C,
+       0x2243, 0x2245, 0x2261, 0x221D, 0x226A, 0x226B, 0x227A, 0x227B,
+       0x2AAF, 0x2AB0, 0x2A7D, 0x2A7E, 0x2272, 0x2273, 0x2250, 0x2254,
+       0x224D, 0x2236, 0x2237, 0x22A2, 0x22A3, 0x22A4, 0x22A5, 0x2223,
+       0x2224, 0x2225, 0x2226, 0x225C, 0x2234, 0x2235, 0x2266, 0x2267}
+    | _r(0x2282, 0x2287)
+    # arrows
+    | _r(0x2190, 0x2199) | {0x21A6} | _r(0x21D0, 0x21D5) | _r(0x27F5, 0x27FA)
+    | {0x27FC}
+    # ordinary symbols
+    | {0x221E, 0x2202, 0x2207, 0x2205, 0x2200, 0x2203, 0x2204, 0x210F,
+       0x2113, 0x211C, 0x2111, 0x2135, 0x2032, 0x2033, 0x2034, 0x2026,
+       0x22EF, 0x22EE, 0x22F1, 0x2220, 0x25B3, 0x25BD}
+    # big operators
+    | {0x2211, 0x220F, 0x2210, 0x222B, 0x222C, 0x222D, 0x222E, 0x22C0,
+       0x22C1, 0x22C2, 0x22C3, 0x2A00, 0x2A01, 0x2A02, 0x2A04, 0x2A06}
+    # delimiters and radicals
+    | {0x2016, 0x27E8, 0x27E9, 0x2308, 0x2309, 0x230A, 0x230B,
+       0x221A, 0x221B, 0x221C}
+)
+
+# Size variants are kept up to this advance, in ems: \Bigg asks for about
+# 1.8 ems, and a taller delimiter is built from its assembly instead.
+MAX_VARIANT = 2.5
+
+# The MATH constants, in the order the OpenType specification lists them.
+MATH_CONSTANTS = [
+    "ScriptPercentScaleDown", "ScriptScriptPercentScaleDown",
+    "DelimitedSubFormulaMinHeight", "DisplayOperatorMinHeight", "MathLeading",
+    "AxisHeight", "AccentBaseHeight", "FlattenedAccentBaseHeight",
+    "SubscriptShiftDown", "SubscriptTopMax", "SubscriptBaselineDropMin",
+    "SuperscriptShiftUp", "SuperscriptShiftUpCramped", "SuperscriptBottomMin",
+    "SuperscriptBaselineDropMax", "SubSuperscriptGapMin",
+    "SuperscriptBottomMaxWithSubscript", "SpaceAfterScript", "UpperLimitGapMin",
+    "UpperLimitBaselineRiseMin", "LowerLimitGapMin", "LowerLimitBaselineDropMin",
+    "StackTopShiftUp", "StackTopDisplayStyleShiftUp", "StackBottomShiftDown",
+    "StackBottomDisplayStyleShiftDown", "StackGapMin", "StackDisplayStyleGapMin",
+    "StretchStackTopShiftUp", "StretchStackBottomShiftDown",
+    "StretchStackGapAboveMin", "StretchStackGapBelowMin",
+    "FractionNumeratorShiftUp", "FractionNumeratorDisplayStyleShiftUp",
+    "FractionDenominatorShiftDown", "FractionDenominatorDisplayStyleShiftDown",
+    "FractionNumeratorGapMin", "FractionNumDisplayStyleGapMin",
+    "FractionRuleThickness", "FractionDenominatorGapMin",
+    "FractionDenomDisplayStyleGapMin", "SkewedFractionHorizontalGap",
+    "SkewedFractionVerticalGap", "OverbarVerticalGap", "OverbarRuleThickness",
+    "OverbarExtraAscender", "UnderbarVerticalGap", "UnderbarRuleThickness",
+    "UnderbarExtraDescender", "RadicalVerticalGap", "RadicalDisplayStyleVerticalGap",
+    "RadicalRuleThickness", "RadicalExtraAscender", "RadicalKernBeforeDegree",
+    "RadicalKernAfterDegree", "RadicalDegreeBottomRaisePercent",
+]
 
 # Printable ASCII without the characters that are awkward inside a Fortran
 # literal: the two quotes, the backslash some compilers read escapes from,
@@ -167,6 +253,7 @@ class Face:
         self.kern = {}          # (name, name) -> x advance adjustment
         self.cubic = False
         self.pred = None
+        self.math = None
 
     def add(self, g):
         self.index[g.name] = len(self.glyphs)
@@ -369,6 +456,172 @@ def load_text_face(path, pred):
     face.desc = font["hhea"].descent
     face.xh = os2.sxHeight
     face.cap = os2.sCapHeight
+    return face, font, glyphset
+
+
+def gsub_single(font, tag):
+    """The single substitutions of a GSUB feature, as a name mapping."""
+    out = {}
+    gsub = font["GSUB"].table
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag != tag:
+            continue
+        for li in fr.Feature.LookupListIndex:
+            lookup = gsub.LookupList.Lookup[li]
+            for st in lookup.SubTable:
+                if lookup.LookupType == 1:
+                    for a, b in st.mapping.items():
+                        out.setdefault(a, b)
+                elif lookup.LookupType == 3:
+                    for a, alts in st.alternates.items():
+                        out.setdefault(a, list(alts))
+    return out
+
+
+def load_math_face(path):
+    """Lete Sans Math: its outlines (CFF, so cubic) and its MATH table.
+
+    Three GSUB features are baked in: cv11, the single-story g that
+    matches Lato's italic, goes straight into the cmap; ssty, the script
+    and scriptscript alternates, becomes a table the layout picks from by
+    style; dtls, the dotless forms under an accent, becomes another.
+    """
+    font = TTFont(path)
+    cmap = font.getBestCmap()
+    hmtx = font["hmtx"]
+    glyphset = font.getGlyphSet()
+    gid_of = font.getGlyphID
+    face = Face(path.stem)
+    face.cubic = True
+    face.pred = None
+
+    cv11 = gsub_single(font, "cv11")
+    ssty = gsub_single(font, "ssty")
+    dtls = gsub_single(font, "dtls")
+
+    missing = []
+    for cp in sorted(MATH_REPERTOIRE):
+        if cp in cmap:
+            face.cmap[cp] = cv11.get(cmap[cp], cmap[cp])
+        elif unicodedata.category(chr(cp)) != "Cn":
+            # The holes in the math alphabets, whose letters live in the
+            # Letterlike Symbols block, are not characters at all.
+            missing.append(cp)
+
+    order = []
+    for cp in sorted(face.cmap):
+        if face.cmap[cp] not in order:
+            order.append(face.cmap[cp])
+
+    math = font["MATH"].table
+    mv = math.MathVariants
+
+    def constructions(cov, cons):
+        out = {}
+        if cov is None:
+            return out
+        for g, c in zip(cov.glyphs, cons):
+            recs = c.MathGlyphVariantRecord or []
+            var = [(r.VariantGlyph, r.AdvanceMeasurement) for r in recs]
+            keep = [v for k, v in enumerate(var)
+                    if k < 2 or v[1] <= MAX_VARIANT * font["head"].unitsPerEm]
+            asm = None
+            if c.GlyphAssembly is not None:
+                a = c.GlyphAssembly
+                asm = (a.ItalicsCorrection.Value,
+                       [(p.glyph, p.StartConnectorLength, p.EndConnectorLength,
+                         p.FullAdvance, p.PartFlags & 1) for p in a.PartRecords])
+            out[g] = (keep, asm)
+        return out
+
+    vert_all = constructions(mv.VertGlyphCoverage, mv.VertGlyphConstruction)
+    horiz_all = constructions(mv.HorizGlyphCoverage, mv.HorizGlyphConstruction)
+
+    extra = set()
+    for g in list(order):
+        if g in dtls:
+            extra.add(dtls[g])
+    for g in order + sorted(extra):
+        for table in (vert_all, horiz_all):
+            if g in table:
+                var, asm = table[g]
+                extra.update(v for v, _ in var)
+                if asm:
+                    extra.update(p[0] for p in asm[1])
+    # Every glyph the cmap reaches that has script-size alternates brings
+    # them along: letters, digits and primes, and the operators and
+    # punctuation a script is written with too.
+    for g in sorted(set(order) | {dtls[g] for g in order if g in dtls}):
+        alts = ssty.get(g)
+        if alts:
+            extra.update(alts[:2])
+    extra -= set(order)
+    names = order + sorted(extra, key=gid_of)
+
+    for name in names:
+        g = Glyph(name)
+        g.adv = hmtx[name][0]
+        g.contours = cubic_contours(glyphset, name)
+        g.bbox, g.ink = ink_box(glyphset, name)
+        face.add(g)
+
+    face.kern = pair_kerning(font, order)
+
+    gi = math.MathGlyphInfo
+    italic = {}
+    ic = gi.MathItalicsCorrectionInfo
+    for g, v in zip(ic.Coverage.glyphs, ic.ItalicsCorrection):
+        if g in face.index and v.Value:
+            italic[g] = v.Value
+    accent = {}
+    ta = gi.MathTopAccentAttachment
+    for g, v in zip(ta.TopAccentCoverage.glyphs, ta.TopAccentAttachment):
+        if g in face.index:
+            accent[g] = v.Value
+    extended = set(gi.ExtendedShapeCoverage.glyphs) & set(face.index) \
+        if gi.ExtendedShapeCoverage else set()
+    kerns = {}
+    if gi.MathKernInfo:
+        for g, rec in zip(gi.MathKernInfo.MathKernCoverage.glyphs,
+                          gi.MathKernInfo.MathKernInfoRecords):
+            if g not in face.index:
+                continue
+            corners = []
+            for k in (rec.TopRightMathKern, rec.TopLeftMathKern,
+                      rec.BottomRightMathKern, rec.BottomLeftMathKern):
+                if k is None:
+                    corners.append(([], [0]))
+                else:
+                    corners.append(([h.Value for h in k.CorrectionHeight],
+                                    [v.Value for v in k.KernValue]))
+            kerns[g] = corners
+    present = set(face.index)
+    face.math = {
+        "italic": italic,
+        "accent": accent,
+        "extended": extended,
+        "kern": kerns,
+        "vert": {g: c for g, c in vert_all.items() if g in present},
+        "horiz": {g: c for g, c in horiz_all.items() if g in present},
+        "ssty": {g: alts[:2] for g, alts in ssty.items()
+                 if g in present and all(a in present for a in alts[:2])},
+        "dtls": {a: b for a, b in dtls.items() if a in present and b in present},
+        "constants": [getattr(math.MathConstants, n).Value
+                      if hasattr(getattr(math.MathConstants, n), "Value")
+                      else getattr(math.MathConstants, n)
+                      for n in MATH_CONSTANTS],
+        "overlap": mv.MinConnectorOverlap,
+    }
+    head = font["head"]
+    os2 = font["OS/2"]
+    face.em = head.unitsPerEm
+    face.asc = font["hhea"].ascent
+    face.desc = font["hhea"].descent
+    face.xh = os2.sxHeight
+    face.cap = os2.sCapHeight
+    if missing:
+        print(f"{path.name}: not in the font, left out: "
+              + " ".join(f"U+{c:04X}" for c in missing))
     return face, font, glyphset
 
 
@@ -815,7 +1068,133 @@ def encode(faces, clen):
                 w.gamma(rc - prev_rc)
                 w.delta(v)
                 prev_rc = rc
+        if face.math is not None:
+            encode_math(w, face, lbits)
     return w
+
+
+def math_tables(face):
+    """The MATH data in the order it is written, glyphs as local indices."""
+    m = face.math
+    ix = face.index
+    per = []
+    for g in face.glyphs:
+        n = g.name
+        per.append((m["italic"].get(n), m["accent"].get(n), n in m["extended"],
+                    m["kern"].get(n)))
+    cons = []
+    for key in ("vert", "horiz"):
+        table = []
+        for gname in sorted(m[key], key=lambda x: ix[x]):
+            var, asm = m[key][gname]
+            table.append((ix[gname], [(ix[v], a) for v, a in var],
+                          None if asm is None else
+                          (asm[0], [(ix[p[0]],) + tuple(p[1:]) for p in asm[1]])))
+        cons.append(table)
+    ssty = sorted((ix[a], ix[b[0]], ix[b[1]]) for a, b in m["ssty"].items())
+    dtls = sorted((ix[a], ix[b]) for a, b in m["dtls"].items())
+    return per, cons, ssty, dtls
+
+
+def encode_math(w, face, lbits):
+    """The MATH section of a face; see fplotlib_glyphs for the layout."""
+    per, cons, ssty, dtls = math_tables(face)
+    for g, (ital, acc, ext, kern) in zip(face.glyphs, per):
+        w.bit(0 if ital is None else 1)
+        if ital is not None:
+            w.delta(ital)
+        w.bit(0 if acc is None else 1)
+        if acc is not None:
+            w.delta(acc - g.adv // 2)
+        w.bit(1 if ext else 0)
+        w.bit(0 if kern is None else 1)
+        if kern is not None:
+            for hs, ks in kern:
+                w.gamma(len(hs) + 1)
+                prev = 0
+                for h in hs:
+                    w.delta(h - prev)
+                    prev = h
+                prev = 0
+                for k in ks:
+                    w.delta(k - prev)
+                    prev = k
+    for table in cons:
+        w.gamma(len(table) + 1)
+        for g, var, asm in table:
+            w.raw(g, lbits)
+            w.gamma(len(var) + 1)
+            prev = 0
+            for v, a in var:
+                w.raw(v, lbits)
+                w.delta(a - prev)
+                prev = a
+            w.bit(0 if asm is None else 1)
+            if asm is not None:
+                w.delta(asm[0])
+                w.gamma(len(asm[1]))
+                for pg, st, en, full, ext in asm[1]:
+                    w.raw(pg, lbits)
+                    w.delta(st)
+                    w.delta(en)
+                    w.delta(full)
+                    w.bit(ext)
+    w.gamma(len(ssty) + 1)
+    for a, b, c in ssty:
+        w.raw(a, lbits)
+        w.raw(b, lbits)
+        w.raw(c, lbits)
+    w.gamma(len(dtls) + 1)
+    for a, b in dtls:
+        w.raw(a, lbits)
+        w.raw(b, lbits)
+
+
+def decode_math(r, glyphs, lbits):
+    per = []
+    for adv, *_ in glyphs:
+        ital = r.delta() if r.bit() else None
+        acc = adv // 2 + r.delta() if r.bit() else None
+        ext = r.bit() == 1
+        kern = None
+        if r.bit():
+            kern = []
+            for _ in range(4):
+                n = r.gamma() - 1
+                hs, ks = [], []
+                prev = 0
+                for _ in range(n):
+                    prev += r.delta()
+                    hs.append(prev)
+                prev = 0
+                for _ in range(n + 1):
+                    prev += r.delta()
+                    ks.append(prev)
+                kern.append((hs, ks))
+        per.append((ital, acc, ext, kern))
+    cons = []
+    for _ in range(2):
+        table = []
+        for _ in range(r.gamma() - 1):
+            g = r.raw(lbits)
+            var = []
+            prev = 0
+            for _ in range(r.gamma() - 1):
+                v = r.raw(lbits)
+                prev += r.delta()
+                var.append((v, prev))
+            asm = None
+            if r.bit():
+                ital = r.delta()
+                parts = []
+                for _ in range(r.gamma()):
+                    parts.append((r.raw(lbits), r.delta(), r.delta(), r.delta(), r.bit()))
+                asm = (ital, parts)
+            table.append((g, var, asm))
+        cons.append(table)
+    ssty = [(r.raw(lbits), r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
+    dtls = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
+    return per, cons, ssty, dtls
 
 
 def decode(blob, clen, faces):
@@ -878,8 +1257,9 @@ def decode(blob, clen, faces):
             for _ in range(r.gamma() - 1):
                 c += r.gamma()
                 cells[(l, c)] = r.delta()
+        math = decode_math(r, glyphs, lbits) if face.math is not None else None
         out.append({"glyphs": glyphs, "cmap": cmap, "lc": lc, "rc": rc,
-                    "nl": nl, "nr": nr, "cells": cells})
+                    "nl": nl, "nr": nr, "cells": cells, "math": math})
     return out
 
 
@@ -904,6 +1284,8 @@ def check_round_trip(faces, back):
                  if (l, r) in d["cells"])
         if nk != len(face.kern):
             raise SystemExit(f"{face.tag}: the kerning classes kern other pairs too")
+        if face.math is not None and d["math"] != math_tables(face):
+            raise SystemExit(f"{face.tag}: the MATH data decodes differently")
 
 
 def base85(blob):
@@ -1011,10 +1393,10 @@ def main() -> None:
     args = ap.parse_args()
 
     faces = []
-    for fname, pred in TEXT_FACES:
-        path = font_file(fname, args.fonts)
-        face, font, glyphset = load_text_face(path, pred)
-
+    loaded = [load_text_face(font_file(f, args.fonts), pred) + (f,)
+              for f, pred in TEXT_FACES]
+    loaded.append(load_math_face(font_file(MATH_FACE, args.fonts)) + (MATH_FACE,))
+    for face, font, glyphset, fname in loaded:
         # The stored outline has to draw what the font's own pen draws.
         for g in face.glyphs:
             want = pen_path(glyphset, g.name)
@@ -1023,6 +1405,8 @@ def main() -> None:
                 raise SystemExit(f"{fname} {g.name}: outline walk disagrees")
         faces.append(face)
     font_file("OFL.txt", args.fonts)
+    font_file("LICENSE.txt", args.fonts)
+    mface = faces[-1]
 
     # Turning contours to their cheapest start needs the code lengths and
     # the code lengths depend on the deltas, so the code is fitted to the
@@ -1070,17 +1454,22 @@ def main() -> None:
         "! fplotlib_glyphs_data -- glyph outlines, metrics and kerning, generated",
         "! by tools/gen_glyphs.py. Do not edit.",
         "!",
-        "! The glyph data in this file is derived from Lato 2.015,",
-        "! copyright (c) 2010-2014 by tyPoland Lukasz Dziedzic",
-        "! (team@latofonts.com) with Reserved Font Name \"Lato\".",
+        "! The glyph data in this file is derived from two fonts:",
         "!",
-        "! It is licensed under the SIL Open Font License, Version 1.1, whose",
-        "! text is in LICENSE_LATO. The rest of fplotlib is MIT; this file is",
-        "! OFL-1.1.",
+        "!   * Lato 2.015, copyright (c) 2010-2014 by tyPoland Lukasz Dziedzic",
+        "!     (team@latofonts.com) with Reserved Font Name \"Lato\"; licence",
+        "!     in LICENSE_LATO;",
+        "!   * Lete Sans Math 0.63, copyright (c) Chenjing Bu and Daniel Flipo,",
+        "!     built on Fira Math (copyright (c) Xiangdong Zeng) and Lato, and",
+        "!     inheriting Lato's Reserved Font Name; licence in LICENSE_LETE.",
+        "!",
+        "! Both are licensed under the SIL Open Font License, Version 1.1. The",
+        "! rest of fplotlib is MIT; this file is OFL-1.1.",
         "!",
         "! One base85 string holds every face: glyphs as the fonts store them,",
         "! in integer font units, with their advance widths and ink boxes, each",
-        "! face's cmap and its pair kerning. fplotlib_glyphs unpacks it on first",
+        "! face's cmap and its pair kerning, and the math face's MATH table.",
+        "! fplotlib_glyphs unpacks it on first",
         "! use; the format is described there and in the generator.",
         "",
         "module fplotlib_glyphs_data",
@@ -1108,6 +1497,27 @@ def main() -> None:
     L += int_array("FACE_CAP", [f.cap for f in faces])
     L += logical_array("FACE_CUBIC", [f.cubic for f in faces])
     L += int_array("FACE_PRED", [0 if f.pred is None else f.pred + 1 for f in faces])
+    mp, mcons, mssty, mdtls = math_tables(mface)
+    L += logical_array("FACE_HAS_MATH", [f.math is not None for f in faces])
+    L += [
+        "",
+        "    ! The math face's MATH table: how many size variants, assemblies,",
+        "    ! assembly parts, math kern heights and math kern values it has,",
+        "    ! the overlap two assembly parts must at least have, and the",
+        "    ! constants, in font units (two of them are percentages).",
+        f"    integer, parameter :: NVAR = {sum(len(v) for t in mcons for _, v, _ in t)}",
+        f"    integer, parameter :: NASM = {sum(1 for t in mcons for _, _, a in t if a)}",
+        f"    integer, parameter :: NPART = {sum(len(a[1]) for t in mcons for _, _, a in t if a)}",
+        f"    integer, parameter :: NMKH = {sum(len(h) for _, _, _, k in mp if k for h, _ in k)}",
+        f"    integer, parameter :: NMKV = {sum(len(v) for _, _, _, k in mp if k for _, v in k)}",
+        f"    integer, parameter :: MIN_CONNECTOR_OVERLAP = {mface.math['overlap']}",
+        f"    integer, parameter :: NMC = {len(MATH_CONSTANTS)}",
+    ]
+    for k, name in enumerate(MATH_CONSTANTS):
+        snake = "".join("_" + c if c.isupper() and i else c
+                        for i, c in enumerate(name)).upper()
+        L.append(f"    integer, parameter :: MC_{snake} = {k + 1}")
+    L += int_array("MATH_CONSTANT", mface.math["constants"])
     L += [
         "",
         "    ! Code lengths of the prefix code for the magnitude classes of a",
