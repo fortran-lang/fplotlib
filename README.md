@@ -353,7 +353,10 @@ Name "Lato" (`LICENSE_LATO`), and Lete Sans Math, © Chenjing Bu and Daniel
 Flipo, built on Fira Math (© Xiangdong Zeng) and Lato (`LICENSE_LETE`). The
 OFL is permissive: a program built with fplotlib ships the
 OFL notice alongside the MIT one, and the plots fplotlib produces carry no
-obligations. `tools/gen_glyphs.py` regenerates the file from the pinned font
+obligations. Because "Lato" is a Reserved Font Name, the fonts fplotlib
+embeds in PDF and EPS files have names of their own: `FplotlibSans-Regular`,
+`FplotlibSans-Bold`, `FplotlibSans-Italic`, `FplotlibSans-BoldItalic` and
+`FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
 files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.
@@ -392,3 +395,19 @@ FreeType, so a stem lands on the same pixel column as matplotlib's but not
 always with the same coverage. The SVG is not matplotlib's SVG byte for byte,
 and is not meant to be: both write every glyph as a path, but matplotlib
 attaches its own ids and metadata.
+
+Math is the exception: matplotlib's mathtext is its own approximation of TeX,
+and fplotlib follows TeX itself, so the formulas are checked against XeTeX
+instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
+unicode-math and the same font files) puts every glyph and rule of 83
+formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
+The automatic delimiters, which TeX does not have, are checked against
+Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,
+nothing installed system-wide:
+
+```
+pixi exec --spec tectonic --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_math_refs.py
+pixi exec --spec typst --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_delim_refs.py
+```
