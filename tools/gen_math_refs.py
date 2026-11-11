@@ -109,6 +109,7 @@ FORMULAS = [
     # in a display fraction's denominator.
     r"$\dfrac{\frac{a}{b}}{c}$",
     r"$\left(\dfrac{\frac{a}{b}}{c + d}\right)$",
+    r"$2\frac{a}{b}, \frac{c}{d}x$",
     r"$\left(\displaystyle\sum_{k=1}^{n}\frac{1}{k^2}\right)$",
     r"$\langle x, y \rangle$",
     r"$\left\lfloor x \right\rfloor$",

@@ -818,8 +818,9 @@ contains
             NOADS(k)%b = parse_list(s(b0:b1), alph)
             if (name(1:1) == "d") NOADS(k)%style = ST_D
             if (name(1:1) == "t") NOADS(k)%style = ST_T
-            ! amsmath's \genfrac sets these in a group of their own.
-            if (name /= "frac") k = list_noad(k, CL_ORD)
+            ! LaTeX's \frac is {a\over b}, and amsmath's \genfrac sets the
+            ! others in a group too: an ordinary atom, as spaced.
+            k = list_noad(k, CL_ORD)
         case ("binom", "dbinom", "tbinom")
             ! A stack between parentheses, as \atopwithdelims sets it (rule
             ! 15e), in a group. (amsmath's \genfrac sizes the parentheses

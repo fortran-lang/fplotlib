@@ -188,7 +188,7 @@ call suptitle("figure title")
   `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
   Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
   `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
-  and rule of 79 test formulas, and the layout is checked against it
+  and rule of 80 test formulas, and the layout is checked against it
 - Text is UTF-8 and set in Lato (regular, bold, italic, bold italic), with
   its kerning, in every European script except Cyrillic. The outlines are
   compiled in, so every format draws the same glyphs: PNG fills them, SVG
