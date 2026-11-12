@@ -27,7 +27,7 @@ module fplotlib_text
     private
 
     public :: text_face, text_layout, text_width
-    public :: run_add, run_shift, run_reset
+    public :: run_add, run_shift, run_reset, code_points
 
 contains
 

@@ -2,8 +2,9 @@ program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
+    use test_typeset, only: para_ref_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface
+    integer :: fig1, nmath, ndelim, nface, npara
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1570,6 +1571,8 @@ program test_plots
 
     ! The math layout against XeTeX's; see test_mathref.f90.
     call math_ref_check("tests/math_refs.txt", nmath)
+    ! The line breaking against XeTeX's; see test_typeset.f90.
+    call para_ref_check("tests/para_refs.txt", npara)
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
@@ -1578,6 +1581,7 @@ program test_plots
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
     if (nmath > 0) error stop "math layout differs from XeTeX"
+    if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
 

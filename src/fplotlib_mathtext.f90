@@ -87,7 +87,7 @@ module fplotlib_mathtext
     implicit none
     private
 
-    public :: math_is, math_width, math_layout, mrules_t
+    public :: math_is, math_width, math_layout, math_formula, mrules_t
 
     ! Rules, in the same frame as the glyphs of a run: (x, y) is the top
     ! left corner, y down, w and h the width and height.
@@ -300,6 +300,37 @@ contains
         end do
         width = pen
     end subroutine math_layout
+
+    ! Lay out one formula, s without its dollar signs, in display style
+    ! when display is true and text style otherwise. Its glyphs and rules
+    ! are appended to run and rules about the origin on its baseline, y
+    ! down, and w, h and d are its width, height and depth in points.
+    subroutine math_formula(s, size, display, run, rules, w, h, d)
+        character(len=*), intent(in) :: s
+        real(dp), intent(in) :: size
+        logical, intent(in) :: display
+        type(glyphrun_t), intent(inout) :: run
+        type(mrules_t), intent(inout) :: rules
+        real(dp), intent(out) :: w, h, d
+        type(mbox_t) :: box
+        integer :: head, k, st
+
+        st = ST_T
+        if (display) st = ST_D
+        call reset_arenas()
+        head = parse_list(s, ALPH_MATH)
+        call mlist_box(head, st, .false., size, box)
+        do k = box%i0, box%i1
+            if (IT_KIND(k) == 1) then
+                call run_add(run, IT_GID(k), IT_X(k), -IT_Y(k), IT_S(k))
+            else
+                call rule_add(rules, IT_X(k), -(IT_Y(k) + IT_H(k)), IT_W(k), IT_H(k))
+            end if
+        end do
+        w = box%w
+        h = box%h
+        d = box%d
+    end subroutine math_formula
 
     ! The dollar sign that closes a formula opened before i, skipping
     ! the ones written \$; len(s) + 1 when there is none.

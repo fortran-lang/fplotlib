@@ -33,5 +33,6 @@ fplotlib_text
 fplotlib_ticks
 fplotlib_tri
 fplotlib_type3
+fplotlib_typeset
 fplotlib
 ```
