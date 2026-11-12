@@ -383,10 +383,10 @@ difference. As of this writing, over 100 cases:
 
 | format | cases | mean difference |
 | --- | --- | --- |
-| PNG | 125 | 1.32/255 |
-| PDF | 124 | 0.87/255 |
-| EPS | 125 | 2.31/255 |
-| GIF | 20 frames | 0.58/255 |
+| PNG | 126 | 1.31/255 |
+| PDF | 125 | 0.93/255 |
+| EPS | 126 | 2.28/255 |
+| GIF | 20 frames | 0.39/255 |
 
 The references are made with matplotlib set to the same Lato files fplotlib's
 glyphs come from. What is left is mostly antialiasing along edges, and text:
