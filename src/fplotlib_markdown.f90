@@ -1252,7 +1252,8 @@ contains
                             k = i + j + 3
                             tag = ""
                             call display_tag(s, k, src, tag)
-                            call ts_display(strip_math_labels(src), st%size, tag, st%color)
+                            call ts_math(strip_math_labels(src), st%size, st%color, display=.true., &
+                                         tag=tag)
                             space = .false.
                             i = k
                             ! A line break after it is not a space.
