@@ -17,6 +17,7 @@ fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_mathsym
 fplotlib_mathtext
 fplotlib_png
 fplotlib_proj3d
@@ -26,8 +27,9 @@ fplotlib_scale
 fplotlib_state
 fplotlib_style
 fplotlib_svg
-fplotlib_textpath
+fplotlib_text
 fplotlib_ticks
 fplotlib_tri
+fplotlib_type3
 fplotlib
 ```

@@ -11,8 +11,8 @@
 !     where it is not, and matplotlib's own PS output does not even try.
 !
 !   * y grows upwards, as in PDF, and is handled the same way: one flipping
-!     matrix for the whole page, undone around each string so text is not
-!     drawn mirrored.
+!     matrix for the whole page, undone around each run of glyphs so text
+!     is not drawn mirrored.
 !
 !   * there is no arc operator that would help, so circles become four
 !     cubics, exactly as in PDF.
@@ -20,13 +20,15 @@
 ! What it adds is the DSC header, %%BoundingBox above all, which is what
 ! makes the file embeddable in a document.
 !
-! Text is Helvetica from the base thirty-five fonts. As in PDF, that means
-! this backend has to measure strings itself to place centred text, and the
-! widths it measures with are Helvetica's rather than DejaVu's.
+! Text arrives as glyphs already laid out and is shown with Type 3 fonts
+! built from the compiled-in outlines (see fplotlib_type3), defined in the
+! prolog once the page knows which glyphs it used.
 module fplotlib_backend_eps
     use fplotlib_style, only: dp
     use fplotlib_render
-    use fplotlib_textpath, only: text_needs_outline, text_path, text_path_width
+    use fplotlib_glyphs, only: glyph_inked
+    use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
+                              t3_glyph_ops, t3_width, t3_box
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num
     implicit none
@@ -41,6 +43,8 @@ module fplotlib_backend_eps
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
         ! What a translucent color is composited against.
         integer :: page_rgb(3) = [255, 255, 255]
+        ! The glyphs the page has drawn, and the fonts they went into.
+        type(t3set_t) :: t3
     contains
         procedure :: open_canvas => eps_open_canvas
         procedure :: close_canvas => eps_close_canvas
@@ -49,32 +53,10 @@ module fplotlib_backend_eps
         procedure :: draw_rect => eps_draw_rect
         procedure :: draw_circle => eps_draw_circle
         procedure :: draw_markers => eps_draw_markers
-        procedure :: draw_text => eps_draw_text
+        procedure :: draw_glyphs => eps_draw_glyphs
         procedure :: draw_image => eps_draw_image
     end type eps_renderer_t
 
-    ! Helvetica character widths in thousandths of an em, for codes 32..126,
-    ! from the Adobe AFM.
-    integer, parameter :: HELV_W(32:126) = [ &
-        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, &
-        333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, &
-        278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, &
-        778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, &
-        611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, &
-        556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, &
-        556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, &
-        334, 260, 334, 584]
-
-    ! The same for Helvetica-Bold; oblique shares the regular widths.
-    integer, parameter :: HELVB_W(32:126) = [ &
-        278, 333, 474, 556, 556, 889, 722, 278, 333, 333, 389, 584, 278, &
-        333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, &
-        333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, &
-        778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, &
-        611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 278, &
-        556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, &
-        611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, &
-        389, 280, 389, 584]
 
 contains
 
@@ -111,45 +93,6 @@ contains
         t = trim(s)
     end function int_str
 
-    ! The base-thirty-five name of the face the font asks for.
-    pure function face_name(font) result(t)
-        type(font_t), intent(in) :: font
-        character(len=:), allocatable :: t
-        logical :: b, o
-        b = font%weight == WEIGHT_BOLD
-        o = font%slant == SLANT_ITALIC
-        if (b .and. o) then
-            t = "Helvetica-BoldOblique"
-        else if (b) then
-            t = "Helvetica-Bold"
-        else if (o) then
-            t = "Helvetica-Oblique"
-        else
-            t = "Helvetica"
-        end if
-    end function face_name
-
-    pure function text_width(s, size, bold) result(w)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size
-        logical, intent(in) :: bold
-        real(dp) :: w
-        integer :: i, c
-        w = 0.0_dp
-        do i = 1, len(s)
-            c = iachar(s(i:i))
-            if (c >= 32 .and. c <= 126) then
-                if (bold) then
-                    w = w + real(HELVB_W(c), dp)
-                else
-                    w = w + real(HELV_W(c), dp)
-                end if
-            else
-                w = w + 500.0_dp
-            end if
-        end do
-        w = w*size/1000.0_dp
-    end function text_width
 
     ! A translucent color has to become an opaque one, since the format
     ! cannot express the first.
@@ -244,6 +187,7 @@ contains
         self%y0 = 0.0_dp
         if (present(x0)) self%x0 = x0
         if (present(y0)) self%y0 = y0
+        call t3_reset(self%t3)
         call builder_init(self%c)
 
         ! One matrix for the whole page turns the API's top-left origin with
@@ -353,126 +297,73 @@ contains
         end do
     end subroutine eps_draw_markers
 
-    subroutine eps_draw_text(self, x, y, s, font, paint, anchor, baseline, angle)
+    ! The run is shown in segments, each a stretch of glyphs in one font
+    ! at one size on one baseline, set in a frame that turns the flipped
+    ! page upright and along the text. xshow takes each glyph's advance
+    ! from the layout, so kerning costs nothing extra.
+    subroutine eps_draw_glyphs(self, x, y, run, paint, angle)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
+        type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
         real(dp), intent(in) :: angle
-        real(dp) :: w, dx, dy
-        integer :: i
-        character(len=1) :: ch
+        real(dp) :: ca, sa, rad
+        integer :: i, j, k, font, code, font_j, code_j
+        character(len=1) :: eol
 
-        if (len_trim(s) == 0) return
-        ! A greek letter out of mathtext is in no core font, so that string
-        ! is drawn rather than set.
-        if (text_needs_outline(trim(s))) then
-            call eps_text_outline(self, x, y, trim(s), font, paint, anchor, &
-                                  baseline, angle)
-            return
+        if (run%n == 0) return
+        eol = new_line("a")
+        call put(self, "gsave"//eol)
+        if (paint%clip%on) then
+            call put_num(self, paint%clip%x)
+            call put_num(self, paint%clip%y)
+            call put_num(self, paint%clip%w)
+            call put_num(self, paint%clip%h)
+            call put(self, "rectclip"//eol)
         end if
-
-        ! SVG asks the viewer to align the string; PostScript places a fixed
-        ! origin, so the offset has to be measured here.
-        w = text_width(trim(s), font%size, font%weight == WEIGHT_BOLD)
-        dx = 0.0_dp
-        select case (anchor)
-        case (ANCHOR_MIDDLE); dx = -0.5_dp*w
-        case (ANCHOR_END); dx = -w
-        end select
-        dy = 0.0_dp
-        select case (baseline)
-        case (BASE_MIDDLE); dy = 0.36_dp*font%size
-        case (BASE_TOP); dy = 0.76_dp*font%size
-        case (BASE_BOTTOM); dy = -0.21_dp*font%size
-        end select
-
-        call put(self, "gsave"//new_line("a"))
         call put_rgb(self, paint%fill_rgb, paint%fill_alpha)
-        call put_num(self, x)
-        call put_num(self, y)
-        call put(self, "translate"//new_line("a"))
-        ! Undo the page flip, or every glyph would come out mirrored, and
-        ! turn the string by its own angle in the same upright frame.
-        call put(self, "1 -1 scale"//new_line("a"))
-        call put_num(self, angle)
-        call put(self, "rotate"//new_line("a"))
-        call put(self, "/"//face_name(font)//" findfont "//num_str(font%size) &
-                 //" scalefont setfont"//new_line("a"))
-        call put_num(self, dx)
-        call put_num(self, -dy)
-        call put(self, "moveto"//new_line("a"))
-        call put(self, "(")
-        do i = 1, len_trim(s)
-            ch = s(i:i)
-            ! Parentheses and the escape character end a string early.
-            if (ch == "(" .or. ch == ")" .or. ch == achar(92)) &
-                call put(self, achar(92))
-            call put(self, ch)
-        end do
-        call put(self, ") show"//new_line("a"))
-        call put(self, "grestore"//new_line("a"))
-    end subroutine eps_draw_text
-
-    ! The same placement as eps_draw_text, but filling the glyph outlines
-    ! instead of asking for a font.
-    subroutine eps_text_outline(self, x, y, s, font, paint, anchor, baseline, angle)
-        class(eps_renderer_t), intent(inout) :: self
-        real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
-        type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
-        real(dp), intent(in) :: angle
-        real(dp), allocatable :: px(:), py(:)
-        integer, allocatable :: verbs(:)
-        real(dp) :: w, dx, dy, ca, sa, rad
-        integer :: nv, face
-        type(paint_t) :: pp
-
-        face = glyph_face(font)
-        w = text_path_width(s, font%size, face)
-        dx = 0.0_dp
-        select case (anchor)
-        case (ANCHOR_MIDDLE); dx = -0.5_dp*w
-        case (ANCHOR_END); dx = -w
-        end select
-        dy = 0.0_dp
-        select case (baseline)
-        case (BASE_MIDDLE); dy = 0.36_dp*font%size
-        case (BASE_TOP); dy = 0.76_dp*font%size
-        case (BASE_BOTTOM); dy = -0.21_dp*font%size
-        end select
         rad = angle*acos(-1.0_dp)/180.0_dp
         ca = cos(rad)
         sa = sin(rad)
 
-        call text_path(s, x + dx*ca - dy*sa, y + dx*sa + dy*ca, font%size, &
-                       face, angle, px, py, verbs, nv)
-        pp = paint
-        pp%stroked = .false.
-        pp%filled = .true.
-        call eps_draw_path(self, px, py, verbs, nv, pp)
-    end subroutine eps_text_outline
+        i = 1
+        do while (i <= run%n)
+            call t3_code(self%t3, run%gid(i), font, code)
+            ! The segment runs to the last glyph that shares all three.
+            j = i
+            do while (j < run%n)
+                call t3_code(self%t3, run%gid(j + 1), font_j, code_j)
+                if (font_j /= font .or. run%size(j + 1) /= run%size(i) &
+                    .or. abs(run%y(j + 1) - run%y(i)) > 1.0e-9_dp) exit
+                j = j + 1
+            end do
+            call put(self, "gsave ["//num_str(ca)//" "//num_str(sa)//" " &
+                     //num_str(sa)//" "//num_str(-ca)//" " &
+                     //num_str(x + run%x(i)*ca - run%y(i)*sa)//" " &
+                     //num_str(y + run%x(i)*sa + run%y(i)*ca)//"] concat"//eol)
+            call put(self, "/"//t3_font_name(self%t3, font)//" findfont " &
+                     //num_str(run%size(i))//" scalefont setfont"//eol)
+            call put(self, "0 0 moveto <")
+            do k = i, j
+                call t3_code(self%t3, run%gid(k), font_j, code_j)
+                call put(self, hex2(code_j))
+            end do
+            call put(self, "> [")
+            do k = i, j - 1
+                call put_num(self, run%x(k + 1) - run%x(k))
+            end do
+            call put(self, "0] xshow grestore"//eol)
+            i = j + 1
+        end do
+        call put(self, "grestore"//eol)
+    end subroutine eps_draw_glyphs
 
-    ! Which of the four stacked outline faces the font asks for.
-    pure integer function glyph_face(font)
-        type(font_t), intent(in) :: font
-        logical :: b, o
-        b = font%weight == WEIGHT_BOLD
-        o = font%slant == SLANT_ITALIC
-        if (b .and. o) then
-            glyph_face = 4
-        else if (b) then
-            glyph_face = 2
-        else if (o) then
-            glyph_face = 3
-        else
-            glyph_face = 1
-        end if
-    end function glyph_face
+    pure function hex2(v) result(s)
+        integer, intent(in) :: v
+        character(len=2) :: s
+        character(len=16), parameter :: H = "0123456789ABCDEF"
+        s = H(v/16 + 1:v/16 + 1)//H(mod(v, 16) + 1:mod(v, 16) + 1)
+    end function hex2
 
     ! The samples go into the file as hexadecimal, which every PostScript
     ! interpreter reads and which keeps the file printable. Transparency is
@@ -530,6 +421,7 @@ contains
         class(eps_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=1) :: eol
+        integer :: i
 
         eol = new_line("a")
         call builder_init(f)
@@ -540,12 +432,92 @@ contains
         call builder_append(f, "%%HiResBoundingBox: 0 0 "//num_str(self%w) &
                             //" "//num_str(self%h)//eol)
         call builder_append(f, "%%EndComments"//eol)
-        call builder_append(f, "%%BeginProlog"//eol//"%%EndProlog"//eol)
+        call builder_append(f, "%%BeginProlog"//eol)
+        do i = 1, self%t3%nfont
+            call builder_append(f, font_resource(self, i))
+        end do
+        call builder_append(f, "%%EndProlog"//eol)
         call builder_append(f, "%%Page: 1 1"//eol)
         call builder_append(f, builder_get(self%c))
         call builder_append(f, "showpage"//eol//"%%EOF"//eol)
         self%out = builder_get(f)
     end subroutine eps_close_canvas
+
+    ! One Type 3 font as a PostScript resource. Each glyph is a procedure
+    ! that declares its width and box with setcachedevice, which also says
+    ! it takes its colour from the text, and fills its outline. BuildGlyph
+    ! runs the procedure by name, and BuildChar finds the name through the
+    ! encoding, for the interpreters that only know the older of the two.
+    function font_resource(self, font) result(r)
+        class(eps_renderer_t), intent(in) :: self
+        integer, intent(in) :: font
+        character(len=:), allocatable :: r, name
+        type(svg_builder) :: b
+        character(len=1) :: eol
+        integer :: k, gid, bx(4), fb(4)
+        logical :: any
+
+        eol = new_line("a")
+        name = t3_font_name(self%t3, font)
+        fb = 0
+        any = .false.
+        do k = 0, self%t3%n(font) - 1
+            gid = self%t3%gids(k, font)
+            if (.not. glyph_inked(gid)) cycle
+            call t3_box(gid, bx)
+            if (any) then
+                fb = [min(fb(1), bx(1)), min(fb(2), bx(2)), &
+                      max(fb(3), bx(3)), max(fb(4), bx(4))]
+            else
+                fb = bx
+                any = .true.
+            end if
+        end do
+
+        call builder_init(b)
+        call builder_append(b, "%%BeginResource: font "//name//eol)
+        call builder_append(b, "10 dict begin"//eol//"/FontType 3 def"//eol &
+                            //"/FontName /"//name//" def"//eol &
+                            //"/FontMatrix [0.001 0 0 0.001 0 0] def"//eol &
+                            //"/FontBBox ["//int_str(fb(1))//" "//int_str(fb(2))//" " &
+                            //int_str(fb(3))//" "//int_str(fb(4))//"] def"//eol &
+                            //"/Encoding 256 array def"//eol &
+                            //"0 1 255 {Encoding exch /.notdef put} for"//eol)
+        do k = 0, self%t3%n(font) - 1
+            call builder_append(b, "Encoding "//int_str(k)//" /g" &
+                                //int_str(self%t3%gids(k, font))//" put"//eol)
+        end do
+        call builder_append(b, "/CharProcs "//int_str(self%t3%n(font) + 1) &
+                            //" dict def"//eol//"CharProcs begin"//eol &
+                            //"/.notdef {0 0 0 0 0 0 setcachedevice} def"//eol)
+        do k = 0, self%t3%n(font) - 1
+            gid = self%t3%gids(k, font)
+            if (glyph_inked(gid)) then
+                call t3_box(gid, bx)
+                call builder_append(b, "/g"//int_str(gid)//" {" &
+                                    //num_str(t3_width(gid))//" 0 "//int_str(bx(1)) &
+                                    //" "//int_str(bx(2))//" "//int_str(bx(3))//" " &
+                                    //int_str(bx(4))//" setcachedevice"//eol &
+                                    //"newpath"//eol &
+                                    //t3_glyph_ops(gid, [character(len=9) :: "moveto", &
+                                                         "lineto", "curveto", "closepath"]) &
+                                    //"fill} bind def"//eol)
+            else
+                call builder_append(b, "/g"//int_str(gid)//" {" &
+                                    //num_str(t3_width(gid)) &
+                                    //" 0 0 0 0 0 setcachedevice} bind def"//eol)
+            end if
+        end do
+        call builder_append(b, "end"//eol &
+                            //"/BuildGlyph {exch /CharProcs get exch 2 copy known" &
+                            //" not {pop /.notdef} if get exec} bind def"//eol &
+                            //"/BuildChar {1 index /Encoding get exch get" &
+                            //" 1 index /BuildGlyph get exec} bind def"//eol &
+                            //"currentdict end"//eol &
+                            //"/"//name//" exch definefont pop"//eol &
+                            //"%%EndResource"//eol)
+        r = builder_get(b)
+    end function font_resource
 
     function eps_bytes(self) result(s)
         class(eps_renderer_t), intent(in) :: self

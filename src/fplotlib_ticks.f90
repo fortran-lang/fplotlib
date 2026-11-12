@@ -15,6 +15,7 @@ module fplotlib_ticks
     public :: format_tick_fixed
     public :: tick_offset, tick_decimals_at, format_offset_text
     public :: multiple_ticks, format_percent, format_grouped
+    public :: fix_minus
 
 contains
 
@@ -694,5 +695,29 @@ contains
         s = trim(out)
         n = len_trim(s)
     end subroutine format_grouped
+
+    ! The minus of a number written as U+2212 rather than a hyphen, which
+    ! is what matplotlib's formatters do (axes.unicode_minus): the hyphen
+    ! is shorter than a plus and sits lower than the digits.
+    pure subroutine fix_minus(s, n)
+        character(len=*), intent(inout) :: s
+        integer, intent(inout) :: n
+        character(len=len(s)) :: t
+        integer :: i, m
+        m = 0
+        do i = 1, n
+            if (s(i:i) == "-") then
+                if (m + 3 > len(s)) exit
+                t(m + 1:m + 3) = achar(226)//achar(136)//achar(146)
+                m = m + 3
+            else
+                if (m + 1 > len(s)) exit
+                m = m + 1
+                t(m:m) = s(i:i)
+            end if
+        end do
+        s = t(1:m)
+        n = m
+    end subroutine fix_minus
 
 end module fplotlib_ticks

@@ -10,22 +10,17 @@
 ! display list. Only close_canvas has anything left to do, and that is
 ! compression rather than drawing.
 !
-! Text is the one place this backend cannot follow the others. SVG and PDF
-! hand the string over and let a font engine draw it; there is no font engine
-! here, so the glyph outlines are compiled in (see fplotlib_glyphs) and text is
-! filled with exactly the code that fills any other path. They are DejaVu Sans
-! outlines, which is what matplotlib draws with, so the text lands in the same
-! place rather than merely a similar one.
+! Text arrives as glyphs already laid out, and each glyph's outline (see
+! fplotlib_glyphs) is filled with exactly the code that fills any other path.
+! The vector backends draw the same outlines, as embedded fonts or defined
+! paths, so all four formats show the same text.
 
 module fplotlib_backend_png
-    use fplotlib_style, only: dp, utf8_next
+    use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_raster
     use fplotlib_png, only: png_encode
-    use fplotlib_glyphs, only: EM, ASCENT, DESCENT, XHEIGHT, &
-                            glyph_advance, glyph_verbs, glyph_points, &
-                            FACE_REGULAR, FACE_BOLD, FACE_OBLIQUE, &
-                            FACE_BOLD_OBLIQUE
+    use fplotlib_glyphs, only: glyph_outline
     implicit none
     private
 
@@ -55,7 +50,7 @@ module fplotlib_backend_png
         procedure :: draw_rect => png_draw_rect
         procedure :: draw_circle => png_draw_circle
         procedure :: draw_markers => png_draw_markers
-        procedure :: draw_text => png_draw_text
+        procedure :: draw_glyphs => png_draw_glyphs
         procedure :: draw_image => png_draw_image
         procedure :: set_dpi => png_set_dpi
     end type png_renderer_t
@@ -362,73 +357,21 @@ contains
     ! Text
     ! ------------------------------------------------------------------
 
-    function text_width(s, font) result(w)
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
-        real(dp) :: w
-        integer :: i, code, nb
-
-        w = 0.0_dp
-        i = 1
-        do while (i <= len(s))
-            call utf8_next(s, i, code, nb)
-            w = w + glyph_advance(code, font_face(font))
-            i = i + nb
-        end do
-        w = w*font%size/EM
-    end function text_width
-
-    ! Which of the four stacked faces the font asks for.
-    pure integer function font_face(font)
-        type(font_t), intent(in) :: font
-        logical :: b, o
-        b = font%weight == WEIGHT_BOLD
-        o = font%slant == SLANT_ITALIC
-        if (b .and. o) then
-            font_face = FACE_BOLD_OBLIQUE
-        else if (b) then
-            font_face = FACE_BOLD
-        else if (o) then
-            font_face = FACE_OBLIQUE
-        else
-            font_face = FACE_REGULAR
-        end if
-    end function font_face
-
-    subroutine png_draw_text(self, x, y, s, font, paint, anchor, baseline, angle)
+    ! All the glyphs of a run go into one path and are filled together,
+    ! so that two glyphs that touch do not double their antialiased edge.
+    subroutine png_draw_glyphs(self, x, y, run, paint, angle)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
+        type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
         real(dp), intent(in) :: angle
-        real(dp) :: pen, dyv, sc, ca, sa, ax, ay, gx, gy
-        real(dp) :: c1x, c1y, c2x, c2y, ex, ey
+        real(dp) :: ca, sa, ax, ay, ox_, oy_, fs, c1x, c1y, c2x, c2y, ex, ey
         real(dp), allocatable :: px(:), py(:)
         integer, allocatable :: gv(:)
-        integer :: i, j, p, nv, np, code, nb, face
+        integer :: i, j, p, nv, np
         type(paint_t) :: pp
 
-        if (len_trim(s) == 0) return
-        sc = font%size/EM
-        face = font_face(font)
-
-        pen = 0.0_dp
-        select case (anchor)
-        case (ANCHOR_MIDDLE); pen = -0.5_dp*text_width(s, font)
-        case (ANCHOR_END); pen = -text_width(s, font)
-        end select
-
-        ! Only the alphabetic baseline is exact; the others are the usual
-        ! interpretations, so that they are at least sensible if ever used.
-        select case (baseline)
-        case (BASE_MIDDLE); dyv = 0.5_dp*XHEIGHT*sc
-        case (BASE_TOP); dyv = ASCENT*sc
-        case (BASE_BOTTOM); dyv = DESCENT*sc
-        case default; dyv = 0.0_dp
-        end select
-
+        if (run%n == 0) return
         ca = cos(angle*3.141592653589793_dp/180.0_dp)
         sa = sin(angle*3.141592653589793_dp/180.0_dp)
         ax = tx(self, x)
@@ -440,23 +383,23 @@ contains
         pp%clip = shifted_clip(self, paint%clip)
 
         call pb_reset(self%pb)
-        i = 1
-        do while (i <= len(s))
-            call utf8_next(s, i, code, nb)
-            i = i + nb
-            call glyph_verbs(code, gv, nv, face)
-            call glyph_points(code, px, py, np, face)
+        do i = 1, run%n
+            call glyph_outline(run%gid(i), gv, nv, px, py, np)
+            if (nv == 0) cycle
+            ox_ = run%x(i)
+            oy_ = run%y(i)
+            fs = run%size(i)
             p = 0
             do j = 1, nv
                 select case (gv(j))
                 case (VERB_MOVE)
                     p = p + 1
-                    call gpt(px(p), py(p), gx, gy)
-                    call pb_move(self%pb, gx, gy)
+                    call gpt(px(p), py(p), ex, ey)
+                    call pb_move(self%pb, ex, ey)
                 case (VERB_LINE)
                     p = p + 1
-                    call gpt(px(p), py(p), gx, gy)
-                    call pb_line(self%pb, gx, gy)
+                    call gpt(px(p), py(p), ex, ey)
+                    call pb_line(self%pb, ex, ey)
                 case (VERB_CUBIC)
                     call gpt(px(p + 1), py(p + 1), c1x, c1y)
                     call gpt(px(p + 2), py(p + 2), c2x, c2y)
@@ -467,28 +410,28 @@ contains
                     call pb_close(self%pb)
                 end select
             end do
-            pen = pen + glyph_advance(code, face)*sc
         end do
 
         call fill_path_buf(self%cv, self%pb, paint%fill_rgb, paint%fill_alpha, pp%clip)
 
     contains
 
-        ! Font units are y up and the canvas is y down, so the glyph is
-        ! flipped as it is placed. Rotation is about the anchor point, which
-        ! is what makes a rotated y axis label pivot where SVG pivots it.
-        subroutine gpt(fx, fy, ox_, oy_)
+        ! Glyph space is ems with y up and the canvas is points with y
+        ! down, so the glyph is scaled and flipped as it is placed. The
+        ! run turns about its origin, which is what makes a rotated y axis
+        ! label pivot where it should.
+        subroutine gpt(fx, fy, cx, cy)
             real(dp), intent(in) :: fx, fy
-            real(dp), intent(out) :: ox_, oy_
+            real(dp), intent(out) :: cx, cy
             real(dp) :: lx, ly
 
-            lx = (pen + fx*sc)*self%cv%scale
-            ly = (dyv - fy*sc)*self%cv%scale
-            ox_ = ax + lx*ca - ly*sa
-            oy_ = ay + lx*sa + ly*ca
+            lx = (ox_ + fx*fs)*self%cv%scale
+            ly = (oy_ - fy*fs)*self%cv%scale
+            cx = ax + lx*ca - ly*sa
+            cy = ay + lx*sa + ly*ca
         end subroutine gpt
 
-    end subroutine png_draw_text
+    end subroutine png_draw_glyphs
 
     subroutine png_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
         class(png_renderer_t), intent(inout) :: self

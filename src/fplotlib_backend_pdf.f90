@@ -16,27 +16,24 @@
 !     resource, so the distinct alpha values used by a figure are collected
 !     and written into the page's /ExtGState.
 !
-! Text is drawn with Helvetica from the base fourteen fonts, which every
-! reader has, so nothing is embedded. That has one real consequence: PDF
-! cannot ask a viewer to centre a string the way SVG's text-anchor does, so
-! this backend has to know how wide the text is, and the Helvetica widths
-! below are what it measures with. fplotlib lays out to DejaVu Sans metrics, so
-! centred labels can sit a fraction of a point off where the SVG puts them.
-! Embedding DejaVu and its real widths is the fix, and is what matplotlib
-! does by default.
+! Text arrives as glyphs already laid out, and is drawn with Type 3 fonts
+! built from the compiled-in outlines (see fplotlib_type3): the page shows
+! exactly what PNG and SVG show, and a ToUnicode map keeps the text
+! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num
     use fplotlib_png, only: zlib_compress
-    use fplotlib_textpath, only: text_needs_outline, text_path, text_path_width
+    use fplotlib_glyphs, only: glyph_adv, glyph_inked
+    use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
+                              t3_glyph_ops, t3_width, t3_box, t3_unicode
     implicit none
     private
 
     public :: pdf_renderer_t
 
-    integer, parameter :: MAX_OBJ = 64
     integer, parameter :: MAX_ALPHA = 64
     integer, parameter :: MAX_IMG = 16
 
@@ -66,6 +63,8 @@ module fplotlib_backend_pdf
         type(clip_t) :: cur_clip
         integer :: n_img = 0
         type(pdf_image_t) :: img(MAX_IMG)
+        ! The glyphs the page has drawn, and the fonts they went into.
+        type(t3set_t) :: t3
     contains
         procedure :: open_canvas => pdf_open_canvas
         procedure :: close_canvas => pdf_close_canvas
@@ -74,34 +73,10 @@ module fplotlib_backend_pdf
         procedure :: draw_rect => pdf_draw_rect
         procedure :: draw_circle => pdf_draw_circle
         procedure :: draw_markers => pdf_draw_markers
-        procedure :: draw_text => pdf_draw_text
+        procedure :: draw_glyphs => pdf_draw_glyphs
         procedure :: draw_image => pdf_draw_image
     end type pdf_renderer_t
 
-    ! Helvetica character widths in thousandths of an em, for codes 32..126.
-    ! These come from the Adobe AFM and are what makes centred text land in
-    ! the right place without embedding a font.
-    integer, parameter :: HELV_W(32:126) = [ &
-        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, &
-        333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, &
-        278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, &
-        778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, &
-        611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, &
-        556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, &
-        556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, &
-        334, 260, 334, 584]
-
-    ! The same for Helvetica-Bold, which is a wider face; oblique shares the
-    ! regular widths, as the AFM says it does.
-    integer, parameter :: HELVB_W(32:126) = [ &
-        278, 333, 474, 556, 556, 889, 722, 278, 333, 333, 389, 584, 278, &
-        333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, &
-        333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667, 611, &
-        778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, &
-        611, 722, 667, 944, 667, 667, 611, 333, 278, 333, 584, 556, 278, &
-        556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, &
-        611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, &
-        389, 280, 389, 584]
 
 contains
 
@@ -138,46 +113,6 @@ contains
         t = trim(s)
     end function int_str
 
-    ! Which of the four Helvetica faces the font asks for, as the /Fn name
-    ! the resource dictionary gives it.
-    pure integer function font_face(font)
-        type(font_t), intent(in) :: font
-        logical :: b, o
-        b = font%weight == WEIGHT_BOLD
-        o = font%slant == SLANT_ITALIC
-        if (b .and. o) then
-            font_face = 4
-        else if (b) then
-            font_face = 2
-        else if (o) then
-            font_face = 3
-        else
-            font_face = 1
-        end if
-    end function font_face
-
-    ! Width of a string in points, from the Helvetica table.
-    pure function text_width(s, size, bold) result(w)
-        character(len=*), intent(in) :: s
-        real(dp), intent(in) :: size
-        logical, intent(in) :: bold
-        real(dp) :: w
-        integer :: i, c
-        w = 0.0_dp
-        do i = 1, len(s)
-            c = iachar(s(i:i))
-            if (c >= 32 .and. c <= 126) then
-                if (bold) then
-                    w = w + real(HELVB_W(c), dp)
-                else
-                    w = w + real(HELV_W(c), dp)
-                end if
-            else
-                w = w + 500.0_dp
-            end if
-        end do
-        w = w*size/1000.0_dp
-    end function text_width
 
     ! PDF colors are components in 0..1.
     subroutine put_rgb(self, rgb, stroking)
@@ -299,6 +234,7 @@ contains
         if (present(y0)) self%y0 = y0
         self%n_alpha = 0
         self%n_img = 0
+        call t3_reset(self%t3)
         call builder_init(self%c)
 
         ! One matrix for the whole page turns the API's top-left origin with
@@ -406,112 +342,88 @@ contains
         end do
     end subroutine pdf_draw_markers
 
-    subroutine pdf_draw_text(self, x, y, s, font, paint, anchor, baseline, angle)
+    ! The run is shown in segments, each a stretch of glyphs in one font
+    ! at one size on one baseline, placed by its own text matrix. Within a
+    ! segment the glyphs follow each other by their widths, and kerning is
+    ! the number TJ takes between two of them.
+    subroutine pdf_draw_glyphs(self, x, y, run, paint, angle)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
+        type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
         real(dp), intent(in) :: angle
-        real(dp) :: w, dx, dy, ca, sa, rad
-        integer :: i
-        character(len=1) :: ch
+        type(paint_t) :: pp
+        real(dp) :: ca, sa, rad, cur_size, cur_y, expect, adj
+        integer :: i, font, code, cur_font
+        logical :: open
+        character(len=1) :: eol
 
-        if (len_trim(s) == 0) return
-        ! A greek letter out of mathtext is in no core font, so that string
-        ! is drawn rather than set.
-        if (text_needs_outline(trim(s))) then
-            call pdf_text_outline(self, x, y, trim(s), font, paint, anchor, &
-                                  baseline, angle)
-            return
-        end if
-
-        ! SVG asks the viewer to align the string; PDF places a fixed origin,
-        ! so the offset has to be measured here.
-        w = text_width(trim(s), font%size, font%weight == WEIGHT_BOLD)
-        dx = 0.0_dp
-        select case (anchor)
-        case (ANCHOR_MIDDLE); dx = -0.5_dp*w
-        case (ANCHOR_END); dx = -w
-        end select
-        dy = 0.0_dp
-        select case (baseline)
-        case (BASE_MIDDLE); dy = 0.36_dp*font%size
-        case (BASE_TOP); dy = 0.76_dp*font%size
-        case (BASE_BOTTOM); dy = -0.21_dp*font%size
-        end select
-
-        call begin_paint(self, paint)
-        call put(self, "BT"//new_line("a"))
-        call put(self, "/F"//int_str(font_face(font))//" " &
-                 //num_str(font%size)//" Tf"//new_line("a"))
+        if (run%n == 0) return
+        eol = new_line("a")
+        pp = paint
+        pp%stroked = .false.
+        pp%filled = .true.
+        call begin_paint(self, pp)
+        call put(self, "BT"//eol)
         ! The page flip would leave text mirrored, so the text matrix flips
         ! back; the rotation is folded into the same matrix.
         rad = angle*acos(-1.0_dp)/180.0_dp
         ca = cos(rad)
         sa = sin(rad)
-        call put_num(self, ca)
-        call put_num(self, sa)
-        call put_num(self, sa)
-        call put_num(self, -ca)
-        call put_num(self, x + dx*ca - dy*sa)
-        call put_num(self, y + dx*sa + dy*ca)
-        call put(self, "Tm"//new_line("a"))
-        call put(self, "(")
-        do i = 1, len_trim(s)
-            ch = s(i:i)
-            ! Parentheses and the escape character end a PDF string early.
-            if (ch == "(" .or. ch == ")" .or. ch == achar(92)) &
-                call put(self, achar(92))
-            call put(self, ch)
+        cur_font = 0
+        cur_size = -1.0_dp
+        cur_y = 0.0_dp
+        expect = 0.0_dp
+        open = .false.
+        do i = 1, run%n
+            call t3_code(self%t3, run%gid(i), font, code)
+            if (open) then
+                if (font /= cur_font .or. run%size(i) /= cur_size &
+                    .or. abs(run%y(i) - cur_y) > 1.0e-9_dp) then
+                    call put(self, ">] TJ"//eol)
+                    open = .false.
+                end if
+            end if
+            if (.not. open) then
+                if (font /= cur_font .or. run%size(i) /= cur_size) then
+                    call put(self, "/T"//int_str(font)//" "//num_str(run%size(i)) &
+                             //" Tf"//eol)
+                    cur_font = font
+                    cur_size = run%size(i)
+                end if
+                call put_num(self, ca)
+                call put_num(self, sa)
+                call put_num(self, sa)
+                call put_num(self, -ca)
+                call put_num(self, x + run%x(i)*ca - run%y(i)*sa)
+                call put_num(self, y + run%x(i)*sa + run%y(i)*ca)
+                call put(self, "Tm"//eol//"[<")
+                cur_y = run%y(i)
+                open = .true.
+            else
+                ! TJ moves the next glyph left by a thousandth of the size
+                ! per unit.
+                adj = (expect - run%x(i))/run%size(i)*1000.0_dp
+                if (abs(adj) > 1.0e-6_dp) then
+                    call put(self, "> ")
+                    call put_num(self, adj)
+                    call put(self, "<")
+                end if
+            end if
+            call put(self, hex2(code))
+            expect = run%x(i) + glyph_adv(run%gid(i))*run%size(i)
         end do
-        call put(self, ") Tj"//new_line("a"))
-        call put(self, "ET"//new_line("a"))
-        call put(self, "Q"//new_line("a"))
-    end subroutine pdf_draw_text
+        if (open) call put(self, ">] TJ"//eol)
+        call put(self, "ET"//eol)
+        call put(self, "Q"//eol)
+    end subroutine pdf_draw_glyphs
 
-    ! The same placement as pdf_draw_text, but filling the glyph outlines
-    ! instead of asking for a font. The widths come from the outlines too,
-    ! so the string is spaced as the rest of the library measured it.
-    subroutine pdf_text_outline(self, x, y, s, font, paint, anchor, baseline, angle)
-        class(pdf_renderer_t), intent(inout) :: self
-        real(dp), intent(in) :: x, y
-        character(len=*), intent(in) :: s
-        type(font_t), intent(in) :: font
-        type(paint_t), intent(in) :: paint
-        integer, intent(in) :: anchor, baseline
-        real(dp), intent(in) :: angle
-        real(dp), allocatable :: px(:), py(:)
-        integer, allocatable :: verbs(:)
-        real(dp) :: w, dx, dy, ca, sa, rad
-        integer :: nv, face
-        type(paint_t) :: pp
-
-        face = font_face(font)
-        w = text_path_width(s, font%size, face)
-        dx = 0.0_dp
-        select case (anchor)
-        case (ANCHOR_MIDDLE); dx = -0.5_dp*w
-        case (ANCHOR_END); dx = -w
-        end select
-        dy = 0.0_dp
-        select case (baseline)
-        case (BASE_MIDDLE); dy = 0.36_dp*font%size
-        case (BASE_TOP); dy = 0.76_dp*font%size
-        case (BASE_BOTTOM); dy = -0.21_dp*font%size
-        end select
-        rad = angle*acos(-1.0_dp)/180.0_dp
-        ca = cos(rad)
-        sa = sin(rad)
-
-        call text_path(s, x + dx*ca - dy*sa, y + dx*sa + dy*ca, font%size, &
-                       face, angle, px, py, verbs, nv)
-        pp = paint
-        pp%stroked = .false.
-        pp%filled = .true.
-        call pdf_draw_path(self, px, py, verbs, nv, pp)
-    end subroutine pdf_text_outline
+    pure function hex2(v) result(s)
+        integer, intent(in) :: v
+        character(len=2) :: s
+        character(len=16), parameter :: H = "0123456789ABCDEF"
+        s = H(v/16 + 1:v/16 + 1)//H(mod(v, 16) + 1:mod(v, 16) + 1)
+    end function hex2
 
     ! The image itself is registered for later; what goes in the content
     ! stream is a matrix and one Do. PDF draws an image into the unit square
@@ -565,26 +477,16 @@ contains
         call put(self, "Q"//new_line("a"))
     end subroutine pdf_draw_image
 
-    ! The base-fourteen name of each face.
-    pure function base_font(i) result(t)
-        integer, intent(in) :: i
-        character(len=:), allocatable :: t
-        select case (i)
-        case (2); t = "Helvetica-Bold"
-        case (3); t = "Helvetica-Oblique"
-        case (4); t = "Helvetica-BoldOblique"
-        case default; t = "Helvetica"
-        end select
-    end function base_font
 
     ! Assemble the file. Objects have to be byte-counted as they are written
     ! because the trailing xref table records where each one starts.
     subroutine pdf_close_canvas(self)
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
-        character(len=:), allocatable :: content, res, gs, xo
-        integer :: off(MAX_OBJ), nobj, i, pos, xref_pos
-        integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG), font_obj(4)
+        character(len=:), allocatable :: content, res, gs, xo, ft
+        integer, allocatable :: off(:), font_obj(:)
+        integer :: nobj, i, pos, xref_pos
+        integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
         character(len=1) :: eol
 
         eol = new_line("a")
@@ -598,14 +500,16 @@ contains
                  //num_str(self%alpha_stroke(i))//" >> "
         end do
 
-        ! The bold and oblique faces are objects of their own, and the images
-        ! follow them, one object each and a second for a soft mask where one
-        ! is needed.
-        nobj = 5
-        font_obj(1) = 5
-        do i = 2, 4
-            nobj = nobj + 1
-            font_obj(i) = nobj
+        ! Each font is three kinds of object: its dictionary, its map back
+        ! to Unicode, and one stream per glyph. The images follow, one
+        ! object each and a second for a soft mask where one is needed.
+        nobj = 4
+        allocate (font_obj(self%t3%nfont))
+        ft = ""
+        do i = 1, self%t3%nfont
+            font_obj(i) = nobj + 1
+            nobj = nobj + 2 + self%t3%n(i)
+            ft = ft//"/T"//int_str(i)//" "//int_str(font_obj(i))//" 0 R "
         end do
         xo = ""
         do i = 1, self%n_img
@@ -619,8 +523,9 @@ contains
             xo = xo//"/Im"//int_str(i)//" "//int_str(img_obj(i))//" 0 R "
         end do
 
-        res = "<< /Font << /F1 5 0 R /F2 "//int_str(font_obj(2))//" 0 R /F3 " &
-              //int_str(font_obj(3))//" 0 R /F4 "//int_str(font_obj(4))//" 0 R >>"
+        allocate (off(nobj))
+        res = "<<"
+        if (len(ft) > 0) res = res//" /Font << "//ft//">>"
         if (len(gs) > 0) res = res//" /ExtGState << "//gs//">>"
         if (len(xo) > 0) res = res//" /XObject << "//xo//">>"
         res = res//" >>"
@@ -652,12 +557,8 @@ contains
         call emit(f, pos, content)
         call emit(f, pos, "endstream"//eol//"endobj"//eol)
 
-        do i = 1, 4
-            off(font_obj(i)) = pos
-            call emit(f, pos, int_str(font_obj(i))//" 0 obj" &
-                      //eol//"<< /Type /Font /Subtype /Type1 /BaseFont /" &
-                      //base_font(i)//" /Encoding /WinAnsiEncoding >>"//eol &
-                      //"endobj"//eol)
+        do i = 1, self%t3%nfont
+            call emit_font(self, f, pos, off, i, font_obj(i))
         end do
 
         do i = 1, self%n_img
@@ -702,6 +603,109 @@ contains
 
         self%out = builder_get(f)
     end subroutine pdf_close_canvas
+
+    ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
+    ! obj + 1 and the glyph procedures after that, one per code.
+    subroutine emit_font(self, f, pos, off, font, obj)
+        class(pdf_renderer_t), intent(in) :: self
+        type(svg_builder), intent(inout) :: f
+        integer, intent(inout) :: pos, off(:)
+        integer, intent(in) :: font, obj
+        character(len=:), allocatable :: procs, diffs, widths, cmap, body, u
+        character(len=1) :: eol
+        integer :: k, gid, b(4), fb(4), nmap, first
+        logical :: any
+
+        eol = new_line("a")
+        procs = ""
+        diffs = ""
+        widths = ""
+        fb = 0
+        any = .false.
+        do k = 0, self%t3%n(font) - 1
+            gid = self%t3%gids(k, font)
+            procs = procs//"/g"//int_str(gid)//" "//int_str(obj + 2 + k)//" 0 R "
+            diffs = diffs//"/g"//int_str(gid)
+            widths = widths//num_str(t3_width(gid))//" "
+            if (glyph_inked(gid)) then
+                call t3_box(gid, b)
+                if (any) then
+                    fb = [min(fb(1), b(1)), min(fb(2), b(2)), &
+                          max(fb(3), b(3)), max(fb(4), b(4))]
+                else
+                    fb = b
+                    any = .true.
+                end if
+            end if
+        end do
+
+        off(obj) = pos
+        call emit(f, pos, int_str(obj)//" 0 obj"//eol &
+                  //"<< /Type /Font /Subtype /Type3 /Name /"//t3_font_name(self%t3, font) &
+                  //" /FontBBox ["//int_str(fb(1))//" "//int_str(fb(2))//" " &
+                  //int_str(fb(3))//" "//int_str(fb(4))//"]" &
+                  //" /FontMatrix [0.001 0 0 0.001 0 0]"//eol &
+                  //"/CharProcs << "//procs//">>"//eol &
+                  //"/Encoding << /Type /Encoding /Differences [0 "//diffs//"] >>"//eol &
+                  //"/FirstChar 0 /LastChar "//int_str(self%t3%n(font) - 1) &
+                  //" /Widths ["//widths//"]"//eol &
+                  //"/Resources << >> /ToUnicode "//int_str(obj + 1)//" 0 R >>"//eol &
+                  //"endobj"//eol)
+
+        ! The map back to Unicode, at most a hundred entries to a block as
+        ! the CMap syntax requires.
+        cmap = "/CIDInit /ProcSet findresource begin"//eol//"12 dict begin"//eol &
+               //"begincmap"//eol &
+               //"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def" &
+               //eol//"/CMapName /Adobe-Identity-UCS def"//eol//"/CMapType 2 def"//eol &
+               //"1 begincodespacerange"//eol//"<00> <FF>"//eol//"endcodespacerange"//eol
+        first = 0
+        do while (first < self%t3%n(font))
+            body = ""
+            nmap = 0
+            k = first
+            do while (k < self%t3%n(font) .and. nmap < 100)
+                u = t3_unicode(self%t3%gids(k, font))
+                if (len(u) > 0) then
+                    body = body//"<"//hex2(k)//"> <"//u//">"//eol
+                    nmap = nmap + 1
+                end if
+                k = k + 1
+            end do
+            if (nmap > 0) cmap = cmap//int_str(nmap)//" beginbfchar"//eol//body &
+                                 //"endbfchar"//eol
+            first = k
+        end do
+        cmap = cmap//"endcmap"//eol//"CMapName currentdict /CMap defineresource pop" &
+               //eol//"end"//eol//"end"//eol
+        off(obj + 1) = pos
+        call emit(f, pos, int_str(obj + 1)//" 0 obj"//eol//"<< /Length " &
+                  //int_str(len(cmap))//" >>"//eol//"stream"//eol)
+        call emit(f, pos, cmap)
+        call emit(f, pos, "endstream"//eol//"endobj"//eol)
+
+        ! Each glyph procedure sets its width and box with d1, which also
+        ! says it takes its colour from the text it is part of, and then
+        ! fills its outline.
+        do k = 0, self%t3%n(font) - 1
+            gid = self%t3%gids(k, font)
+            if (glyph_inked(gid)) then
+                call t3_box(gid, b)
+                body = num_str(t3_width(gid))//" 0 "//int_str(b(1))//" " &
+                       //int_str(b(2))//" "//int_str(b(3))//" "//int_str(b(4)) &
+                       //" d1"//eol//t3_glyph_ops(gid, [character(len=1) :: &
+                                                         "m", "l", "c", "h"]) &
+                       //"f"//eol
+            else
+                body = num_str(t3_width(gid))//" 0 0 0 0 0 d1"//eol
+            end if
+            off(obj + 2 + k) = pos
+            call emit(f, pos, int_str(obj + 2 + k)//" 0 obj"//eol//"<< /Length " &
+                      //int_str(len(body))//" >>"//eol//"stream"//eol)
+            call emit(f, pos, body)
+            call emit(f, pos, "endstream"//eol//"endobj"//eol)
+        end do
+    end subroutine emit_font
 
     subroutine emit(f, pos, s)
         type(svg_builder), intent(inout) :: f

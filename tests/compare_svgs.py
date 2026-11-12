@@ -136,12 +136,11 @@ def main() -> int:
 
         print(
             f"  elements mpl:  path={count_tags(ref, 'path')} "
-            f"use={count_tags(ref, 'use')} text≈{ref.count('<text')}"
+            f"use={count_tags(ref, 'use')}"
         )
         print(
             f"  elements fplotlib: path={count_tags(out, 'path')} "
-            f"rect={count_tags(out, 'rect')} use={count_tags(out, 'use')} "
-            f"text={out.count('<text')}"
+            f"rect={count_tags(out, 'rect')} use={count_tags(out, 'use')}"
         )
 
         # Both now group each axes as <g id="axes_N">, so the same pattern
@@ -181,7 +180,7 @@ def main() -> int:
 
     print("\n" + "=" * 60)
     print("Known intentional differences:")
-    print("  - matplotlib embeds DejaVu glyph paths; fplotlib uses <text>")
+    print("  - both draw text as glyph paths (<defs> plus <use>), with their own ids")
     print("  - matplotlib uses path IDs/metadata; fplotlib uses simpler SVG")
     print("  - tick locations may differ slightly (nice-number algorithm)")
 

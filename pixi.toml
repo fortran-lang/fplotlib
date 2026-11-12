@@ -62,7 +62,7 @@ ghostscript = ">=10.4.0,<11"
 # five comparisons, run one after another, share one build.
 [feature.matplotlib.tasks.mpl-refs]
 cmd = "python tests/gen_mpl_refs.py"
-inputs = ["tests/gen_mpl_refs.py"]
+inputs = ["tests/gen_mpl_refs.py", "tools/gen_glyphs.py"]
 outputs = ["tests/refs/*"]
 
 [feature.matplotlib.tasks.test-outputs]
