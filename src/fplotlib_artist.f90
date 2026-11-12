@@ -447,7 +447,7 @@ contains
         if (present(weight)) wt = weight
         if (present(slant)) sl = slant
         if (math_is(s)) then
-            w = math_width(s, size)
+            w = math_width(s, size, text_face(wt, sl))
         else
             w = text_width(s, size, text_face(wt, sl))
         end if
@@ -498,10 +498,11 @@ contains
         integer :: i
         real(dp) :: w, x0, y0, ca, sa, rad, rx(4), ry(4)
 
-        call math_layout(s, f%size, run, rules, w)
+        call math_layout(s, f%size, run, rules, w, text_face(f%weight, f%slant))
         run%text = s
-        ! The math is set in the regular faces whatever the weight asks
-        ! for, so it is aligned by them too.
+        ! The text around the math takes the weight and slant asked for, and
+        ! the math is set in its regular font whatever they are; the faces
+        ! share their metrics, so the run is aligned by the regular one.
         mf = f
         mf%weight = WEIGHT_NORMAL
         mf%slant = SLANT_ROMAN

@@ -16,11 +16,11 @@ module test_mathref
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t
     use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked, &
-                               glyph_adv
+                               glyph_adv, FACE_BOLD, FACE_MATH
     implicit none
     private
 
-    public :: math_ref_check, delim_ref_check
+    public :: math_ref_check, delim_ref_check, face_check
 
     ! How far, in points, a glyph or rule may sit from XeTeX's.
     real(dp), parameter :: TOL = 0.02_dp
@@ -248,6 +248,23 @@ contains
             nfail = nfail + 1
         end if
     end subroutine check_delims
+
+    ! The words around a formula are set in the face the label asks for,
+    ! and the formula in the math font.
+    subroutine face_check(nfail)
+        integer, intent(out) :: nfail
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        real(dp) :: w
+
+        nfail = 0
+        call math_layout("Bold $x$ bold", SIZE, run, rules, w, FACE_BOLD)
+        if (glyph_face(run%gid(1)) /= FACE_BOLD .or. glyph_face(run%gid(6)) /= FACE_MATH &
+            .or. glyph_face(run%gid(run%n)) /= FACE_BOLD) then
+            print "(a)", "  text around math does not keep the label's face"
+            nfail = 1
+        end if
+    end subroutine face_check
 
     ! Sorts glyphs by x, and those within a hundredth of a point of each
     ! other in x from the top down.

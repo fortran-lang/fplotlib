@@ -226,30 +226,34 @@ contains
         yes = index(s, "$") > 0
     end function math_is
 
-    ! Width of a string in points, mathtext or not.
-    function math_width(s, size) result(w)
+    ! Width of a string in points, mathtext or not, with its text in face.
+    function math_width(s, size, face) result(w)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
+        integer, intent(in), optional :: face
         real(dp) :: w
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
-        call math_layout(s, size, run, rules, w)
+        call math_layout(s, size, run, rules, w, face)
     end function math_width
 
     ! Lay a string out: its glyphs are appended to run and its rules to
     ! rules, starting at the origin, and width is how far it reaches.
-    ! Text outside the dollar signs is copied through as ordinary text,
-    ! with \$ written as a dollar sign.
-    subroutine math_layout(s, size, run, rules, width)
+    ! Text outside the dollar signs is copied through as ordinary text, in
+    ! face (the regular one by default), with \$ written as a dollar sign.
+    subroutine math_layout(s, size, run, rules, width, face)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         type(glyphrun_t), intent(inout) :: run
         type(mrules_t), intent(inout) :: rules
         real(dp), intent(out) :: width
+        integer, intent(in), optional :: face
         type(mbox_t) :: box
-        integer :: i, j, head, k
+        integer :: i, j, head, k, tf
         real(dp) :: pen, xnew
 
+        tf = FACE_REGULAR
+        if (present(face)) tf = face
         pen = 0.0_dp
         i = 1
         do while (i <= len(s))
@@ -280,13 +284,13 @@ contains
                     j = j + 1
                 end do
                 if (j > i) then
-                    call text_layout(s(i:j - 1), size, FACE_REGULAR, pen, 0.0_dp, run, xnew)
+                    call text_layout(s(i:j - 1), size, tf, pen, 0.0_dp, run, xnew)
                     pen = xnew
                 end if
                 ! A dollar written \$ is one.
                 if (j < len(s)) then
                     if (s(j:j) == BS) then
-                        call text_layout("$", size, FACE_REGULAR, pen, 0.0_dp, run, xnew)
+                        call text_layout("$", size, tf, pen, 0.0_dp, run, xnew)
                         pen = xnew
                         j = j + 2
                     end if
