@@ -17,10 +17,38 @@ from matplotlib.path import Path as MPath
 import datetime
 import io
 
+import os
+import sys
+
 import numpy as np
 from PIL import Image
+from matplotlib import font_manager
 
 ROOT = Path(__file__).resolve().parent
+
+# fplotlib sets its text in Lato, so matplotlib is given the same pinned
+# files the glyph tables were generated from, fetched and checked by the
+# generator (FPLOTLIB_FONTS names a directory holding them instead).
+# Mathtext gets Lato too, through the custom font set, so that the letters
+# of a formula are the same faces in both.
+sys.path.insert(0, str(ROOT.parent / "tools"))
+from gen_glyphs import font_file  # noqa: E402
+
+_LATO = [str(font_file(_face, os.environ.get("FPLOTLIB_FONTS")))
+         for _face in ("Lato-Regular.ttf", "Lato-Bold.ttf", "Lato-Italic.ttf",
+                       "Lato-BoldItalic.ttf")]
+# A system may have a Lato of its own (Ubuntu's fonts-lato, for one), with
+# other line metrics; matplotlib would be free to pick it over these, so it
+# is taken out of the list first.
+font_manager.fontManager.ttflist = [
+    f for f in font_manager.fontManager.ttflist if f.name != "Lato"]
+for _path in _LATO:
+    font_manager.fontManager.addfont(_path)
+plt.rcParams["font.family"] = "Lato"
+plt.rcParams["mathtext.fontset"] = "custom"
+plt.rcParams["mathtext.rm"] = "Lato"
+plt.rcParams["mathtext.it"] = "Lato:italic"
+plt.rcParams["mathtext.bf"] = "Lato:bold"
 REF = ROOT / "refs"
 OUT_NAMES = [
     "quiverkey",
@@ -102,6 +130,7 @@ OUT_NAMES = [
     "hist2d",
     "hexbin",
     "matshow",
+    "matshow_title",
     "eventplot",
     "broken_barh",
     "streamplot",
@@ -863,6 +892,12 @@ def main() -> None:
     zm = np.array([[float(i * j) for j in range(1, 7)] for i in range(1, 7)])
     ax.matshow(zm)
     save(fig, "matshow")
+
+    # 69b a titled matrix: the title goes above the tick labels on top
+    fig, ax = setup_fig()
+    ax.matshow(zm)
+    ax.set_title("matshow with a title")
+    save(fig, "matshow_title")
 
     # 70 a row of events
     fig, ax = setup_fig()

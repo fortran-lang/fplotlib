@@ -124,8 +124,21 @@ contains
     pure function xtick_gap(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = 8.4_dp + 0.76_dp * a%xtick_size
+        v = TICK_LEN + TICK_PAD + text_ascent(a%xtick_size)
     end function xtick_gap
+
+    ! Baseline of the x tick labels: hanging from the ticks below the axes,
+    ! or standing on them above it.
+    pure elemental function xtick_base(a, edge) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp), intent(in) :: edge
+        real(dp) :: v
+        if (a%x_top) then
+            v = edge - TICK_LEN - TICK_PAD - text_descent(a%xtick_size)
+        else
+            v = edge + xtick_gap(a)
+        end if
+    end function xtick_base
 
     subroutine apply_font_defaults(a)
         type(axes_t), intent(inout) :: a
@@ -295,41 +308,44 @@ contains
     function decor_left(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = TICK_LEN + 2.0_dp + tick_label_width(a)
-        ! The label is drawn a fixed distance out, so with narrow tick
-        ! labels it reaches further than they do and it is what decides
-        ! how much room the axes needs on its left.
+        v = TICK_LEN + TICK_PAD + tick_label_width(a)
+        ! The label hangs off the tick labels, and its ascent, which faces
+        ! out, is the last thing on the left.
         if (len_trim(a%ylabel) > 0) &
-            v = ylabel_out(a) + 0.24_dp * a%ylabel_size
+            v = ylabel_out(a) + text_ascent(a%ylabel_size)
     end function decor_left
 
     ! Baseline of the y label, in points outside the axes. matplotlib
     ! hangs it off the tick labels, so a plot whose ticks read 1 to 7
     ! carries its label much closer in than one reading -1.00 to 1.00.
+    ! The label reads upwards, so its descent is the side that faces the
+    ! tick labels.
     function ylabel_out(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = TICK_LEN + 2.0_dp + tick_label_width(a) + a%ylabel_pad &
-            + 0.76_dp * a%ylabel_size
+        v = TICK_LEN + TICK_PAD + tick_label_width(a) + a%ylabel_pad &
+            + text_descent(a%ylabel_size)
     end function ylabel_out
 
     function decor_bottom(a, W, H) result(v)
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: W, H
         real(dp) :: v, bx, by, bw, bh
-        v = TICK_LEN + 1.0_dp + 1.15_dp * a%xtick_size
+        v = xtick_gap(a) + text_descent(a%xtick_size)
         ! A horizontal colorbar hangs below the axes, with tick labels of
         ! its own under that.
         if (a%cbar_on .and. a%cbar_horiz) then
             call cbar_box(a, W, H, bx, by, bw, bh)
             v = v + by + bh - (1.0_dp - a%bottom) * H &
-                + xtick_gap(a) + 0.4_dp * a%xtick_size
-            if (len_trim(a%cbar_label) > 0) v = v + LABEL_BOX * a%xlabel_size
+                + xtick_gap(a) + text_descent(a%xtick_size)
+            if (len_trim(a%cbar_label) > 0) v = v + LABEL_PAD &
+                + text_ascent(a%xlabel_size) + text_descent(a%xlabel_size)
         end if
         if (a%xtick_rot /= 0.0_dp) v = v + tick_label_width(a) * &
                                         abs(sin(a%xtick_rot * PI / 180.0_dp))
         if (len_trim(a%xlabel) > 0) &
-            v = v + LABEL_BOX * a%xlabel_size + a%xlabel_pad - LABEL_PAD
+            v = v + a%xlabel_pad + text_ascent(a%xlabel_size) &
+                + text_descent(a%xlabel_size)
     end function decor_bottom
 
     ! How far the decorations reach to the right of the axes box. Only a
@@ -373,7 +389,7 @@ contains
             y1 = max(y1, bt)
         end do
         if (len_trim(fig_suptitle) > 0) &
-            y0 = min(y0, (1.0_dp - SUPTITLE_Y) * H + 4.2_dp - fig_suptitle_size)
+            y0 = min(y0, (1.0_dp - SUPTITLE_Y) * H)
         if (x1 <= x0 .or. y1 <= y0) then
             x0 = 0.0_dp
             y0 = 0.0_dp
@@ -382,15 +398,33 @@ contains
         end if
     end subroutine drawn_bbox
 
-    function decor_top(a) result(v)
+    ! What the x tick labels take up above the axes, when the x axis is on
+    ! top (spy, matshow, twiny): the ticks, the pad and the labels.
+    pure elemental function xtop_band(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
         v = 0.0_dp
-        if (len_trim(a%title) > 0) v = LABEL_BOX * a%title_size
+        if (.not. a%x_top .or. a%xaxis_off .or. a%xticklabels_off) return
+        v = TICK_LEN + TICK_PAD + text_ascent(a%xtick_size) + text_descent(a%xtick_size)
+    end function xtop_band
+
+    ! Distance from the top of the axes up to the title's baseline: the
+    ! title pad, above any x tick labels on top, as matplotlib places it.
+    pure elemental function title_gap(a) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp) :: v
+        v = xtop_band(a) + 0.5_dp*a%title_size
+    end function title_gap
+
+    function decor_top(a) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp) :: v
+        v = xtop_band(a)
+        if (len_trim(a%title) > 0) v = title_gap(a) + text_ascent(a%title_size)
     end function decor_top
 
-    ! Widest tick label an axes will draw, in points. Tick text is digits,
-    ! a sign and a point, all of which are the same width in DejaVu Sans.
+    ! Widest tick label an axes will draw, in points, measured as it will
+    ! be set.
     function tick_label_width(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v, xmin, xmax, ymin, ymax
@@ -406,11 +440,7 @@ contains
             call tick_label(a%ytick_labeled, a%ytick_lab, i, t(i), a%ysc, &
                             axis_fmt(t, nt, a, .false., min(ymin, ymax), &
                                      max(ymin, ymax)), du, lbl, ln)
-            if (math_is(lbl(1:ln))) then
-                v = max(v, math_width(lbl(1:ln), a%ytick_size))
-            else
-                v = max(v, real(ln, dp) * DIGIT_W * a%ytick_size)
-            end if
+            v = max(v, str_width(lbl(1:ln), a%ytick_size))
         end do
     end function tick_label_width
 
@@ -1179,7 +1209,7 @@ contains
             ! Just past the end of the bar, vertically centred on it.
             tx = xb + s%bar_pad + 1.0_dp
             if (xb < xa) tx = xb - s%bar_pad - 1.0_dp
-            ty = 0.5_dp*(ya + yb) + 0.36_dp*fs
+            ty = 0.5_dp*(ya + yb) + text_mid(fs)
             if (xb < xa) then
                 call append_text(b, tx, ty, trim(adjustl(txt)), "right", fs, rc_text_color)
             else
@@ -1189,8 +1219,8 @@ contains
             ! Above the top of the bar, or below it for a bar that hangs
             ! down. 0.21 em is the descent of the font, which is what puts
             ! the bottom of the text, not its baseline, at the padding.
-            ty = min(ya, yb) - s%bar_pad - 0.21_dp*fs
-            if (yb > ya) ty = max(ya, yb) + s%bar_pad + 0.73_dp*fs
+            ty = min(ya, yb) - s%bar_pad - text_descent(fs)
+            if (yb > ya) ty = max(ya, yb) + s%bar_pad + text_ascent(fs)
             tx = 0.5_dp*(xa + xb)
             call append_text(b, tx, ty, trim(adjustl(txt)), "center", fs, rc_text_color)
         end if
@@ -1492,7 +1522,7 @@ contains
         case default
             tx = x + (1.0_dp - pad)*w
         end select
-        call append_text(b, tx, y + 0.5_dp*h + 0.36_dp*fs, s, loc, fs, "#000000")
+        call append_text(b, tx, y + 0.5_dp*h + text_mid(fs), s, loc, fs, "#000000")
     end subroutine table_cell
 
     subroutine append_arrowheads(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
@@ -2150,7 +2180,8 @@ contains
 
             t = real(k - 1, dp)/real(max(nlev - 1, 1), dp)
             call format_tick_fixed(a%clev(k), dec, lbl, nl)
-            halfw = 0.5_dp*real(nl, dp)*DIGIT_W*a%clab_size + 3.0_dp
+            call fix_minus(lbl, nl)
+            halfw = 0.5_dp*str_width(lbl(1:nl), a%clab_size) + 3.0_dp
 
             used(1:ns) = .false.
             do
@@ -2169,7 +2200,7 @@ contains
                                             cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp)
                     call append_stroke_path(b, lx(i1:nv), ly(i1:nv), nv - i1 + 1, &
                                             cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp)
-                    call append_text(b, cx, cy + 0.36_dp*a%clab_size, lbl(1:nl), &
+                    call append_text(b, cx, cy + text_mid(a%clab_size), lbl(1:nl), &
                                      "middle", a%clab_size, &
                                      cmap_color(a%cont_cmap, t), ang)
                 else
@@ -2709,6 +2740,7 @@ contains
             else
                 call format_tick_fixed(v, dec, lbl, ln)
             end if
+            call fix_minus(lbl, ln)
             if (a%cbar_horiz) then
                 px = bx + t * bw
                 call append_tick(b, px, bb, px, bb + 3.5_dp)
@@ -2725,7 +2757,8 @@ contains
         if (len_trim(a%cbar_label) > 0) then
             if (a%cbar_horiz) then
                 call append_text(b, bx + 0.5_dp * bw, bb + xtick_gap(a) &
-                                 + LABEL_BOX * a%xlabel_size, trim(a%cbar_label), &
+                                 + text_descent(a%xtick_size) + LABEL_PAD &
+                                 + text_ascent(a%xlabel_size), trim(a%cbar_label), &
                                  "middle", a%xlabel_size, rc_text_color)
             else
                 call append_text(b, bx + bw + 34.0_dp, 0.5_dp * (bt + bb), &
@@ -3075,6 +3108,7 @@ contains
                 call format_tick_fixed((v - f%off)/10.0_dp**f%oom, f%dec, out, n)
             end select
         end if
+        if (.not. labeled .and. date_unit <= 0) call fix_minus(out, n)
     end subroutine tick_label
 
     ! The label for one minor tick, empty unless the axis is logarithmic
@@ -3093,6 +3127,7 @@ contains
         k = nint(v/10.0_dp**expn)
         if (.not. log_minor_labelled(k, log10(vmax/vmin))) return
         call format_log_minor_to(v, out, n)
+        call fix_minus(out, n)
     end subroutine log_minor_label
 
     ! The decimal count for one axis: none when the scale is not linear,
@@ -3225,20 +3260,20 @@ contains
         ! degree line, which is where matplotlib puts them.
         do k = 0, 7
             ang = real(k, dp)*PI/4.0_dp
-            ! The degree sign is byte 176, which the backends know how to
-            ! write: a character reference in SVG, WinAnsi in PDF, and an
-            ! outline of its own in PNG.
+            ! The degree sign is byte 176, which is not UTF-8 and so is
+            ! read as the Latin-1 character it is.
             write (lbl, "(I0,A)") k*45, achar(176)
             lx = cx + (R + 4.0_dp + 0.5_dp*a%xtick_size)*cos(ang)
-            ly = cy - (R + 4.0_dp + 0.5_dp*a%xtick_size)*sin(ang) + 0.36_dp*a%xtick_size
+            ly = cy - (R + 4.0_dp + 0.5_dp*a%xtick_size)*sin(ang) + text_mid(a%xtick_size)
             call append_text(b, lx, ly, trim(lbl), "middle", a%xtick_size, rc_text_color)
         end do
         do k = 1, nt
             if (t(k) <= 0.0_dp .or. t(k) > rmax) cycle
             call format_tick_fixed(t(k), dec, lbl, n)
+            call fix_minus(lbl, n)
             rr = R*t(k)/rmax
             lx = cx + rr*cos(22.5_dp*PI/180.0_dp)
-            ly = cy - rr*sin(22.5_dp*PI/180.0_dp) + 0.36_dp*a%ytick_size
+            ly = cy - rr*sin(22.5_dp*PI/180.0_dp) + text_mid(a%ytick_size)
             call append_text(b, lx, ly, lbl(1:n), "middle", a%ytick_size, rc_text_color)
         end do
 
@@ -3531,7 +3566,8 @@ contains
                 ! All three axes label their ticks the way an x axis does:
                 ! centred, and hanging from the top of the text.
                 call format_tick_fixed(tk(k, i), dec(i), lbl, ln)
-                call append_text(b, tx(1), ty(1) + 0.76_dp*fs, lbl(1:ln), &
+                call fix_minus(lbl, ln)
+                call append_text(b, tx(1), ty(1) + text_ascent(fs), lbl(1:ln), &
                                  "center", fs, rc_text_color)
             end do
 
@@ -3546,7 +3582,7 @@ contains
             ! its own axis, which is where matplotlib draws the line too.
             ang = 0.0_dp
             if (len_trim(axl) > 4) ang = atan2(ey(1) - ey(2), ex(2) - ex(1))*180.0_dp/PI
-            call append_text(b, tx(1), ty(1) + 0.36_dp*a%xlabel_size, trim(axl), &
+            call append_text(b, tx(1), ty(1) + text_mid(a%xlabel_size), trim(axl), &
                              "center", a%xlabel_size, rc_text_color, ang)
         end do
 
@@ -3883,8 +3919,8 @@ contains
         character(len=512) :: esc
         integer :: ln, en
         type(scale_t) :: xsc, ysc
-        integer :: n_leg, k, max_lbl, n_col, n_row, lc, lr
-        real(dp) :: leg_x, leg_y, leg_w, leg_h, row_h, col_w, ttl_h, leg_x0
+        integer :: n_leg, k, n_col, n_row, lc, lr
+        real(dp) :: leg_x, leg_y, leg_w, leg_h, row_h, col_w, ttl_h, leg_x0, lbl_w
         character(len=16) :: leg_loc
         real(dp), allocatable :: lx(:), ly(:), mkx(:), mky(:)
         logical, allocatable :: lstart(:)
@@ -4284,9 +4320,8 @@ contains
             if (.not. a%xticklabels_off) then
                 call tick_label(a%xtick_labeled, a%xtick_lab, i, xticks(i), xsc, &
                                 xfmt, x_unit, lbl, ln)
-                call append_tick_text(b, px, x_edge + x_out * xtick_gap(a) - &
-                                      merge(6.0_dp, 0.0_dp, a%x_top), lbl(1:ln), "center", &
-                                      a%xtick_size, a%xtick_rot)
+                call append_tick_text(b, px, xtick_base(a, x_edge), lbl(1:ln), &
+                                      "center", a%xtick_size, a%xtick_rot)
             end if
         end do
         do i = 1, nxm
@@ -4298,8 +4333,7 @@ contains
             if (a%xticklabels_off) cycle
             call log_minor_label(xminor(i), xsc, xmin, xmax, lbl, ln)
             if (ln > 0) &
-                call append_tick_text(b, px, x_edge + x_out * xtick_gap(a) - &
-                                      merge(6.0_dp, 0.0_dp, a%x_top), lbl(1:ln), &
+                call append_tick_text(b, px, xtick_base(a, x_edge), lbl(1:ln), &
                                       "center", a%xtick_size, a%xtick_rot)
         end do
 
@@ -4318,7 +4352,8 @@ contains
             if (.not. a%yticklabels_off) then
                 call tick_label(a%ytick_labeled, a%ytick_lab, i, yticks(i), ysc, &
                                 yfmt, y_unit, lbl, ln)
-                call append_tick_text(b, y_edge + y_out * 7.0_dp, py + 3.5_dp, lbl(1:ln), &
+                call append_tick_text(b, y_edge + y_out*(TICK_LEN + TICK_PAD), &
+                                      py + 0.5_dp*text_ascent(a%ytick_size), lbl(1:ln), &
                                       merge("left ", "right", a%y_right), &
                                       a%ytick_size, a%ytick_rot)
             end if
@@ -4330,8 +4365,9 @@ contains
             if (a%yticklabels_off) cycle
             call log_minor_label(yminor(i), ysc, ymin, ymax, lbl, ln)
             if (ln > 0) &
-                call append_tick_text(b, y_edge + y_out * 7.0_dp, py + 3.5_dp, &
-                                      lbl(1:ln), merge("left ", "right", a%y_right), &
+                call append_tick_text(b, y_edge + y_out*(TICK_LEN + TICK_PAD), &
+                                      py + 0.5_dp*text_ascent(a%ytick_size), lbl(1:ln), &
+                                      merge("left ", "right", a%y_right), &
                                       a%ytick_size, a%ytick_rot)
         end do
 
@@ -4340,13 +4376,15 @@ contains
         ! top of the y axis, three points clear of the tick labels.
         if (nxt > 0 .and. .not. a%xticklabels_off) then
             call format_offset_text(xfmt%off, xfmt%oom, lbl, ln)
+            call fix_minus(lbl, ln)
             if (ln > 0) &
-                call append_text(b, ax_r, ax_b + xtick_gap(a) + 0.24_dp*a%xtick_size &
-                                 + 3.0_dp + 0.76_dp*a%xtick_size, lbl(1:ln), "right", &
+                call append_text(b, ax_r, ax_b + xtick_gap(a) + text_descent(a%xtick_size) &
+                                 + 3.0_dp + text_ascent(a%xtick_size), lbl(1:ln), "right", &
                                  a%xtick_size, rc_text_color)
         end if
         if (nyt > 0 .and. .not. a%yticklabels_off) then
             call format_offset_text(yfmt%off, yfmt%oom, lbl, ln)
+            call fix_minus(lbl, ln)
             if (ln > 0) &
                 call append_text(b, y_edge, ax_t - 3.0_dp, lbl(1:ln), &
                                  merge("right", "left ", a%y_right), &
@@ -4355,9 +4393,8 @@ contains
 
         if (len_trim(a%xlabel) > 0) then
             call append_text(b, 0.5_dp * (ax_l + ax_r), &
-                             ax_b + xtick_gap(a) + 0.24_dp * a%xtick_size + 1.84_dp &
-                             + a%xlabel_pad - LABEL_PAD &
-                             + 0.76_dp * a%xlabel_size, trim(a%xlabel), &
+                             ax_b + xtick_gap(a) + text_descent(a%xtick_size) &
+                             + a%xlabel_pad + text_ascent(a%xlabel_size), trim(a%xlabel), &
                              "center", a%xlabel_size, rc_text_color, &
                              weight=a%xlabel_w, slant=a%xlabel_sl)
         end if
@@ -4377,16 +4414,16 @@ contains
         if (len_trim(a%title) > 0) then
             select case (trim(a%title_loc))
             case ("left")
-                call append_text(b, ax_l, ax_t - 0.5_dp*a%title_size, &
+                call append_text(b, ax_l, ax_t - title_gap(a), &
                                  trim(a%title), "left", a%title_size, &
                                  rc_text_color, weight=a%title_w, slant=a%title_sl)
             case ("right")
-                call append_text(b, ax_r, ax_t - 0.5_dp*a%title_size, &
+                call append_text(b, ax_r, ax_t - title_gap(a), &
                                  trim(a%title), "right", a%title_size, &
                                  rc_text_color, weight=a%title_w, slant=a%title_sl)
             case default
                 call append_text(b, 0.5_dp*(ax_l + ax_r), &
-                                 ax_t - 0.5_dp*a%title_size, trim(a%title), &
+                                 ax_t - title_gap(a), trim(a%title), &
                                  "center", a%title_size, rc_text_color, &
                                  weight=a%title_w, slant=a%title_sl)
             end select
@@ -4395,11 +4432,12 @@ contains
         ! legend
         if (a%legend_on) then
             n_leg = 0
-            max_lbl = 0
+            lbl_w = 0.0_dp
             do i = 1, a%n_series
                 if (in_legend(a%series(i))) then
                     n_leg = n_leg + 1
-                    max_lbl = max(max_lbl, len_trim(a%series(i)%label))
+                    lbl_w = max(lbl_w, str_width(trim(a%series(i)%label), &
+                                                 a%legend_size))
                 end if
             end do
             if (n_leg > 0) then
@@ -4408,8 +4446,7 @@ contains
                 n_row = (n_leg + n_col - 1) / n_col
                 ! Sample line (leg_x+8 .. leg_x+28), gap to the text at
                 ! leg_x+34, the label itself, and a trailing pad.
-                col_w = 34.0_dp + real(max_lbl, dp) * LEGEND_CHAR_W &
-                        * a%legend_size / LEGEND_FONT + 8.0_dp
+                col_w = 34.0_dp + lbl_w + 8.0_dp
                 leg_w = real(n_col, dp) * col_w
                 ttl_h = 0.0_dp
                 if (len_trim(a%legend_title) > 0) ttl_h = row_h
@@ -4551,7 +4588,9 @@ contains
 
         ! suptitle (figure-level, above all axes)
         if (len_trim(fig_suptitle) > 0) then
-            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H + 4.2_dp, &
+            ! matplotlib anchors the suptitle box (font ascent) at its top
+            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H &
+                             + text_ascent(fig_suptitle_size), &
                              trim(fig_suptitle), "center", fig_suptitle_size, &
                              rc_text_color, weight=fig_suptitle_w, &
                              slant=fig_suptitle_sl)

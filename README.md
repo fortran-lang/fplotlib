@@ -3,7 +3,7 @@
 [![CI](https://github.com/certik/fplotlib/actions/workflows/ci.yml/badge.svg)](https://github.com/certik/fplotlib/actions/workflows/ci.yml)
 
 Pure Fortran plotting library with a pylab-style API, writing SVG, PNG, PDF and EPS.
-No external graphics library: the PNG rasterizer and its font are part of fplotlib.
+No external graphics library: the PNG rasterizer and its fonts are part of fplotlib.
 
 ```fortran
 use fplotlib
@@ -172,13 +172,39 @@ call suptitle("figure title")
   same number of ticks for the space available, and one decimal count
   shared by the whole axis. A log axis writes its decades as powers, and
   when it spans a decade or less it labels the multiples between them
-- Mathtext: `$10^{-3}$`, `$x_i$`, `$E = mc^2$`, `$\frac{a}{b}$`,
-  `$\sqrt{x}$` and the greek letters in any label, laid out once and
-  drawn by every backend, with the letters sloped and the rest upright as
-  TeX sets them. Text is UTF-8; PDF and EPS fill the greek as outlines,
-  since no core font has it
+- Mathtext: TeX math in any label (`$E = mc^2$`, `$x_i^2$`,
+  `$\frac{a}{b}$`, `$\sqrt[3]{x}$`), set in Lete Sans Math with TeX's
+  layout (The TeXbook, Appendix G) driven by the font's OpenType MATH
+  table, as XeTeX, LuaTeX and Typst do: script sizes and alternates, script
+  shifts, math kerns and italic corrections, fractions, radicals, size
+  variants and assemblies all come from the font. Supported are the greek
+  letters, about two hundred operators, relations, arrows and other
+  symbols; primes; `\frac`, `\dfrac`, `\tfrac`, `\cfrac`, `\binom`,
+  `\over`, `\atop` and `\choose`; large operators with limits
+  (`\sum`, `\int`, `\lim`, `\limits`, `\nolimits`) and the named functions
+  (`\sin`, `\log`, `\operatorname{erf}`) in Lato; `\left`, `\middle` and
+  `\right`, and `\big` to `\Bigg`; accents (`\hat`, `\bar`, `\vec`,
+  `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
+  `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
+  Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
+  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 83 test formulas, and the layout is checked against it
+- Automatic delimiters, as Typst has them: matched `( )`, `[ ]`, `\{ \}`,
+  `| |`, `\| \|`, `\langle \rangle`, `\lfloor \rfloor` and `\lceil \rceil`
+  grow to fit what they enclose, so `$(\frac{a}{b})$` needs no `\left` and
+  `\right`, and a `|` between them grows with them. They never shrink, so
+  `$f(x)$` keeps its plain parentheses; unmatched ones (`$[0, 1)$`),
+  escaped ones (`\(`, `\[`) and ones in braces (`{(}`) stay plain.
+  `tests/delim_refs.txt` holds the sizes Typst chooses for 29 formulas
+- Text is UTF-8 and set in Lato (regular, bold and italic; bold italic is
+  set in bold), with
+  its kerning, in every European script except Cyrillic. The outlines are
+  compiled in, so every format draws the same glyphs: PNG fills them, SVG
+  defines each once and `<use>`s it, and PDF and EPS embed them as Type 3
+  fonts that keep the text selectable. Tick labels write their minus as
+  U+2212, as matplotlib does
 - `fontweight=` and `fontstyle=` on `title`, `suptitle`, `xlabel`,
-  `ylabel`, `text` and `annotate`: real bold and oblique faces, not a
+  `ylabel`, `text` and `annotate`: real bold and italic faces, not a
   smeared or sheared regular one
 - Categorical axes: `plot`, `bar` and `barh` take a list of names in place
   of the numbers, and place them at 0, 1, 2, ... with the names as ticks
@@ -319,12 +345,19 @@ tests/         Fortran test plots, fingerprints, matplotlib refs, compare script
 
 ## License
 
-MIT, in `LICENSE`.
+The code is MIT, in `LICENSE`.
 
-The compiled-in glyph outlines in `src/fplotlib_glyphs_data.f90` are derived
-from DejaVu Sans, whose licence is in `LICENSE_DEJAVU`: the Bitstream Vera fonts
-are copyright Bitstream, and the DejaVu changes are in the public domain. The
-colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
+The generated glyph data in `src/fplotlib_glyphs_data.f90` (outlines, metrics,
+kerning and the math table) is OFL-1.1, derived from two fonts under the SIL
+Open Font License 1.1: Lato, © tyPoland Łukasz Dziedzic with Reserved Font
+Name "Lato" (`LICENSE_LATO`), and Lete Sans Math, © Chenjing Bu and Daniel
+Flipo, built on Fira Math (© Xiangdong Zeng) and Lato (`LICENSE_LETE`). The
+OFL is permissive: a program built with fplotlib ships the
+OFL notice alongside the MIT one, and the plots fplotlib produces carry no
+obligations. Because "Lato" is a Reserved Font Name, the fonts fplotlib
+embeds in PDF and EPS files have names of their own: `FplotlibSans-Regular`,
+`FplotlibSans-Bold`, `FplotlibSans-Italic` and `FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
+files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.
 
@@ -350,14 +383,31 @@ difference. As of this writing, over 100 cases:
 
 | format | cases | mean difference |
 | --- | --- | --- |
-| PNG | 124 | 1.50/255 |
-| PDF | 123 | 2.05/255 |
-| EPS | 124 | 3.57/255 |
-| GIF | 20 frames | 0.60/255 |
+| PNG | 126 | 1.31/255 |
+| PDF | 125 | 0.93/255 |
+| EPS | 126 | 2.28/255 |
+| GIF | 20 frames | 0.39/255 |
 
-What is left is mostly antialiasing along edges, and text: fplotlib draws with
-its own compiled-in DejaVu Sans metrics and glyph outlines, so a stem lands
-on the same pixel column as matplotlib's but not always with the same
-coverage. The SVG is not matplotlib's SVG byte for byte, and is not meant to
-be: matplotlib writes every glyph as a path and attaches its own metadata,
-while fplotlib writes `<text>` and leaves the glyphs to the viewer.
+The references are made with matplotlib set to the same Lato files fplotlib's
+glyphs come from. What is left is mostly antialiasing along edges, and text:
+fplotlib fills the outlines unhinted where matplotlib hints them through
+FreeType, so a stem lands on the same pixel column as matplotlib's but not
+always with the same coverage. The SVG is not matplotlib's SVG byte for byte,
+and is not meant to be: both write every glyph as a path, but matplotlib
+attaches its own ids and metadata.
+
+Math is the exception: matplotlib's mathtext is its own approximation of TeX,
+and fplotlib follows TeX itself, so the formulas are checked against XeTeX
+instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
+unicode-math and the same font files) puts every glyph and rule of 83
+formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
+The automatic delimiters, which TeX does not have, are checked against
+Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,
+nothing installed system-wide:
+
+```
+pixi exec --spec tectonic --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_math_refs.py
+pixi exec --spec typst --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_delim_refs.py
+```

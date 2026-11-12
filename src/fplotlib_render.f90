@@ -42,7 +42,9 @@
 !                 PDF a form XObject, EPS a defined procedure, PNG a cached
 !                 sprite. Matplotlib emits 3330 <use> elements across our
 !                 reference figures, so this is where scatter plots are won
-!   draw_text     see the note on text below
+!   draw_glyphs   text, as glyphs already laid out: PNG fills them, SVG
+!                 defines each glyph once and places it with <use>, PDF and
+!                 EPS embed a Type 3 font built from the same outlines
 !   draw_image    a raster block, for imshow
 !
 ! Anything a backend would only ever implement one way is not a primitive, and
@@ -67,7 +69,7 @@ module fplotlib_render
     implicit none
     private
 
-    public :: renderer_t, paint_t, font_t, clip_t
+    public :: renderer_t, paint_t, font_t, clip_t, glyphrun_t
     public :: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     public :: CAP_BUTT, CAP_ROUND, CAP_SQUARE
     public :: JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
@@ -94,9 +96,9 @@ module fplotlib_render
     integer, parameter :: BASE_ALPHABETIC = 0, BASE_MIDDLE = 1
     integer, parameter :: BASE_TOP = 2, BASE_BOTTOM = 3
 
-    ! A closed set, not a font name string. PDF has to map these onto embedded
-    ! or core fonts and PNG onto compiled-in glyph outlines, and neither can
-    ! honour an arbitrary family the user invents.
+    ! A closed set, not a font name string. Every backend draws from the
+    ! compiled-in outlines, which are one sans family, so the family is
+    ! carried for the caller's sake and draws the same whatever it says.
     integer, parameter :: FAMILY_SANS = 0, FAMILY_SERIF = 1, FAMILY_MONO = 2
     integer, parameter :: WEIGHT_NORMAL = 0, WEIGHT_BOLD = 1
     integer, parameter :: SLANT_ROMAN = 0, SLANT_ITALIC = 1
@@ -147,6 +149,20 @@ module fplotlib_render
         integer :: slant = SLANT_ROMAN
     end type font_t
 
+    ! Text, laid out. Glyph i is gid(i) of fplotlib_glyphs at font size
+    ! size(i), its origin (x(i), y(i)) points from the run's origin along
+    ! the text direction, y down. The layout -- which glyph, kerning,
+    ! scripts and fractions -- is the front end's, done once for every
+    ! backend, so the four cannot disagree about where a glyph goes.
+    ! text is the string the run was made from, for a backend that can
+    ! keep it searchable.
+    type :: glyphrun_t
+        integer :: n = 0
+        integer, allocatable :: gid(:)
+        real(dp), allocatable :: x(:), y(:), size(:)
+        character(len=:), allocatable :: text
+    end type glyphrun_t
+
     type, abstract :: renderer_t
         real(dp) :: width = 0.0_dp    ! canvas size in points
         real(dp) :: height = 0.0_dp
@@ -163,7 +179,7 @@ module fplotlib_render
         procedure(draw_rect_i), deferred :: draw_rect
         procedure(draw_circle_i), deferred :: draw_circle
         procedure(draw_markers_i), deferred :: draw_markers
-        procedure(draw_text_i), deferred :: draw_text
+        procedure(draw_glyphs_i), deferred :: draw_glyphs
         procedure(draw_image_i), deferred :: draw_image
 
         ! Structure. Concrete, and doing nothing is a correct implementation
@@ -247,20 +263,20 @@ module fplotlib_render
             type(paint_t), intent(in) :: paint
         end subroutine draw_markers_i
 
-        ! Text stays text. The string, not an outline, is handed to the
-        ! backend so that SVG and PDF can keep it selectable and searchable;
-        ! only PNG is obliged to turn it into glyphs. angle is degrees
-        ! clockwise about (x, y).
-        subroutine draw_text_i(self, x, y, s, font, paint, anchor, baseline, angle)
-            import :: renderer_t, paint_t, font_t, dp
+        ! Glyphs placed along a line through (x, y), turned angle degrees
+        ! clockwise about that point, and filled with the paint's fill.
+        ! Every backend draws the same outlines: there is no font for a
+        ! viewer to substitute, so the four formats cannot disagree about
+        ! what the text looks like. PDF and EPS still keep it text, through
+        ! a font embedded from the outlines with a map back to Unicode.
+        subroutine draw_glyphs_i(self, x, y, run, paint, angle)
+            import :: renderer_t, glyphrun_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y
-            character(len=*), intent(in) :: s
-            type(font_t), intent(in) :: font
+            type(glyphrun_t), intent(in) :: run
             type(paint_t), intent(in) :: paint
-            integer, intent(in) :: anchor, baseline
             real(dp), intent(in) :: angle
-        end subroutine draw_text_i
+        end subroutine draw_glyphs_i
 
         ! An RGBA raster placed in the rectangle (x, y, w, h), row major from
         ! the top left. Used by imshow; PNG blits it, the vector backends

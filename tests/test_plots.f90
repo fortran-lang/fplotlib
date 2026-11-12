@@ -1,8 +1,9 @@
 program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
+    use test_mathref, only: math_ref_check, delim_ref_check, face_check
     implicit none
-    integer :: fig1
+    integer :: fig1, nmath, ndelim, nface
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -837,6 +838,13 @@ program test_plots
     call matshow(mz)
     call save_all("matshow")
 
+! 69b) a titled matrix: with the x axis on top, the title goes above its
+! tick labels
+    call clf()
+    call matshow(mz)
+    call title("matshow with a title")
+    call save_all("matshow_title")
+
     call figure()
     call spy(reshape([1.0_dp, 0.0_dp, 0.0_dp, 2.0_dp, 0.0_dp, 3.0_dp], [2, 3]))
     call save_all("spy_dense")
@@ -1560,9 +1568,18 @@ program test_plots
 
     print *, "All test plots written."
 
+    ! The math layout against XeTeX's; see test_mathref.f90.
+    call math_ref_check("tests/math_refs.txt", nmath)
+    ! The automatic delimiters against Typst's.
+    call delim_ref_check("tests/delim_refs.txt", ndelim)
+    call face_check(nface)
+
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
+    if (nmath > 0) error stop "math layout differs from XeTeX"
+    if (ndelim > 0) error stop "automatic delimiters differ from Typst"
+    if (nface > 0) error stop "text around math lost its face"
 
 contains
 
