@@ -42,7 +42,7 @@ module fplotlib_typeset
 
     public :: ts_reset, ts_set_page, ts_set_font
     public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break
-    public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_display, ts_in_par
+    public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_in_par
     public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule
     public :: ts_page_break, ts_mark, ts_nobreak_next, ts_set_clubpenalty
     public :: ts_vkeep, ts_set_colors, ts_hsize, ts_font_size, ts_strut, ts_set_parskip
@@ -509,18 +509,33 @@ contains
         HEXPL(HN) = .true.
     end subroutine ts_kern
 
-    ! An inline formula, set in text style as one box.
-    subroutine ts_math(src, size, color)
+    ! A formula: inline, in text style as one box of the paragraph, or,
+    ! with display, displayed (TeX's $$...$$, below) with the number tag.
+    ! The layout of the formula itself is the same, math_formula's; only
+    ! its style and where it goes differ.
+    subroutine ts_math(src, size, color, display, tag)
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         integer, intent(in), optional :: color
+        logical, intent(in), optional :: display
+        character(len=*), intent(in), optional :: tag
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         real(dp) :: w, h, d
         integer :: col
-        if (.not. IN_PAR) call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp)
         col = TEXT_COLOR
         if (present(color)) col = color
+        if (present(display)) then
+            if (display) then
+                if (present(tag)) then
+                    call set_display(src, size, tag, col)
+                else
+                    call set_display(src, size, "", col)
+                end if
+                return
+            end if
+        end if
+        if (.not. IN_PAR) call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp)
         call math_formula(src, size, .false., run, rules, w, h, d)
         call h_new(HK_BOX)
         HW(HN) = w
@@ -1569,22 +1584,20 @@ contains
     ! between \abovedisplayskip and \belowdisplayskip (or the short ones
     ! when the line before ends well before it), with its number, tag, at
     ! the right margin, and the paragraph goes on after it, not indented.
-    subroutine ts_display(src, size, tag, color)
+    subroutine set_display(src, size, tag, col)
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         character(len=*), intent(in) :: tag
-        integer, intent(in), optional :: color
+        integer, intent(in) :: col
         type(glyphrun_t) :: run, trun
         type(mrules_t) :: rules
         real(dp) :: w, h, d, z, e, dd, pre, s, f, x0, tw, ts_
-        integer :: col, k, al, i0, i1, g, gf, prev, pg
+        integer :: k, al, i0, i1, g, gf, prev, pg
         integer, allocatable :: cps(:)
         logical :: inpar
         type(ts_glue_t) :: g1, g2
         real(dp) :: lft, rgt, hg
 
-        col = TEXT_COLOR
-        if (present(color)) col = color
         f = size/10.0_dp
         inpar = IN_PAR .and. HN > 0
         al = P_ALIGN
@@ -1666,7 +1679,7 @@ contains
         ! The paragraph resumes, unindented, if anything follows.
         call ts_begin_par(al, 0.0_dp, lft, rgt, P_SIZE, hg, skip=.false.)
         P_PREV_GRAF = pg + 3
-    end subroutine ts_display
+    end subroutine set_display
 
     ! TeX's \predisplaysize: where the last line's text ends, from the
     ! left margin, plus two ems.
