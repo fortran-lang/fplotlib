@@ -25,6 +25,10 @@ module fplotlib
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use fplotlib_markdown, only: md_typeset
+    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
+    use fplotlib_document, only: save_document
     implicit none
     private
 
@@ -80,6 +84,7 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
+    public :: typeset
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -228,6 +233,11 @@ module fplotlib
     interface violinplot
         module procedure violinplot_one, violinplot_many
     end interface violinplot
+
+    ! A document: Markdown with TeX math, set by TeX's rules into pages.
+    interface typeset
+        module procedure typeset_text, typeset_lines
+    end interface typeset
 
     interface subplots
         module procedure subplots_grid, subplots_row, subplots_one
@@ -7504,6 +7514,81 @@ contains
         end if
         call save_bytes("savefig", filename, data, status)
     end subroutine savefig
+
+    ! ------------------------------------------------------------------
+    ! Documents. typeset sets a Markdown document (see fplotlib_markdown)
+    ! into pages with TeX's paragraph and page layout (fplotlib_typeset)
+    ! and writes them as save_document does: a PDF holds every page; an
+    ! SVG, PNG or EPS file holds one, so a document of several pages is
+    ! written as name-1.svg, name-2.svg, ... A PNG is 150 dpi unless dpi is
+    ! given. As for savefig, a file that cannot be written is returned in
+    ! status when the caller passes one, and otherwise stops the program
+    ! with exit code 2. The figures are not touched.
+    ! ------------------------------------------------------------------
+
+    subroutine typeset_text(text, filename, dpi, status)
+        character(len=*), intent(in) :: text, filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        call md_typeset(text)
+        call write_pages(filename, dpi, status)
+    end subroutine typeset_text
+
+    ! The document as an array of lines, which is how a Fortran program
+    ! most easily spells one; trailing blanks are dropped, so a hard line
+    ! break is a backslash at the end of a line.
+    subroutine typeset_lines(lines, filename, dpi, status)
+        character(len=*), intent(in) :: lines(:), filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: text
+        integer :: k
+        text = ""
+        do k = 1, size(lines)
+            text = text//trim(lines(k))//new_line("a")
+        end do
+        call typeset_text(text, filename, dpi, status)
+    end subroutine typeset_lines
+
+    ! The pages set last, each recorded into a frame of the paper's size
+    ! and colour, written as a paged document. A document with no pages
+    ! is written as one blank page.
+    subroutine write_pages(filename, dpi, status)
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        type(paged_document_t) :: document
+        type(recording_renderer_t) :: recorder
+        type(frame_t) :: page
+        type(status_t) :: local
+        real(dp) :: w, h, res
+        integer :: p, col, bg(3)
+
+        select case (file_ext(filename))
+        case ("svg", "pdf", "eps", "png")
+        case default
+            call contract_error("typeset: supported formats are .svg, .pdf, .eps and .png, not ." &
+                                //file_ext(filename))
+        end select
+        res = 150.0_dp
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("typeset: dpi must be finite and positive")
+            res = dpi
+        end if
+        call ts_page_size(w, h, col)
+        bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
+        do p = 1, max(1, ts_page_count())
+            call recorder%open_canvas(w, h, bg_rgb=bg)
+            if (p <= ts_page_count()) call ts_page_draw(recorder, p)
+            call recorder%close_canvas()
+            call recorder%take(page)
+            call document%add_page(page)
+        end do
+        call save_document(document, filename, local, res)
+        if (present(status)) status = local
+        if (.not. local%ok()) call fail_run("typeset", local%code, trim(local%message), status)
+    end subroutine write_pages
 
     ! A failure a correct program can meet at run time: returned in status
     ! when the caller passed one, and otherwise the end of the program, with
