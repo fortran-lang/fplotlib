@@ -1462,22 +1462,28 @@ contains
     end function joins_hyphen
 
     ! The code points of a chain, with the hyphen when it has one.
-    function chain_cps(k, k1, hy) result(c)
+    subroutine chain_cps(k, k1, hy, c)
         integer, intent(in) :: k, k1
         logical, intent(in) :: hy
-        integer, allocatable :: c(:)
+        integer, allocatable, intent(out) :: c(:)
+        integer :: n
+        n = HC1(k1) - HC0(k) + 1
         if (hy) then
-            c = [CPA(HC0(k):HC1(k1)), 45]
+            allocate (c(n + 1))
+            c(n + 1) = 45
         else
-            c = CPA(HC0(k):HC1(k1))
+            allocate (c(n))
         end if
-    end function chain_cps
+        c(1:n) = CPA(HC0(k):HC1(k1))
+    end subroutine chain_cps
 
     subroutine chain_size(k, k1, hy, w, h, d)
         integer, intent(in) :: k, k1
         logical, intent(in) :: hy
         real(dp), intent(out) :: w, h, d
-        call shape(chain_cps(k, k1, hy), HFACE(k), HSZ(k), w, h, d)
+        integer, allocatable :: c(:)
+        call chain_cps(k, k1, hy, c)
+        call shape(c, HFACE(k), HSZ(k), w, h, d)
     end subroutine chain_size
 
     subroutine emit_chain(k, k1, hy, x0, w)
@@ -1488,7 +1494,7 @@ contains
         integer, allocatable :: c(:)
         integer :: j, g, gf, prev, pf
         real(dp) :: x, s
-        c = chain_cps(k, k1, hy)
+        call chain_cps(k, k1, hy, c)
         s = HSZ(k)
         x = x0
         prev = 0
