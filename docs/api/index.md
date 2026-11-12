@@ -17,6 +17,8 @@ fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_hyph
+fplotlib_hyph_data
 fplotlib_mathsym
 fplotlib_mathtext
 fplotlib_png
