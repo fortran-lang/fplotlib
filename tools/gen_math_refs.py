@@ -12,11 +12,14 @@ tests/test_mathref.f90 to compare fplotlib's layout with.
         --spec python=3.12 -- python tools/gen_math_refs.py
 
 The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
---fonts DIR).
+--fonts DIR), with Lete Sans Math cut down by reduced_math_font() to the
+script alternates and size variants fplotlib stores, so that XeTeX chooses
+among the same glyphs.
 """
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,7 +30,7 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTChar, LTCurve, LTLine, LTRect
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_glyphs import font_file  # noqa: E402
+from gen_glyphs import font_file, reduced_math_font  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "math_refs.txt"
@@ -144,7 +147,7 @@ PREAMBLE = r"""\documentclass{article}
 \usepackage{fontspec}
 \usepackage{unicode-math}
 \setmainfont{Lato}[Path=FONTS/, Extension=.ttf, UprightFont=*-Regular,
-  ItalicFont=*-Italic, BoldFont=*-Bold, BoldItalicFont=*-BoldItalic]
+  ItalicFont=*-Italic, BoldFont=*-Bold]
 \setmathfont{LeteSansMath.otf}[Path=FONTS/, CharacterVariant=11]
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
@@ -213,12 +216,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
     args = ap.parse_args()
-    fonts = font_file("LeteSansMath.otf", args.fonts).parent
-    for f in ("Lato-Regular.ttf", "Lato-Italic.ttf", "Lato-Bold.ttf",
-              "Lato-BoldItalic.ttf"):
-        font_file(f, args.fonts)
-
     with tempfile.TemporaryDirectory() as tmp:
+        # XeTeX gets Lete Sans Math cut down to what fplotlib stores of it.
+        fonts = Path(tmp) / "fonts"
+        fonts.mkdir()
+        for f in ("Lato-Regular.ttf", "Lato-Italic.ttf", "Lato-Bold.ttf"):
+            shutil.copy(font_file(f, args.fonts), fonts / f)
+        reduced_math_font(font_file("LeteSansMath.otf", args.fonts)).save(
+            fonts / "LeteSansMath.otf")
         tex = Path(tmp) / "refs.tex"
         mc = TTFont(fonts / "LeteSansMath.otf")["MATH"].table.MathConstants
         pre = (PREAMBLE.replace("FONTS", str(fonts))

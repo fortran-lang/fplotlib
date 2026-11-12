@@ -604,6 +604,24 @@ contains
                 end select
             case default
                 call utf8_next(s, i, code, nb)
+                if (code == 8731 .or. code == 8732) then
+                    ! The cube and fourth roots are \sqrt[3] and \sqrt[4] of
+                    ! what follows them.
+                    n = i + nb
+                    do while (n <= len(s))
+                        if (s(n:n) /= " ") exit
+                        n = n + 1
+                    end do
+                    call unit_end(s, n, j)
+                    k = new_noad(K_RAD, CL_ORD)
+                    NOADS(k)%b = char_noad(merge(iachar("3"), iachar("4"), code == 8731), &
+                                           ALPH_MATH)
+                    NOADS(k)%a = parse_arg(s(n:j), alph)
+                    call append(head, tail, k)
+                    cur = k
+                    i = j + 1
+                    cycle
+                end if
                 k = char_noad(code, alph)
                 call append(head, tail, k)
                 cur = k
@@ -895,9 +913,21 @@ contains
         case ("lbrack"); code = iachar("[")
         case ("rbrack"); code = iachar("]")
         case default
-            call sym_lookup(name, code, cls)
+            call math_sym(name, code, cls)
         end select
     end function delim_code
+
+    ! A symbol by name, as fplotlib_mathsym knows it, provided the math
+    ! font has its glyph; code is 0 otherwise, and the name is spelled out
+    ! like any other unknown command.
+    subroutine math_sym(name, code, cls)
+        character(len=*), intent(in) :: name
+        integer, intent(out) :: code, cls
+        call sym_lookup(name, code, cls)
+        if (code > 0) then
+            if (glyph_cmap(FACE_MATH, math_alphabet(code, ALPH_MATH)) == 0) code = 0
+        end if
+    end subroutine math_sym
 
     ! One command, as a noad; 0 when it makes nothing.
     recursive function parse_command(s, alph) result(k)
@@ -1028,7 +1058,7 @@ contains
                 NOADS(k)%a = parse_list(s(a0:a1), alph)
                 return
             end if
-            call sym_lookup(trim(name), code, cls)
+            call math_sym(trim(name), code, cls)
             if (code > 0) then
                 k = char_noad(code, alph, cls)
                 return

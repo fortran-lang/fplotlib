@@ -2,7 +2,7 @@
 
 Every backend draws text from outlines compiled into the library, so the
 outlines, metrics and kerning of the fonts fplotlib uses have to be part of
-it. Text is set in Lato (regular, bold, italic, bold italic) and math in
+it. Text is set in Lato (regular, bold, italic) and math in
 Lete Sans Math, whose OpenType MATH table drives the math layout.
 
 The fonts are pinned to exact commits and checked against their SHA-256
@@ -35,6 +35,11 @@ What is stored is each font's own representation, in integer font units:
     Three GSUB features are baked in: cv11 (the single-story g) goes into
     the cmap, and ssty (script-size alternates) and dtls (dotless forms)
     become tables the layout looks glyphs up in.
+
+Not all of each font is kept: see the repertoires below, SSTY_KEPT and
+MAX_VARIANT. tools/gen_math_refs.py and tools/gen_delim_refs.py typeset
+their references with reduced_math_font(), Lete Sans Math cut down to the
+same data, so that XeTeX and Typst lay out exactly what fplotlib can.
 
 Every point is a delta from the one before it, coded as a magnitude class
 through a prefix code plus the raw bits under the leading one, which is
@@ -77,14 +82,14 @@ SOURCES = {
     "LICENSE.txt": (LETE_URL, "9fe21cbbea717de5a24d757c1564e1f2fde6d8d8cbd975a4f327886b68ed5895"),
 }
 
-# The faces, in the order the library numbers them: regular, bold, italic,
-# bold italic. Each predicts its advance widths from the face named, which
-# is the same letter drawn another way and usually of a similar width.
+# The faces, in the order the library numbers them: regular, bold, italic.
+# Each predicts its advance widths from the face named, which is the same
+# letter drawn another way and usually of a similar width. Bold italic is
+# left out: a label asking for it is set in bold.
 TEXT_FACES = [
     ("Lato-Regular.ttf", None),
     ("Lato-Bold.ttf", 0),
     ("Lato-Italic.ttf", 0),
-    ("Lato-BoldItalic.ttf", 2),
 ]
 # The math face comes after them.
 MATH_FACE = "LeteSansMath.otf"
@@ -95,11 +100,12 @@ def _r(a, b):
 
 
 # The text repertoire: every European script except Cyrillic, without
-# polytonic Greek, and the symbols labels are written with.
+# polytonic Greek, and the symbols labels are written with. Left out of
+# Latin Extended-B are the single-character Croatian digraphs (written as
+# two letters in practice), the Sami letters and the accented Å, Æ and Ø.
 TEXT_REPERTOIRE = (
     _r(0x20, 0x7E) | _r(0xA0, 0xFF) | _r(0x100, 0x17F)
-    | _r(0x1C4, 0x1CC) | _r(0x1E6, 0x1E9) | _r(0x1EE, 0x1EF) | {0x1B7, 0x292}
-    | _r(0x1FA, 0x1FF) | _r(0x218, 0x21B)
+    | _r(0x218, 0x21B)
     | _r(0x1E80, 0x1E85) | _r(0x1EF2, 0x1EF3) | {0x1E9E}
     | _r(0x384, 0x38A) | {0x38C} | _r(0x38E, 0x3A1) | _r(0x3A3, 0x3CE)
     | {0x3D0, 0x3D1, 0x3D5, 0x3D6, 0x3F0, 0x3F1, 0x3F5}
@@ -140,14 +146,11 @@ MATH_REPERTOIRE = (
     | _r(0x300, 0x308) | {0x30A, 0x30C, 0x20D6, 0x20D7}
     # binary operators
     | {0x2212, 0x2213, 0x2216, 0x2217, 0x2218, 0x2219, 0x22C5, 0x22C6, 0x2229,
-       0x222A, 0x2227, 0x2228, 0x228E, 0x2293, 0x2294, 0x2020, 0x2021,
-       0x22C4, 0x25E6, 0x2022} | _r(0x2295, 0x2299)
+       0x222A, 0x2227, 0x2228, 0x2020, 0x2022, 0x2295, 0x2297, 0x2299}
     # relations
     | {0x2208, 0x2209, 0x220B, 0x2264, 0x2265, 0x2260, 0x2248, 0x223C,
-       0x2243, 0x2245, 0x2261, 0x221D, 0x226A, 0x226B, 0x227A, 0x227B,
-       0x2AAF, 0x2AB0, 0x2A7D, 0x2A7E, 0x2272, 0x2273, 0x2250, 0x2254,
-       0x224D, 0x2236, 0x2237, 0x22A2, 0x22A3, 0x22A4, 0x22A5, 0x2223,
-       0x2224, 0x2225, 0x2226, 0x225C, 0x2234, 0x2235, 0x2266, 0x2267}
+       0x2243, 0x2245, 0x2261, 0x221D, 0x226A, 0x226B, 0x2A7D, 0x2A7E,
+       0x2272, 0x2273, 0x2254, 0x22A4, 0x22A5, 0x2223, 0x2224, 0x2225, 0x2226}
     | _r(0x2282, 0x2287)
     # arrows
     | _r(0x2190, 0x2199) | {0x21A6} | _r(0x21D0, 0x21D5) | _r(0x27F5, 0x27FA)
@@ -155,14 +158,40 @@ MATH_REPERTOIRE = (
     # ordinary symbols
     | {0x221E, 0x2202, 0x2207, 0x2205, 0x2200, 0x2203, 0x2204, 0x210F,
        0x2113, 0x211C, 0x2111, 0x2135, 0x2032, 0x2033, 0x2034, 0x2026,
-       0x22EF, 0x22EE, 0x22F1, 0x2220, 0x25B3, 0x25BD}
+       0x22EF, 0x22EE, 0x22F1, 0x2220, 0x25B3}
     # big operators
-    | {0x2211, 0x220F, 0x2210, 0x222B, 0x222C, 0x222D, 0x222E, 0x22C0,
-       0x22C1, 0x22C2, 0x22C3, 0x2A00, 0x2A01, 0x2A02, 0x2A04, 0x2A06}
+    | {0x2211, 0x220F, 0x222B, 0x222C, 0x222E, 0x22C2, 0x22C3, 0x2A01, 0x2A02}
     # delimiters and radicals
-    | {0x2016, 0x27E8, 0x27E9, 0x2308, 0x2309, 0x230A, 0x230B,
-       0x221A, 0x221B, 0x221C}
+    | {0x2016, 0x27E8, 0x27E9, 0x2308, 0x2309, 0x230A, 0x230B, 0x221A}
 )
+
+# Left out of the math repertoire as too rare in plot labels to pay for:
+# the operators and relations of logic and order theory (⊎ ⊓ ⊔ ⊖ ⊘ ⋆ ‡ ⋄ ◦
+# ≺ ≻ ⪯ ⪰ ⊢ ⊣ ≍ ≜ ≐ ∴ ∵ ∶ ∷ ≦ ≧ ▽), the big operators ∐ ∭ ⋀ ⋁ ⨀ ⨄ ⨆,
+# and the radicals ∛ ∜, which mathtext sets as \sqrt[3] and \sqrt[4].
+
+
+def ssty_kept(cp):
+    r"""Whether the glyph of a code point keeps its script-size alternate.
+
+    Only letters, digits and primes do, in the alphabets that are written
+    in scripts: math italic Latin and Greek, upright Latin and Greek, and
+    the digits. Each keeps its first (script) alternate only; scriptscript
+    uses it too. Symbols, and \mathbf, \mathsf, \mathbb and \mathcal
+    letters, are scaled down from their full-size glyphs instead.
+    """
+    return (0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A
+            or 0x391 <= cp <= 0x3A9 or 0x3B1 <= cp <= 0x3C9
+            or cp in (0x3D1, 0x3D5, 0x3D6, 0x3F0, 0x3F1, 0x3F5)
+            or 0x1D434 <= cp <= 0x1D467 or cp == 0x210E
+            or 0x1D6E2 <= cp <= 0x1D71B
+            or cp in (0x131, 0x237, 0x1D6A4, 0x1D6A5, 0x2032, 0x2033, 0x2034))
+
+
+# A vertical size variant taller than this, in ems, is left out when the
+# glyph has an assembly, which is then built instead; a glyph without an
+# assembly keeps all its variants.
+MAX_VARIANT = 3.0
 
 # The MATH constants, in the order the OpenType specification lists them.
 MATH_CONSTANTS = [
@@ -512,13 +541,16 @@ def load_math_face(path):
     math = font["MATH"].table
     mv = math.MathVariants
 
-    def constructions(cov, cons):
+    def constructions(cov, cons, cap):
         out = {}
         if cov is None:
             return out
         for g, c in zip(cov.glyphs, cons):
             recs = c.MathGlyphVariantRecord or []
             keep = [(r.VariantGlyph, r.AdvanceMeasurement) for r in recs]
+            if cap is not None and c.GlyphAssembly is not None:
+                keep = [v for k, v in enumerate(keep)
+                        if k == 0 or v[1] <= cap * font["head"].unitsPerEm]
             asm = None
             if c.GlyphAssembly is not None:
                 a = c.GlyphAssembly
@@ -528,8 +560,8 @@ def load_math_face(path):
             out[g] = (keep, asm)
         return out
 
-    vert_all = constructions(mv.VertGlyphCoverage, mv.VertGlyphConstruction)
-    horiz_all = constructions(mv.HorizGlyphCoverage, mv.HorizGlyphConstruction)
+    vert_all = constructions(mv.VertGlyphCoverage, mv.VertGlyphConstruction, MAX_VARIANT)
+    horiz_all = constructions(mv.HorizGlyphCoverage, mv.HorizGlyphConstruction, None)
 
     extra = set()
     for g in list(order):
@@ -542,13 +574,16 @@ def load_math_face(path):
                 extra.update(v for v, _ in var)
                 if asm:
                     extra.update(p[0] for p in asm[1])
-    # Every glyph the cmap reaches that has script-size alternates brings
-    # them along: letters, digits and primes, and the operators and
-    # punctuation a script is written with too.
-    for g in sorted(set(order) | {dtls[g] for g in order if g in dtls}):
+    # The letters, digits and primes ssty_kept names bring their script
+    # alternate along, and so do their dotless forms.
+    scripted = {face.cmap[cp] for cp in face.cmap if ssty_kept(cp)}
+    scripted |= {dtls[g] for g in scripted if g in dtls}
+    face_ssty = {}
+    for g in sorted(scripted):
         alts = ssty.get(g)
         if alts:
-            extra.update(alts[:2])
+            face_ssty[g] = alts[0]
+            extra.add(alts[0])
     extra -= set(order)
     names = order + sorted(extra, key=gid_of)
 
@@ -597,8 +632,7 @@ def load_math_face(path):
         "kern": kerns,
         "vert": {g: c for g, c in vert_all.items() if g in present},
         "horiz": {g: c for g, c in horiz_all.items() if g in present},
-        "ssty": {g: alts[:2] for g, alts in ssty.items()
-                 if g in present and all(a in present for a in alts[:2])},
+        "ssty": face_ssty,
         "dtls": {a: b for a, b in dtls.items() if a in present and b in present},
         "constants": [getattr(math.MathConstants, n).Value
                       if hasattr(getattr(math.MathConstants, n), "Value")
@@ -617,6 +651,40 @@ def load_math_face(path):
         print(f"{path.name}: not in the font, left out: "
               + " ".join(f"U+{c:04X}" for c in missing))
     return face, font, glyphset
+
+
+def reduced_math_font(path):
+    """Lete Sans Math cut down to what fplotlib stores of it.
+
+    The ssty substitutions are those of the glyphs that keep a script
+    alternate, with that alternate for both script levels, and the
+    vertical size variants are those MAX_VARIANT keeps. XeTeX and Typst
+    typeset the reference formulas with this font, so that they choose
+    exactly among the glyphs fplotlib has.
+    """
+    face, font, _ = load_math_face(path)
+    keep = face.math["ssty"]
+    gsub = font["GSUB"].table
+    for fr in gsub.FeatureList.FeatureRecord:
+        if fr.FeatureTag != "ssty":
+            continue
+        for li in fr.Feature.LookupListIndex:
+            lookup = gsub.LookupList.Lookup[li]
+            for st in lookup.SubTable:
+                if lookup.LookupType == 3:
+                    st.alternates = {a: [keep[a], keep[a]]
+                                     for a in st.alternates if a in keep}
+                elif lookup.LookupType == 1:
+                    st.mapping = {a: keep[a] for a in st.mapping if a in keep}
+    mv = font["MATH"].table.MathVariants
+    vert = face.math["vert"]
+    for g, c in zip(mv.VertGlyphCoverage.glyphs, mv.VertGlyphConstruction):
+        if g in vert:
+            kept = {v for v, _ in vert[g][0]}
+            c.MathGlyphVariantRecord = [r for r in c.MathGlyphVariantRecord
+                                        if r.VariantGlyph in kept]
+            c.VariantCount = len(c.MathGlyphVariantRecord)
+    return font
 
 
 # --- outlines as the decoder walks them ------------------------------
@@ -1085,7 +1153,7 @@ def math_tables(face):
                           None if asm is None else
                           (asm[0], [(ix[p[0]],) + tuple(p[1:]) for p in asm[1]])))
         cons.append(table)
-    ssty = sorted((ix[a], ix[b[0]], ix[b[1]]) for a, b in m["ssty"].items())
+    ssty = sorted((ix[a], ix[b]) for a, b in m["ssty"].items())
     dtls = sorted((ix[a], ix[b]) for a, b in m["dtls"].items())
     return per, cons, ssty, dtls
 
@@ -1134,10 +1202,9 @@ def encode_math(w, face, lbits):
                     w.delta(full)
                     w.bit(ext)
     w.gamma(len(ssty) + 1)
-    for a, b, c in ssty:
+    for a, b in ssty:
         w.raw(a, lbits)
         w.raw(b, lbits)
-        w.raw(c, lbits)
     w.gamma(len(dtls) + 1)
     for a, b in dtls:
         w.raw(a, lbits)
@@ -1186,7 +1253,7 @@ def decode_math(r, glyphs, lbits):
                 asm = (ital, parts)
             table.append((g, var, asm))
         cons.append(table)
-    ssty = [(r.raw(lbits), r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
+    ssty = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
     dtls = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
     return per, cons, ssty, dtls
 

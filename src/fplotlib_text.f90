@@ -15,13 +15,14 @@
 !   * consecutive glyphs are spaced by their advance widths and the face's
 !     pair kerning.
 !
-! The faces are Lato: regular, bold, italic and bold italic.
+! The faces are Lato: regular, bold and italic; bold italic is set in
+! bold.
 module fplotlib_text
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC, FACE_BOLD_ITALIC
+                               FACE_ITALIC
     implicit none
     private
 
@@ -36,9 +37,8 @@ contains
         logical :: b, i
         b = weight == WEIGHT_BOLD
         i = slant == SLANT_ITALIC
-        if (b .and. i) then
-            face = FACE_BOLD_ITALIC
-        else if (b) then
+        ! There is no bold italic face; bold is the closer of the two.
+        if (b) then
             face = FACE_BOLD
         else if (i) then
             face = FACE_ITALIC

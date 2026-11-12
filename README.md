@@ -196,7 +196,8 @@ call suptitle("figure title")
   `$f(x)$` keeps its plain parentheses; unmatched ones (`$[0, 1)$`),
   escaped ones (`\(`, `\[`) and ones in braces (`{(}`) stay plain.
   `tests/delim_refs.txt` holds the sizes Typst chooses for 30 formulas
-- Text is UTF-8 and set in Lato (regular, bold, italic, bold italic), with
+- Text is UTF-8 and set in Lato (regular, bold and italic; bold italic is
+  set in bold), with
   its kerning, in every European script except Cyrillic. The outlines are
   compiled in, so every format draws the same glyphs: PNG fills them, SVG
   defines each once and `<use>`s it, and PDF and EPS embed them as Type 3
@@ -355,8 +356,7 @@ OFL is permissive: a program built with fplotlib ships the
 OFL notice alongside the MIT one, and the plots fplotlib produces carry no
 obligations. Because "Lato" is a Reserved Font Name, the fonts fplotlib
 embeds in PDF and EPS files have names of their own: `FplotlibSans-Regular`,
-`FplotlibSans-Bold`, `FplotlibSans-Italic`, `FplotlibSans-BoldItalic` and
-`FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
+`FplotlibSans-Bold`, `FplotlibSans-Italic` and `FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
 files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.

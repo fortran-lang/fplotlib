@@ -15,15 +15,15 @@
 !
 ! The fonts get neutral names: the outlines are derived from Lato and Lete
 ! Sans Math, whose licences reserve the name Lato, so the files call them
-! FplotlibSans-Regular, FplotlibSans-Bold, FplotlibSans-Italic,
-! FplotlibSans-BoldItalic and FplotlibMath.
+! FplotlibSans-Regular, FplotlibSans-Bold, FplotlibSans-Italic and
+! FplotlibMath.
 module fplotlib_type3
     use fplotlib_style, only: dp
     use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                             builder_get, fmt_num
     use fplotlib_glyphs, only: NGLYPH, NFACE, glyph_face, glyph_adv, glyph_bbox, &
-                               glyph_outline, glyph_char
+                               glyph_outline, glyph_char, FACE_MATH
     implicit none
     private
 
@@ -113,8 +113,7 @@ contains
         select case (t%face(font))
         case (2); name = "FplotlibSans-Bold"
         case (3); name = "FplotlibSans-Italic"
-        case (4); name = "FplotlibSans-BoldItalic"
-        case (5); name = "FplotlibMath"
+        case (FACE_MATH); name = "FplotlibMath"
         case default; name = "FplotlibSans-Regular"
         end select
         k = 0

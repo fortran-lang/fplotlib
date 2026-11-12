@@ -2,13 +2,14 @@
 ! ====================
 !
 ! The two fonts fplotlib draws with, and a sample of what they cover.
-! Text is Lato, in four faces: regular, bold, italic and bold italic,
-! chosen with ``fontweight=`` and ``fontstyle=``. Math is Lete Sans Math,
-! a sans-serif math font drawn to match Lato. Both are compiled into the
-! library, so every format draws the same glyphs: PNG fills the outlines,
-! SVG defines each glyph once and reuses it, and PDF and EPS embed them as
-! fonts that keep the text selectable. Nothing depends on the fonts
-! installed on the machine that draws or views the figure.
+! Text is Lato, in three faces: regular, bold and italic, chosen with
+! ``fontweight=`` and ``fontstyle=`` (a label asking for both is set in
+! bold). Math is Lete Sans Math, a sans-serif math font drawn to match
+! Lato. Both are compiled into the library, so every format draws the
+! same glyphs: PNG fills the outlines, SVG defines each glyph once and
+! reuses it, and PDF and EPS embed them as fonts that keep the text
+! selectable. Nothing depends on the fonts installed on the machine that
+! draws or views the figure.
 !
 ! Strings are UTF-8, typed directly in the Fortran source. Text covers
 ! every European language written in Latin script, and modern Greek; a
@@ -31,7 +32,7 @@ program plot_fonts
     y = 1.0_dp - 0.15_dp/H
 
 ! %%
-! The four faces of Lato, and a range of sizes. A rotated label is the
+! The three faces of Lato, and a range of sizes. A rotated label is the
 ! same glyphs, turned.
 
     call heading(y, "Text: Lato")
@@ -40,8 +41,6 @@ program plot_fonts
              weight="bold")
     call row(y, "italic", "The quick brown fox jumps over the lazy dog 0123456789", &
              style="italic")
-    call row(y, "bold italic", "The quick brown fox jumps over the lazy dog 0123456789", &
-             weight="bold", style="italic")
     y = y - 0.3_dp*ROW_H/H
     call figtext(X1, y, "8 pt", fontsize=8.0_dp, va="center")
     call figtext(X1 + 0.06_dp, y, "11 pt", fontsize=11.0_dp, va="center")

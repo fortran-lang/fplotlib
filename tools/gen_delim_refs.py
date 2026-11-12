@@ -15,10 +15,13 @@ is TeX's, and is checked against XeTeX by tests/math_refs.txt.)
         --spec python=3.12 -- python tools/gen_delim_refs.py
 
 The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
---fonts DIR).
+--fonts DIR), with Lete Sans Math cut down by reduced_math_font() to the
+script alternates and size variants fplotlib stores, so that Typst chooses
+among the same glyphs.
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +31,7 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTChar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_glyphs import font_file  # noqa: E402
+from gen_glyphs import font_file, reduced_math_font  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tests" / "delim_refs.txt"
@@ -38,7 +41,9 @@ OUT = ROOT / "tests" / "delim_refs.txt"
 # middle | with mid(). Unmatched delimiters, which Typst would pair up but
 # fplotlib leaves alone, are checked against XeTeX instead. So are display
 # operators with limits: TeX pads the limits by \big_op_spacing5, which
-# Typst does not, so the two measure such an operator differently.
+# Typst does not, so the two measure such an operator differently. And so
+# are delimiters tall enough to be built from an assembly, whose parts
+# carry no text in Typst's PDF.
 FORMULAS = [
     (r"$(x)$", "(x)"),
     (r"$f(x) = (x+1)^2$", "f(x) = (x+1)^2"),
@@ -69,8 +74,6 @@ FORMULAS = [
     (r"$(\frac{a}{b} | \frac{c}{d})$", "(a/b mid(|) c/d)"),
     (r"$\{x | x > \frac{1}{2}\}$", "{x mid(|) x > 1/2}"),
     (r"$\displaystyle(\frac{\frac{a}{b}}{c})$", "display((frac(frac(a, b), c)))"),
-    (r"$\displaystyle(\frac{\frac{\frac{a}{b}}{c}}{d})$",
-     "display((frac(frac(frac(a, b), c), d)))"),
 ]
 
 # The delimiters, as the text Typst gives their glyphs.
@@ -94,10 +97,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
     args = ap.parse_args()
-    fonts = font_file("LeteSansMath.otf", args.fonts).parent
-    font_file("Lato-Regular.ttf", args.fonts)
-
     with tempfile.TemporaryDirectory() as tmp:
+        # Typst gets Lete Sans Math cut down to what fplotlib stores of it.
+        fonts = Path(tmp) / "fonts"
+        fonts.mkdir()
+        shutil.copy(font_file("Lato-Regular.ttf", args.fonts), fonts / "Lato-Regular.ttf")
+        reduced_math_font(font_file("LeteSansMath.otf", args.fonts)).save(
+            fonts / "LeteSansMath.otf")
         typ = Path(tmp) / "refs.typ"
         typ.write_text(PREAMBLE + "#pagebreak()\n".join(
             "$%s$\n" % t for _, t in FORMULAS), encoding="utf-8")

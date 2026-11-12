@@ -3,8 +3,8 @@
 ! The outlines, metrics and kerning of the fonts are compiled in, packed
 ! into one base85 string in fplotlib_glyphs_data (written by
 ! tools/gen_glyphs.py) and unpacked here the first time anything is asked
-! for. Text is Lato, in four faces: regular, bold, italic and bold italic;
-! math is Lete Sans Math, the fifth face, whose MATH table comes with it.
+! for. Text is Lato, in three faces: regular, bold and italic; math is
+! Lete Sans Math, the fourth face, whose MATH table comes with it.
 !
 ! Glyphs are numbered: a glyph id (gid) runs over all the faces, one after
 ! another, and a face's cmap takes a code point to one of its gids. A
@@ -50,8 +50,8 @@
 !     advance as a running delta) and a bit for an assembly, followed by
 !     its italic correction and parts (count, then glyph, start and end
 !     connector lengths, full advance and an extender bit); then the
-!     script-size alternates as triples of indices, and the dotless forms
-!     as pairs.
+!     script-size alternates as pairs of indices (the glyph and the one
+!     both script styles use), and the dotless forms as pairs.
 !
 ! A face is TrueType (quadratic) or CFF (cubic), FACE_CUBIC says which.
 ! A quadratic contour may start anywhere and may leave an on-curve point
@@ -80,11 +80,11 @@ module fplotlib_glyphs
     private
 
     public :: NFACE, NGLYPH
-    public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_BOLD_ITALIC, FACE_MATH
+    public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH
     public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
               glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
               glyph_ssty, glyph_dotless
-    public :: FACE_OBLIQUE, FACE_BOLD_OBLIQUE
+    public :: FACE_OBLIQUE
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
               glyph_kern, glyph_char, glyph_recompose, glyph_inked
     public :: face_ascent, face_descent, face_xheight, face_capheight
@@ -94,12 +94,10 @@ module fplotlib_glyphs
     integer, parameter :: FACE_REGULAR = 1
     integer, parameter :: FACE_BOLD = 2
     integer, parameter :: FACE_ITALIC = 3
-    integer, parameter :: FACE_BOLD_ITALIC = 4
     ! Lete Sans Math, the face with the MATH table.
-    integer, parameter :: FACE_MATH = 5
-    ! The names the faces had when the slanted ones were obliques.
+    integer, parameter :: FACE_MATH = 4
+    ! The name the italic face had when it was an oblique.
     integer, parameter :: FACE_OBLIQUE = FACE_ITALIC
-    integer, parameter :: FACE_BOLD_OBLIQUE = FACE_BOLD_ITALIC
 
     ! The text faces' metrics in their own font units, for the code point
     ! interface.
@@ -753,7 +751,7 @@ contains
         nvar_ = 0
         nasm_ = 0
         npart_ = 0
-        if (.not. FACE_HAS_MATH(FACE_MATH)) error stop "fplotlib_glyphs: the math face is not face 5"
+        if (.not. FACE_HAS_MATH(FACE_MATH)) error stop "fplotlib_glyphs: FACE_MATH is not the math face"
         do f = 1, NFACE
             base = FBASE(f)
             ng = FACE_NG(f)
@@ -924,7 +922,7 @@ contains
         do k = 1, n
             a = base + get_bits(lbits) + 1
             SSTY(1, a) = base + get_bits(lbits) + 1
-            SSTY(2, a) = base + get_bits(lbits) + 1
+            SSTY(2, a) = SSTY(1, a)
         end do
         n = get_gamma() - 1
         do k = 1, n
