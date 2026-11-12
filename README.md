@@ -187,13 +187,15 @@ call suptitle("figure title")
   `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
   `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
   Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
-  `\quad`, ...)
+  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 83 test formulas, and the layout is checked against it
 - Automatic delimiters, as Typst has them: matched `( )`, `[ ]`, `\{ \}`,
   `| |`, `\| \|`, `\langle \rangle`, `\lfloor \rfloor` and `\lceil \rceil`
   grow to fit what they enclose, so `$(\frac{a}{b})$` needs no `\left` and
   `\right`, and a `|` between them grows with them. They never shrink, so
   `$f(x)$` keeps its plain parentheses; unmatched ones (`$[0, 1)$`),
-  escaped ones (`\(`, `\[`) and ones in braces (`{(}`) stay plain
+  escaped ones (`\(`, `\[`) and ones in braces (`{(}`) stay plain.
+  `tests/delim_refs.txt` holds the sizes Typst chooses for 29 formulas
 - Text is UTF-8 and set in Lato (regular, bold and italic; bold italic is
   set in bold), with
   its kerning, in every European script except Cyrillic. The outlines are
@@ -393,3 +395,19 @@ FreeType, so a stem lands on the same pixel column as matplotlib's but not
 always with the same coverage. The SVG is not matplotlib's SVG byte for byte,
 and is not meant to be: both write every glyph as a path, but matplotlib
 attaches its own ids and metadata.
+
+Math is the exception: matplotlib's mathtext is its own approximation of TeX,
+and fplotlib follows TeX itself, so the formulas are checked against XeTeX
+instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
+unicode-math and the same font files) puts every glyph and rule of 83
+formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
+The automatic delimiters, which TeX does not have, are checked against
+Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,
+nothing installed system-wide:
+
+```
+pixi exec --spec tectonic --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_math_refs.py
+pixi exec --spec typst --spec pdfminer.six --spec fonttools \
+    --spec python=3.12 -- python tools/gen_delim_refs.py
+```
