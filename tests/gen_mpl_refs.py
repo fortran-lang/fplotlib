@@ -130,6 +130,7 @@ OUT_NAMES = [
     "hist2d",
     "hexbin",
     "matshow",
+    "matshow_title",
     "eventplot",
     "broken_barh",
     "streamplot",
@@ -891,6 +892,12 @@ def main() -> None:
     zm = np.array([[float(i * j) for j in range(1, 7)] for i in range(1, 7)])
     ax.matshow(zm)
     save(fig, "matshow")
+
+    # 69b a titled matrix: the title goes above the tick labels on top
+    fig, ax = setup_fig()
+    ax.matshow(zm)
+    ax.set_title("matshow with a title")
+    save(fig, "matshow_title")
 
     # 70 a row of events
     fig, ax = setup_fig()

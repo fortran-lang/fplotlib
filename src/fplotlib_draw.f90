@@ -389,7 +389,7 @@ contains
             y1 = max(y1, bt)
         end do
         if (len_trim(fig_suptitle) > 0) &
-            y0 = min(y0, (1.0_dp - SUPTITLE_Y) * H + 4.2_dp - fig_suptitle_size)
+            y0 = min(y0, (1.0_dp - SUPTITLE_Y) * H)
         if (x1 <= x0 .or. y1 <= y0) then
             x0 = 0.0_dp
             y0 = 0.0_dp
@@ -398,11 +398,29 @@ contains
         end if
     end subroutine drawn_bbox
 
-    function decor_top(a) result(v)
+    ! What the x tick labels take up above the axes, when the x axis is on
+    ! top (spy, matshow, twiny): the ticks, the pad and the labels.
+    pure function xtop_band(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
         v = 0.0_dp
-        if (len_trim(a%title) > 0) v = 0.5_dp*a%title_size + text_ascent(a%title_size)
+        if (.not. a%x_top .or. a%xaxis_off .or. a%xticklabels_off) return
+        v = TICK_LEN + TICK_PAD + text_ascent(a%xtick_size) + text_descent(a%xtick_size)
+    end function xtop_band
+
+    ! Distance from the top of the axes up to the title's baseline: the
+    ! title pad, above any x tick labels on top, as matplotlib places it.
+    pure function title_gap(a) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp) :: v
+        v = xtop_band(a) + 0.5_dp*a%title_size
+    end function title_gap
+
+    function decor_top(a) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp) :: v
+        v = xtop_band(a)
+        if (len_trim(a%title) > 0) v = title_gap(a) + text_ascent(a%title_size)
     end function decor_top
 
     ! Widest tick label an axes will draw, in points, measured as it will
@@ -4396,16 +4414,16 @@ contains
         if (len_trim(a%title) > 0) then
             select case (trim(a%title_loc))
             case ("left")
-                call append_text(b, ax_l, ax_t - 0.5_dp*a%title_size, &
+                call append_text(b, ax_l, ax_t - title_gap(a), &
                                  trim(a%title), "left", a%title_size, &
                                  rc_text_color, weight=a%title_w, slant=a%title_sl)
             case ("right")
-                call append_text(b, ax_r, ax_t - 0.5_dp*a%title_size, &
+                call append_text(b, ax_r, ax_t - title_gap(a), &
                                  trim(a%title), "right", a%title_size, &
                                  rc_text_color, weight=a%title_w, slant=a%title_sl)
             case default
                 call append_text(b, 0.5_dp*(ax_l + ax_r), &
-                                 ax_t - 0.5_dp*a%title_size, trim(a%title), &
+                                 ax_t - title_gap(a), trim(a%title), &
                                  "center", a%title_size, rc_text_color, &
                                  weight=a%title_w, slant=a%title_sl)
             end select
@@ -4570,7 +4588,9 @@ contains
 
         ! suptitle (figure-level, above all axes)
         if (len_trim(fig_suptitle) > 0) then
-            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H + 4.2_dp, &
+            ! matplotlib anchors the suptitle box (font ascent) at its top
+            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H &
+                             + text_ascent(fig_suptitle_size), &
                              trim(fig_suptitle), "center", fig_suptitle_size, &
                              rc_text_color, weight=fig_suptitle_w, &
                              slant=fig_suptitle_sl)

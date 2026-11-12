@@ -838,6 +838,13 @@ program test_plots
     call matshow(mz)
     call save_all("matshow")
 
+! 69b) a titled matrix: with the x axis on top, the title goes above its
+! tick labels
+    call clf()
+    call matshow(mz)
+    call title("matshow with a title")
+    call save_all("matshow_title")
+
     call figure()
     call spy(reshape([1.0_dp, 0.0_dp, 0.0_dp, 2.0_dp, 0.0_dp, 3.0_dp], [2, 3]))
     call save_all("spy_dense")
