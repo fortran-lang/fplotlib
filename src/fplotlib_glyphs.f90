@@ -28,9 +28,12 @@
 !     needs) and its offset as two deltas, or the number of contours plus
 !     one, each contour's number of points, and for every point one bit
 !     saying whether it lies on the curve and its x and y as deltas from
-!     the point before it (the first is a delta from the origin); and one
-!     bit saying whether it has ink, followed if it has by its ink box as
-!     deltas: x0, y0, x1 less the advance, y1;
+!     the point before it (the first is a delta from the origin); and, for
+!     a glyph with contours or components, its ink box: the decoder works
+!     it out (the extremes of a simple glyph's points, or the union of a
+!     composite's components' boxes), and one bit says whether the true
+!     box is smaller, followed if it is by how much at each side as
+!     deltas: left, bottom, right, top;
 !   * the cmap: the number of entries plus one, then per entry in code
 !     point order the step from the previous code point, gamma coded, and
 !     one bit when its glyph is the one after the previous entry's, else
@@ -725,6 +728,7 @@ contains
     subroutine unpack()
         integer :: f, k, j, gid, base, ng, lbits, nc, n, ip, ic, icp, ik, ikv
         integer :: guess, prev_adv, xx, yy, cp, prev, nl, nr, l, c, cnt, pf
+        integer :: shrink(4, NGLYPH)
 
         call from_base85()
         call build_code()
@@ -807,12 +811,38 @@ contains
                 OBEG(gid + 1) = ic + 1
                 PBEG(gid + 1) = ik + 1
                 GBOX(:, gid) = 0
-                if (get_bit() == 1) then
-                    GBOX(1, gid) = get_delta()
-                    GBOX(2, gid) = get_delta()
-                    GBOX(3, gid) = GADV(gid) + get_delta()
-                    GBOX(4, gid) = get_delta()
+                shrink(:, gid) = 0
+                if (nc > 0 .or. PBEG(gid + 1) > PBEG(gid)) then
+                    if (get_bit() == 1) then
+                        do j = 1, 4
+                            shrink(j, gid) = get_delta()
+                        end do
+                    end if
                 end if
+                if (nc > 0) then
+                    GBOX(1, gid) = minval(QX(CBEG(OBEG(gid)):ip))
+                    GBOX(2, gid) = minval(QY(CBEG(OBEG(gid)):ip))
+                    GBOX(3, gid) = maxval(QX(CBEG(OBEG(gid)):ip))
+                    GBOX(4, gid) = maxval(QY(CBEG(OBEG(gid)):ip))
+                    call shrink_box(gid, shrink(:, gid))
+                end if
+            end do
+            ! A composite's box is its components', which may come after it.
+            do k = 1, ng
+                gid = base + k
+                if (PBEG(gid + 1) == PBEG(gid)) cycle
+                GBOX(1, gid) = huge(1)
+                GBOX(2, gid) = huge(1)
+                GBOX(3, gid) = -huge(1)
+                GBOX(4, gid) = -huge(1)
+                do j = PBEG(gid), PBEG(gid + 1) - 1
+                    if (OBEG(PG(j) + 1) == OBEG(PG(j))) cycle
+                    GBOX(1, gid) = min(GBOX(1, gid), GBOX(1, PG(j)) + PDX(j))
+                    GBOX(2, gid) = min(GBOX(2, gid), GBOX(2, PG(j)) + PDY(j))
+                    GBOX(3, gid) = max(GBOX(3, gid), GBOX(3, PG(j)) + PDX(j))
+                    GBOX(4, gid) = max(GBOX(4, gid), GBOX(4, PG(j)) + PDY(j))
+                end do
+                call shrink_box(gid, shrink(:, gid))
             end do
 
             ! The cmap, and the code point each glyph is first reached by.
@@ -868,6 +898,15 @@ contains
         end if
         deallocate (BUF)
     end subroutine unpack
+
+    ! The true ink box of a glyph from the one worked out for it.
+    subroutine shrink_box(gid, d)
+        integer, intent(in) :: gid, d(4)
+        GBOX(1, gid) = GBOX(1, gid) + d(1)
+        GBOX(2, gid) = GBOX(2, gid) + d(2)
+        GBOX(3, gid) = GBOX(3, gid) - d(3)
+        GBOX(4, gid) = GBOX(4, gid) - d(4)
+    end subroutine shrink_box
 
     ! What face FACE_KPRED(f) kerns the first glyphs of left class l and
     ! right class r of face f by, in steps; 0 when f has no such face.

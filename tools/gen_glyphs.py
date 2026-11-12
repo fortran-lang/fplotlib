@@ -1047,6 +1047,24 @@ def best_storage(contours, cubic, delta_cost):
     return stored
 
 
+def computed_box(face, g):
+    """The ink box the decoder works out for itself: the extremes of a
+    simple glyph's points, curve and control points alike, or the union
+    of a composite's components' ink boxes, offset."""
+    if g.comps:
+        boxes = []
+        for name, dx, dy in g.comps:
+            c = face.glyphs[face.index[name]]
+            if c.ink:
+                x0, y0, x1, y1 = c.bbox
+                boxes.append((x0 + dx, y0 + dy, x1 + dx, y1 + dy))
+        return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                max(b[2] for b in boxes), max(b[3] for b in boxes))
+    xs = [x for pts, _ in g.contours for x, _ in pts]
+    ys = [y for pts, _ in g.contours for _, y in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def kern_classes(face):
     """Pair kerning as left and right classes and the non-zero cells.
 
@@ -1129,13 +1147,17 @@ def encode(faces, clen):
                         w.delta(x - px)
                         w.delta(y - py)
                         px, py = x, y
-            w.bit(1 if g.ink else 0)
-            if g.ink:
+            if g.comps or g.contours:
+                cx0, cy0, cx1, cy1 = computed_box(face, g)
                 x0, y0, x1, y1 = g.bbox
-                w.delta(x0)
-                w.delta(y0)
-                w.delta(x1 - g.adv)
-                w.delta(y1)
+                if (x0, y0, x1, y1) == (cx0, cy0, cx1, cy1):
+                    w.bit(0)
+                else:
+                    w.bit(1)
+                    w.delta(x0 - cx0)
+                    w.delta(y0 - cy0)
+                    w.delta(cx1 - x1)
+                    w.delta(cy1 - y1)
 
         # The cmap, in code point order: the step to the next code point,
         # and the glyph, which is usually the one after the last.
@@ -1331,12 +1353,14 @@ def decode(blob, clen, faces):
                         py += r.delta()
                         pts.append((px, py))
                     contours.append((pts, on))
-            if r.bit():
-                x0, y0 = r.delta(), r.delta()
-                x1 = adv + r.delta()
-                bbox = (x0, y0, x1, r.delta())
-            else:
-                bbox = (0, 0, 0, 0)
+            bbox = (0, 0, 0, 0)
+            if comps or contours:
+                g = face.glyphs[k]
+                cx0, cy0, cx1, cy1 = computed_box(face, g)
+                if r.bit():
+                    bbox = (cx0 + r.delta(), cy0 + r.delta(), cx1 - r.delta(), cy1 - r.delta())
+                else:
+                    bbox = (cx0, cy0, cx1, cy1)
             glyphs.append((adv, contours, comps, bbox))
         cmap = {}
         cp = 0
