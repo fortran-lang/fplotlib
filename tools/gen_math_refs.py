@@ -81,6 +81,7 @@ FORMULAS = [
     # Fractions and stacks.
     r"$\binom{n}{k}$",
     r"$\dbinom{n}{k} + \tbinom{n}{k}$",
+    r"$\displaystyle \binom{n+1}{k} B_k$",
     r"${a \atop b}$",
     r"${a \over b}$",
     r"$\dfrac{1}{2} + \tfrac{1}{2}$",
@@ -190,11 +191,6 @@ ALPHABETS = {r"\mathbf": r"\symbf", r"\mathsf": r"\symsf", r"\mathit": r"\symit"
              r"\mathbb": r"\symbb", r"\mathcal": r"\symcal"}
 
 
-# fplotlib's \binom is \atopwithdelims() as TeX sets it; amsmath's sizes
-# its parentheses by \fontdimen 20 and 21, which under XeTeX are unrelated
-# MATH constants.
-BINOM = re.compile(r"\\([dt]?)binom\{([^{}]*)\}\{([^{}]*)\}")
-BINOM_STYLE = {"": "", "d": r"\displaystyle", "t": r"\textstyle"}
 
 
 # fplotlib's escaped \( \) \[ \] are the plain characters, which TeX
@@ -207,8 +203,6 @@ def page(formula):
         formula = formula.replace(a + "{", b + "{")
     for a, b in ESCAPES.items():
         formula = formula.replace(a, b)
-    formula = BINOM.sub(lambda m: r"{%s{{%s}\atopwithdelims(){%s}}}"
-                        % (BINOM_STYLE[m[1]], m[2], m[3]), formula)
     return (r"\vrule width %gbp height %gbp depth 0pt\kern-%gbp%s\newpage" "\n"
             % (MARK, MARK, MARK, formula))
 
