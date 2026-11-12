@@ -235,6 +235,62 @@ call suptitle("figure title")
   single letters, `C0`-`C9`, or a greyscale fraction such as `"0.5"`
 - SVG defaults aligned with matplotlib (6.4×4.8 in, tab10 colors, subplot margins)
 
+## Documents
+
+`typeset` sets a whole document, written in Markdown with TeX mathematics
+(`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
+PNG or EPS file per page:
+
+```fortran
+call typeset([character(len=80) :: &
+    "---", &
+    "title: Notes", &
+    "numbersections: true", &
+    "---", &
+    "# Energy", &
+    "", &
+    "The energy of a mass at rest is", &
+    "$$ E = mc^2 $$ {#eq:einstein}", &
+    "and @eq:einstein is the best known formula of physics."], "notes.pdf")
+```
+
+The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
+spacing of its article and book classes:
+
+- paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
+  `line_break` with its two passes, badness, demerits and fitness
+  classes, and hyphenated with Liang's algorithm and the patterns LaTeX
+  and Typst use for English (`hyph-en-us`); interword glue is XeTeX's
+  for an OpenType font, and the space factor is `\nonfrenchspacing`'s;
+- lines go onto a vertical list with `\baselineskip`, `\lineskip` and
+  TeX's club, widow and broken penalties, and TeX's page builder cuts it
+  into pages at the breaks of least cost;
+- displays get `\abovedisplayskip` or the short skips, equation numbers
+  at the right margin, and the paragraph goes on after them unindented.
+
+The Markdown is Pandoc's (`fplotlib_markdown`): YAML front matter (`title`,
+`author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
+`align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
+headings, emphasis, lists, block quotes, code, rules, links, fenced divs
+and bracketed spans for alignment, size and colour (`::: {.center .Huge
+color=darkred}`), cross references (`$$...$$ {#eq:name}` and `@eq:name`,
+`# Title {#sec:name}` and `@sec:name`, `\label`, `\eqref`, `\ref`), and the
+TeX commands `\newpage`, `\vspace`, `\vspace*{\fill}`, `\bigskip`, `\hfill`
+and `\quad`. The book class sets chapters, running heads and flush bottoms.
+Lengths are PostScript points (1/72 in), as in Typst.
+
+Why Markdown and not TeX: TeX as input means TeX's macro language
+(category codes, `\def`, expansion) and LaTeX on top of it, and anything
+less would break on the first document pasted from LaTeX. Markdown is small
+and readable, the mathematics stays TeX, and a handful of TeX commands
+cover the layout Markdown has no words for, as in Pandoc.
+
+`tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
+lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
+requires the same lines, hyphenated at the same places, with every glyph
+within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
+to 5 font units).
+
 ## Using fplotlib in your project
 
 fplotlib is an [fpm](https://fpm.fortran-lang.org) package with no dependencies
@@ -340,6 +396,8 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
+               fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
+               fplotlib_markdown.f90 Markdown documents onto it
                fplotlib.f90         the plotting API
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts

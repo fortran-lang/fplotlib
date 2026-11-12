@@ -1567,6 +1567,10 @@ program test_plots
     call fp_check_apng("anim_sine_apng", "tests/out/anim_sine.png")
     print *, "wrote tests/out/anim_sine.png"
 
+    ! A document: Markdown set by TeX's rules over two pages, written in
+    ! every format.
+    call document_case()
+
     print *, "All test plots written."
 
     ! The math layout against XeTeX's; see test_mathref.f90.
@@ -1586,6 +1590,57 @@ program test_plots
     if (nface > 0) error stop "text around math lost its face"
 
 contains
+
+    subroutine document_case()
+        character(len=90), parameter :: doc(*) = [character(len=90) :: &
+            "---", &
+            "title: A Small Document", &
+            "author: fplotlib", &
+            "paper: a6", &
+            "margin: 1.2cm", &
+            "fontsize: 9pt", &
+            "numbersections: true", &
+            "---", &
+            "", &
+            "# Text", &
+            "", &
+            "A paragraph of *emphasis*, **strong** text, `code`, a [link](https://example.org),", &
+            "an en--dash, an em---dash, ""quotes"" and a formula $e^{i\pi} + 1 = 0$, broken into", &
+            "lines and hyphenated as TeX does it.", &
+            "", &
+            "- a list item", &
+            "- another, with a nested list:", &
+            "    1. first", &
+            "    2. second", &
+            "", &
+            "> A quotation, set with margins on both sides.", &
+            "", &
+            "# Mathematics {#sec:math}", &
+            "", &
+            "A numbered display, @eq:m, referred to by name:", &
+            "$$ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad", &
+            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} $$ {#eq:m}", &
+            "and an aligned one:", &
+            "$$ \begin{aligned} (a+b)^2 &= a^2 + 2ab + b^2 \\ &\ge 4ab \end{aligned} $$", &
+            "", &
+            "::: {.center color=darkred .large}", &
+            "Centred, coloured and larger.", &
+            ":::", &
+            "", &
+            "\newpage", &
+            "", &
+            "Section @sec:math ends on the page before this one."]
+        integer :: k
+        call typeset(doc, "tests/out/document.png", dpi=100.0_dp)
+        do k = 1, 3
+            call fp_check_png("document_p"//achar(48 + k), &
+                              "tests/out/document-"//achar(48 + k)//".png")
+        end do
+        call typeset(doc, "tests/out/document.svg")
+        call typeset(doc, "tests/out/document.pdf")
+        call typeset(doc, "tests/out/document.eps")
+        print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
+    end subroutine document_case
 
     ! A repeatable stand-in for random numbers: the fractional part of a
     ! large sine, summed twice so the result piles up in the middle.
