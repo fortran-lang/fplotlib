@@ -39,22 +39,22 @@ units:
     the cmap, and ssty (script-size alternates) and dtls (dotless forms)
     become tables the layout looks glyphs up in.
 
-Not all of each font is kept: see the repertoires below, SSTY_KEPT and
+Not all of each font is kept: see the repertoires below, ssty_kept() and
 MAX_VARIANT. tools/gen_math_refs.py and tools/gen_delim_refs.py typeset
 their references with reduced_math_font(), Lete Sans Math cut down to the
 same data, so that XeTeX and Typst lay out exactly what fplotlib can.
 
-Every point is a delta from the one before it, coded as a magnitude class
-through a prefix code plus the raw bits under the leading one, which is
-deflate's trick for distances; the code lengths are a Huffman code for the
-deltas this data actually has, and travel as a parameter beside the blob.
-The bit stream is written into the Fortran source as one base85 string,
-which fplotlib_glyphs unpacks on first use.
+Every point is a delta from the one before it (or, for a script alternate
+or a size variant, from the matching point of a related glyph), and the
+whole table is coded with an adaptive binary range coder, LZMA's, in
+contexts that say what kind of value each is and, for a point, what the
+points before it were; see Writer. The ink boxes are mostly left for the
+decoder to work out. The coded bytes are written into the Fortran source
+as base85 rows, which fplotlib_glyphs unpacks on first use.
 """
 
 import argparse
 import hashlib
-import heapq
 import json
 import math
 import sys
