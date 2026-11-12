@@ -9,19 +9,22 @@ The fonts are pinned to exact commits and checked against their SHA-256
 hashes. They are downloaded into a cache directory, or read from a
 directory given on the command line:
 
-    pixi exec --spec fonttools --spec python=3.12 -- python tools/gen_glyphs.py
-    pixi exec --spec fonttools --spec python=3.12 -- python tools/gen_glyphs.py --fonts DIR
+    pixi exec --spec fonttools --spec numpy --spec python=3.12 -- python tools/gen_glyphs.py
+    pixi exec --spec fonttools --spec numpy --spec python=3.12 -- \
+        python tools/gen_glyphs.py --fonts DIR
 
-What is stored is each font's own representation, in integer font units:
+What is stored is close to each font's own representation, in integer font
+units:
 
   * glyphs are numbered (glyph ids, "gids"), the faces one after another,
     because a glyph need not have a code point of its own -- a component
     of an accented letter, a size variant, a script-size alternate;
   * a simple glyph is its contours, each a cycle of points that lie on the
-    curve or are control points. TrueType's control points are quadratic
-    and CFF's cubic, and each face is stored in its own kind: a CFF
-    contour has its control points in pairs, a TrueType contour may leave
-    an on-curve point implied between two of them;
+    curve or are control points. Lete Sans Math is CFF, so its contours
+    are cubic, with the control points in pairs; Lato is TrueType, but is
+    stored as cubics too, at half its resolution (see LATO_OSCALE): a
+    letter Lete draws the same way is Lete's glyph, and the rest are
+    refitted, all within 0.00125 em of Lato's own outlines;
   * a composite glyph (an accented letter, mostly) is a list of component
     gids with their offsets, so the accent and the letter are stored once;
   * every glyph carries its advance width and its ink box, the exact
@@ -59,7 +62,9 @@ import unicodedata
 import urllib.request
 from pathlib import Path
 
+import numpy as np
 from fontTools.pens.boundsPen import BoundsPen
+from fontTools.pens.qu2cuPen import Qu2CuPen
 from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
 from fontTools.ttLib import TTFont
 
@@ -104,6 +109,19 @@ MATH_FACE = "LeteSansMath.otf"
 KERN_STEP = 5
 KERN_SHARED = {1: 0}
 KERN_PREDICTED = {2: 0}
+
+# Lato's outlines are stored as cubics on a grid of LATO_OSCALE font units
+# (1000 to the em instead of 2000). Lete Sans Math draws its upright, bold
+# and italic letters, digits and Greek as Lato's, converted to cubics at
+# 1000 units to the em, so a Lato glyph whose outline Lete has, within
+# ALIAS_TOL font units of Lato's own, is that Lete glyph, scaled and
+# shifted; any other is refitted with cubics (fontTools' qu2cu, at most
+# REFIT_ERR units off) and put on the grid, and must stay within
+# REFIT_TOL units of Lato's own outline.
+LATO_OSCALE = 2
+ALIAS_TOL = 2.0
+REFIT_ERR = 1.0
+REFIT_TOL = 2.5
 
 
 def _r(a, b):
@@ -275,7 +293,9 @@ class Glyph:
         self.name = name
         self.adv = 0
         self.contours = []      # [(points, on-curve flags)], for a simple glyph
-        self.comps = None       # [(name, dx, dy)], for a composite one
+        self.comps = None       # [(name, dx, dy, face)], for a composite one;
+                                # face is the index of another face the
+                                # component comes from, None for this one
         self.bbox = (0, 0, 0, 0)
         self.ink = False
 
@@ -290,6 +310,8 @@ class Face:
         self.cubic = False
         self.pred = None
         self.math = None
+        self.oscale = 1         # outline units are this many font units
+        self.xref = None        # the face components may come from too
         self.kern_from = None   # the face whose kerning this one uses
         self.kern_pred = None   # the face this one's kerning is predicted from
 
@@ -480,7 +502,7 @@ def load_text_face(path, pred):
                     raise SystemExit(f"{name}: a component that is not a plain offset")
                 if glyf[c.glyphName].isComposite():
                     raise SystemExit(f"{name}: a component that is itself composite")
-                g.comps.append((c.glyphName, int(c.x), int(c.y)))
+                g.comps.append((c.glyphName, int(c.x), int(c.y), None))
         else:
             g.contours = quad_contours(glyf, name)
         g.bbox, g.ink = ink_box(glyphset, name)
@@ -869,15 +891,176 @@ def same_shape(a, b, tol=1e-9):
     return True
 
 
-def resolved(face, g):
-    """A glyph's contours with its components put in place."""
+def resolved(face, g, faces=None):
+    """A glyph's contours with its components put in place, in the font
+    units of its face; a component from another face is scaled from that
+    face's units."""
     if g.comps is None:
         return g.contours
     out = []
-    for name, dx, dy in g.comps:
-        for pts, on in face.glyphs[face.index[name]].contours:
-            out.append(([(x + dx, y + dy) for x, y in pts], on))
+    for name, dx, dy, src in g.comps:
+        f = face if src is None else faces[src]
+        k = face.em / f.em
+        for pts, on in resolved(f, f.glyphs[f.index[name]], faces):
+            out.append(([(x * k + dx, y * k + dy) for x, y in pts], on))
     return out
+
+
+def path_polylines(verbs, pts, n=40):
+    """A path as one polyline per contour, each cubic cut into n chords."""
+    out, poly, cur, start, i = [], [], None, None, 0
+    t = np.linspace(0.0, 1.0, n + 1)[1:, None]
+    for v in verbs:
+        if v == VERB_MOVE:
+            cur = start = pts[i]
+            poly = [cur]
+            i += 1
+        elif v == VERB_LINE:
+            cur = pts[i]
+            poly.append(cur)
+            i += 1
+        elif v == VERB_CUBIC:
+            p0, p1, p2, p3 = (np.array(q, dtype=float) for q in (cur, *pts[i:i + 3]))
+            poly.extend(map(tuple, (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1
+                            + 3 * (1 - t) * t * t * p2 + t ** 3 * p3))
+            cur = pts[i + 2]
+            i += 3
+        else:
+            poly.append(start)
+            out.append(np.array(poly, dtype=float))
+    return out
+
+
+def _to_polyline(points, lines):
+    """The distance from each point to the nearest of the polylines."""
+    best = np.full(len(points), np.inf)
+    for q in lines:
+        a, b = q[:-1], q[1:]
+        ab = b - a
+        ll = np.maximum((ab ** 2).sum(1), 1e-12)
+        t = np.clip(((points[:, None, :] - a[None]) * ab[None]).sum(2) / ll[None], 0, 1)
+        c = a[None] + t[..., None] * ab[None]
+        best = np.minimum(best, np.sqrt(((points[:, None, :] - c) ** 2).sum(2)).min(1))
+    return best
+
+
+def deviation(a, b):
+    """How far apart two paths are at most, in their units: the larger of
+    the distances from either one's curves to the other's."""
+    pa, pb = path_polylines(*a), path_polylines(*b)
+    if len(pa) != len(pb):
+        return math.inf
+    return max(_to_polyline(np.vstack(pa), pb).max(), _to_polyline(np.vstack(pb), pa).max())
+
+
+def math_counterparts(fi, cp, mface):
+    """The Lete glyphs that may draw text face fi's glyph for cp."""
+    m = mface.cmap
+    out = [m.get(cp)]
+    ch = chr(cp)
+    if fi == 1:
+        if "a" <= ch <= "z":
+            out.append(m.get(0x1D41A + cp - 0x61))
+        elif "A" <= ch <= "Z":
+            out.append(m.get(0x1D400 + cp - 0x41))
+        elif "0" <= ch <= "9":
+            out.append(m.get(0x1D7CE + cp - 0x30))
+        elif 0x3B1 <= cp <= 0x3C9:
+            out.append(m.get(0x1D6C2 + cp - 0x3B1))
+        elif 0x391 <= cp <= 0x3A9:
+            out.append(m.get(0x1D6A8 + cp - 0x391))
+    elif fi == 2:
+        if "a" <= ch <= "z":
+            out.append(m.get(0x210E if ch == "h" else 0x1D44E + cp - 0x61))
+        elif "A" <= ch <= "Z":
+            out.append(m.get(0x1D434 + cp - 0x41))
+        elif 0x3B1 <= cp <= 0x3C9:
+            out.append(m.get(0x1D6FC + cp - 0x3B1))
+        elif 0x391 <= cp <= 0x3A9:
+            out.append(m.get(0x1D6E2 + cp - 0x391))
+    return [n for n in out if n]
+
+
+def refit_contours(glyphset, name, grid):
+    """A TrueType glyph refitted with cubics and put on a grid."""
+    rec = RecordingPen()
+    glyphset[name].draw(Qu2CuPen(rec, max_err=REFIT_ERR, all_cubic=True))
+
+    def q(p):
+        return (grid * round(p[0] / grid), grid * round(p[1] / grid))
+    contours, pts, on = [], None, None
+    for op, args in rec.value:
+        if op == "moveTo":
+            pts, on = [q(args[0])], [True]
+        elif op == "lineTo":
+            pts.append(q(args[0]))
+            on.append(True)
+        elif op == "curveTo" and len(args) % 3 == 0:
+            for k in range(0, len(args), 3):
+                pts.extend([q(args[k]), q(args[k + 1]), q(args[k + 2])])
+                on.extend([False, False, True])
+        elif op in ("closePath", "endPath"):
+            if len(pts) > 1 and pts[-1] == pts[0] and on[-1]:
+                pts.pop()
+                on.pop()
+            # A line of no length, which putting on the grid can make.
+            k = 1
+            while k < len(pts):
+                if on[k] and on[k - 1] and pts[k] == pts[k - 1]:
+                    del pts[k], on[k]
+                else:
+                    k += 1
+            contours.append((pts, on))
+        else:
+            return None
+    return contours
+
+
+def refit_text_faces(faces, glyphsets):
+    """Lato's outlines as Lete's or refitted with cubics; see LATO_OSCALE."""
+    mi = len(faces) - 1
+    mf = faces[mi]
+    aliased = refitted = 0
+    for fi, (face, gs) in enumerate(zip(faces[:mi], glyphsets[:mi])):
+        face.cubic = True
+        face.oscale = LATO_OSCALE
+        face.xref = mi
+        k = face.em // mf.em
+        names = {}
+        for cp, n in face.cmap.items():
+            names.setdefault(n, cp)
+        for g in face.glyphs:
+            if g.comps is not None:
+                g.comps = [(n, LATO_OSCALE * round(dx / LATO_OSCALE),
+                            LATO_OSCALE * round(dy / LATO_OSCALE), src)
+                           for n, dx, dy, src in g.comps]
+                continue
+            if not g.contours:
+                continue
+            want = pen_path(gs, g.name)
+            best = None
+            for mn in (math_counterparts(fi, names[g.name], mf) if g.name in names else []):
+                mg = mf.glyphs[mf.index[mn]]
+                v, pts = contours_to_path(mg.contours, True)
+                guess = round(g.bbox[0] / k - mg.bbox[0])
+                for dx in (guess - 1, guess, guess + 1):
+                    d = deviation((v, [(x * k + dx * k, y * k) for x, y in pts]), want)
+                    if d <= ALIAS_TOL and (best is None or d < best[0]):
+                        best = (d, mn, dx * k)
+            if best is not None:
+                g.comps = [(best[1], best[2], 0, mi)]
+                g.contours = []
+                aliased += 1
+                continue
+            new = refit_contours(gs, g.name, LATO_OSCALE)
+            if new is None:
+                raise SystemExit(f"{face.tag} {g.name}: qu2cu left a quadratic")
+            d = deviation(contours_to_path(new, True), want)
+            if d > REFIT_TOL:
+                raise SystemExit(f"{face.tag} {g.name}: refitted {d:.2f} units off")
+            g.contours = new
+            refitted += 1
+    print(f"Lato: {aliased} glyphs drawn as Lete's, {refitted} refitted with cubics")
 
 
 # --- the bit stream ---------------------------------------------------
@@ -1047,17 +1230,20 @@ def best_storage(contours, cubic, delta_cost):
     return stored
 
 
-def computed_box(face, g):
+def computed_box(face, g, faces):
     """The ink box the decoder works out for itself: the extremes of a
     simple glyph's points, curve and control points alike, or the union
-    of a composite's components' ink boxes, offset."""
+    of a composite's components' ink boxes, offset (and scaled, for a
+    component from another face)."""
     if g.comps:
         boxes = []
-        for name, dx, dy in g.comps:
-            c = face.glyphs[face.index[name]]
+        for name, dx, dy, src in g.comps:
+            f = face if src is None else faces[src]
+            c = f.glyphs[f.index[name]]
+            k = face.em // f.em
             if c.ink:
                 x0, y0, x1, y1 = c.bbox
-                boxes.append((x0 + dx, y0 + dy, x1 + dx, y1 + dy))
+                boxes.append((x0 * k + dx, y0 * k + dy, x1 * k + dx, y1 * k + dy))
         return (min(b[0] for b in boxes), min(b[1] for b in boxes),
                 max(b[2] for b in boxes), max(b[3] for b in boxes))
     xs = [x for pts, _ in g.contours for x, _ in pts]
@@ -1131,10 +1317,15 @@ def encode(faces, clen):
             if g.comps is not None:
                 w.bit(1)
                 w.gamma(len(g.comps))
-                for name, dx, dy in g.comps:
-                    w.raw(face.index[name], lbits)
-                    w.delta(dx)
-                    w.delta(dy)
+                for name, dx, dy, src in g.comps:
+                    if face.xref is not None:
+                        w.bit(0 if src is None else 1)
+                    if src is None:
+                        w.raw(face.index[name], lbits)
+                    else:
+                        w.raw(faces[src].index[name], nbits(len(faces[src].glyphs)))
+                    w.delta(dx // face.oscale)
+                    w.delta(dy // face.oscale)
             else:
                 w.bit(0)
                 w.gamma(len(g.contours) + 1)
@@ -1144,11 +1335,11 @@ def encode(faces, clen):
                 for pts, on in g.contours:
                     for (x, y), o in zip(pts, on):
                         w.bit(1 if o else 0)
-                        w.delta(x - px)
-                        w.delta(y - py)
+                        w.delta((x - px) // face.oscale)
+                        w.delta((y - py) // face.oscale)
                         px, py = x, y
             if g.comps or g.contours:
-                cx0, cy0, cx1, cy1 = computed_box(face, g)
+                cx0, cy0, cx1, cy1 = computed_box(face, g, faces)
                 x0, y0, x1, y1 = g.bbox
                 if (x0, y0, x1, y1) == (cx0, cy0, cx1, cy1):
                     w.bit(0)
@@ -1338,7 +1529,9 @@ def decode(blob, clen, faces):
             if r.bit():
                 comps = []
                 for _ in range(r.gamma()):
-                    comps.append((r.raw(lbits), r.delta(), r.delta()))
+                    src = face.xref if face.xref is not None and r.bit() else None
+                    idx = r.raw(lbits if src is None else nbits(len(faces[src].glyphs)))
+                    comps.append((idx, r.delta() * face.oscale, r.delta() * face.oscale, src))
                 contours = None
             else:
                 comps = None
@@ -1349,14 +1542,14 @@ def decode(blob, clen, faces):
                     pts, on = [], []
                     for _ in range(n):
                         on.append(r.bit() == 1)
-                        px += r.delta()
-                        py += r.delta()
+                        px += r.delta() * face.oscale
+                        py += r.delta() * face.oscale
                         pts.append((px, py))
                     contours.append((pts, on))
             bbox = (0, 0, 0, 0)
             if comps or contours:
                 g = face.glyphs[k]
-                cx0, cy0, cx1, cy1 = computed_box(face, g)
+                cx0, cy0, cx1, cy1 = computed_box(face, g, faces)
                 if r.bit():
                     bbox = (cx0 + r.delta(), cy0 + r.delta(), cx1 - r.delta(), cy1 - r.delta())
                 else:
@@ -1394,7 +1587,8 @@ def check_round_trip(faces, back):
     for face, d in zip(faces, back):
         for g, (adv, contours, comps, bbox) in zip(face.glyphs, d["glyphs"]):
             want_comps = None if g.comps is None else \
-                [(face.index[n], dx, dy) for n, dx, dy in g.comps]
+                [((face if src is None else faces[src]).index[n], dx, dy, src)
+                 for n, dx, dy, src in g.comps]
             if (adv, comps, bbox) != (g.adv, want_comps, g.bbox if g.ink else (0, 0, 0, 0)):
                 raise SystemExit(f"{face.tag} {g.name}: the blob decodes differently")
             if g.comps is None and contours != [(list(p), list(o)) for p, o in g.contours]:
@@ -1529,7 +1723,7 @@ def expectation(faces):
     for fi, f in enumerate(faces):
         e = f.em
         for g in f.glyphs:
-            v, pts = contours_to_path(resolved(f, g), f.cubic)
+            v, pts = contours_to_path(resolved(f, g, faces), f.cubic)
             out["glyphs"].append({
                 "face": fi + 1, "adv": g.adv / e,
                 "bbox": [c / e for c in (g.bbox if g.ink else (0, 0, 0, 0))],
@@ -1594,6 +1788,7 @@ def main() -> None:
     font_file("OFL.txt", args.fonts)
     font_file("LICENSE.txt", args.fonts)
     mface = faces[-1]
+    refit_text_faces(faces, [gs for _, _, gs, _ in loaded])
     for fi, src in KERN_SHARED.items():
         faces[fi].kern_from = src
         if set(faces[fi].kern) != set(faces[src].kern):
@@ -1618,14 +1813,17 @@ def main() -> None:
     maxcls = max(i for i, f in enumerate(first.freq) if f)
     clen = huffman_lengths(first.freq[:maxcls + 1])
 
-    def cost(a, b):
-        t = 0
-        for v in (b[0] - a[0], b[1] - a[1]):
-            c = zigzag(v).bit_length()
-            t += (clen[c] if c < len(clen) else 99) + max(c - 1, 0)
-        return t
+    def cost_in(scale):
+        def cost(a, b):
+            t = 0
+            for v in (b[0] - a[0], b[1] - a[1]):
+                c = zigzag(v // scale).bit_length()
+                t += (clen[c] if c < len(clen) else 99) + max(c - 1, 0)
+            return t
+        return cost
 
     for face in faces:
+        cost = cost_in(face.oscale)
         for g in face.glyphs:
             if g.comps is None:
                 turned = best_storage(g.contours, face.cubic, cost)
@@ -1669,9 +1867,10 @@ def main() -> None:
         "! Both are licensed under the SIL Open Font License, Version 1.1. The",
         "! rest of fplotlib is MIT; this file is OFL-1.1.",
         "!",
-        "! One base85 string holds every face: glyphs as the fonts store them,",
-        "! in integer font units, with their advance widths and ink boxes, each",
-        "! face's cmap and its pair kerning, and the math face's MATH table.",
+        "! One base85 string holds every face: glyph outlines, advance widths",
+        "! and ink boxes in integer font units, each face's cmap and its pair",
+        "! kerning, and the math face's MATH table. Lato's outlines are stored",
+        "! as cubics at 1000 units to the em, many of them as Lete Sans Math's.",
         "! fplotlib_glyphs unpacks it on first",
         "! use; the format is described there and in the generator.",
         "",
@@ -1699,6 +1898,13 @@ def main() -> None:
     L += int_array("FACE_XH", [f.xh for f in faces])
     L += int_array("FACE_CAP", [f.cap for f in faces])
     L += logical_array("FACE_CUBIC", [f.cubic for f in faces])
+    L += [
+        "",
+        "    ! The font units an outline unit is, and the face a composite's",
+        "    ! components may come from as well as its own, 0 for none.",
+    ]
+    L += int_array("FACE_OSCALE", [f.oscale for f in faces])
+    L += int_array("FACE_XREF", [0 if f.xref is None else f.xref + 1 for f in faces])
     L += int_array("FACE_PRED", [0 if f.pred is None else f.pred + 1 for f in faces])
     L += [
         "",

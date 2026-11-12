@@ -23,12 +23,16 @@
 !     at the same position in the face FACE_PRED names, which is the same
 !     letter in another weight or slant, or else the glyph before); one
 !     bit saying whether it is composite; then either the number of
-!     components, gamma coded, and for each the face-local index of the
-!     glyph it places (in as many raw bits as the face's glyph count
-!     needs) and its offset as two deltas, or the number of contours plus
-!     one, each contour's number of points, and for every point one bit
-!     saying whether it lies on the curve and its x and y as deltas from
-!     the point before it (the first is a delta from the origin); and, for
+!     components, gamma coded, and for each -- after a bit saying whether
+!     it comes from face FACE_XREF, for a face that has one -- the index
+!     in its face of the glyph it places (in as many raw bits as that
+!     face's glyph count needs) and its offset as two deltas, or the
+!     number of contours plus one, each contour's number of points, and
+!     for every point one bit saying whether it lies on the curve and its
+!     x and y as deltas from the point before it (the first is a delta
+!     from the origin); coordinates and offsets are in outline units of
+!     FACE_OSCALE font units, and a component from another face is scaled
+!     from its face's units per em to this one's; and, for
 !     a glyph with contours or components, its ink box: the decoder works
 !     it out (the extremes of a simple glyph's points, or the union of a
 !     composite's components' boxes), and one bit says whether the true
@@ -83,6 +87,7 @@ module fplotlib_glyphs
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
                                  BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
+                                 FACE_OSCALE, FACE_XREF, &
                                  NPART, NMKH, NMKV, MATH_CONSTANT
     implicit none
     private
@@ -537,7 +542,7 @@ contains
         allocate (tv(npts + 2*nc), tx(3*npts + nc), ty(3*npts + nc))
         nv = 0
         np = 0
-        call add_glyph(gid, 0, 0, tv, nv, tx, ty, np)
+        call add_glyph(gid, 0.0_dp, 0.0_dp, 1.0_dp, tv, nv, tx, ty, np)
         allocate (v(nv), x(np), y(np))
         v = tv(1:nv)
         x = tx(1:np)*s
@@ -555,31 +560,38 @@ contains
         end do
     end subroutine count_glyph
 
-    recursive subroutine add_glyph(gid, dx, dy, v, nv, x, y, np)
-        integer, intent(in) :: gid, dx, dy
+    ! A glyph's contours, scaled by s and offset by (dx, dy), and its
+    ! components'; a component from another face is scaled from its
+    ! face's units per em to the glyph's.
+    recursive subroutine add_glyph(gid, dx, dy, s, v, nv, x, y, np)
+        integer, intent(in) :: gid
+        real(dp), intent(in) :: dx, dy, s
         integer, intent(inout) :: v(:), nv
         real(dp), intent(inout) :: x(:), y(:)
         integer, intent(inout) :: np
-        integer :: ci, k
+        integer :: ci, k, n0
+        real(dp) :: r
+        n0 = np
         do ci = OBEG(gid), OBEG(gid + 1) - 1
             if (FACE_CUBIC(GFACE(gid))) then
-                call add_cubic(CBEG(ci), CBEG(ci + 1) - CBEG(ci), dx, dy, &
-                               v, nv, x, y, np)
+                call add_cubic(CBEG(ci), CBEG(ci + 1) - CBEG(ci), v, nv, x, y, np)
             else
-                call add_quad(CBEG(ci), CBEG(ci + 1) - CBEG(ci), dx, dy, &
-                              v, nv, x, y, np)
+                call add_quad(CBEG(ci), CBEG(ci + 1) - CBEG(ci), v, nv, x, y, np)
             end if
         end do
+        x(n0 + 1:np) = x(n0 + 1:np)*s + dx
+        y(n0 + 1:np) = y(n0 + 1:np)*s + dy
         do k = PBEG(gid), PBEG(gid + 1) - 1
-            call add_glyph(PG(k), dx + PDX(k), dy + PDY(k), v, nv, x, y, np)
+            r = real(FACE_EM(GFACE(gid)), dp)/real(FACE_EM(GFACE(PG(k))), dp)
+            call add_glyph(PG(k), dx + PDX(k)*s, dy + PDY(k)*s, s*r, v, nv, x, y, np)
         end do
     end subroutine add_glyph
 
     ! A cubic contour: it starts on the curve, and every control point
     ! comes with a second one and then the point the curve ends on, the
     ! start itself for the last one.
-    subroutine add_cubic(b, n, dx, dy, v, nv, x, y, np)
-        integer, intent(in) :: b, n, dx, dy
+    subroutine add_cubic(b, n, v, nv, x, y, np)
+        integer, intent(in) :: b, n
         integer, intent(inout) :: v(:), nv
         real(dp), intent(inout) :: x(:), y(:)
         integer, intent(inout) :: np
@@ -588,24 +600,24 @@ contains
         nv = nv + 1
         v(nv) = VERB_MOVE
         np = np + 1
-        x(np) = real(QX(b) + dx, dp)
-        y(np) = real(QY(b) + dy, dp)
+        x(np) = real(QX(b), dp)
+        y(np) = real(QY(b), dp)
         j = 1
         do while (j < n)
             if (QON(b + j)) then
                 nv = nv + 1
                 v(nv) = VERB_LINE
                 np = np + 1
-                x(np) = real(QX(b + j) + dx, dp)
-                y(np) = real(QY(b + j) + dy, dp)
+                x(np) = real(QX(b + j), dp)
+                y(np) = real(QY(b + j), dp)
                 j = j + 1
             else
                 nv = nv + 1
                 v(nv) = VERB_CUBIC
                 do k = 0, 2
                     np = np + 1
-                    x(np) = real(QX(b + mod(j + k, n)) + dx, dp)
-                    y(np) = real(QY(b + mod(j + k, n)) + dy, dp)
+                    x(np) = real(QX(b + mod(j + k, n)), dp)
+                    y(np) = real(QY(b + mod(j + k, n)), dp)
                 end do
                 j = j + 3
             end if
@@ -617,8 +629,8 @@ contains
     ! A quadratic contour. TrueType lets a contour start anywhere, so it
     ! is turned to start at a point on the curve; if it has none, the
     ! start is implied halfway between the last point and the first.
-    subroutine add_quad(b, n, dx, dy, v, nv, x, y, np)
-        integer, intent(in) :: b, n, dx, dy
+    subroutine add_quad(b, n, v, nv, x, y, np)
+        integer, intent(in) :: b, n
         integer, intent(inout) :: v(:), nv
         real(dp), intent(inout) :: x(:), y(:)
         integer, intent(inout) :: np
@@ -655,8 +667,6 @@ contains
             end do
             m = n
         end if
-        sx = sx + real(dx, dp)
-        sy = sy + real(dy, dp)
         ! The start comes round again as the point the contour ends on.
         son(1) = .true.
         sx(m + 1) = sx(1)
@@ -728,7 +738,8 @@ contains
     subroutine unpack()
         integer :: f, k, j, gid, base, ng, lbits, nc, n, ip, ic, icp, ik, ikv
         integer :: guess, prev_adv, xx, yy, cp, prev, nl, nr, l, c, cnt, pf
-        integer :: shrink(4, NGLYPH)
+        integer :: shrink(4, NGLYPH), xf
+        logical :: boxed(NGLYPH)
 
         call from_base85()
         call build_code()
@@ -785,9 +796,17 @@ contains
                     n = get_gamma()
                     do j = 1, n
                         ik = ik + 1
-                        PG(ik) = base + get_bits(lbits) + 1
-                        PDX(ik) = get_delta()
-                        PDY(ik) = get_delta()
+                        xf = 0
+                        if (FACE_XREF(f) > 0) then
+                            if (get_bit() == 1) xf = FACE_XREF(f)
+                        end if
+                        if (xf > 0) then
+                            PG(ik) = FBASE(xf) + get_bits(nbits(FACE_NG(xf))) + 1
+                        else
+                            PG(ik) = base + get_bits(lbits) + 1
+                        end if
+                        PDX(ik) = get_delta()*FACE_OSCALE(f)
+                        PDY(ik) = get_delta()*FACE_OSCALE(f)
                     end do
                     nc = 0
                 else
@@ -802,8 +821,8 @@ contains
                         QON(ip + j) = get_bit() == 1
                         xx = xx + get_delta()
                         yy = yy + get_delta()
-                        QX(ip + j) = int(xx, int16)
-                        QY(ip + j) = int(yy, int16)
+                        QX(ip + j) = int(xx*FACE_OSCALE(f), int16)
+                        QY(ip + j) = int(yy*FACE_OSCALE(f), int16)
                     end do
                     ip = ip + n
                 end if
@@ -826,23 +845,6 @@ contains
                     GBOX(4, gid) = maxval(QY(CBEG(OBEG(gid)):ip))
                     call shrink_box(gid, shrink(:, gid))
                 end if
-            end do
-            ! A composite's box is its components', which may come after it.
-            do k = 1, ng
-                gid = base + k
-                if (PBEG(gid + 1) == PBEG(gid)) cycle
-                GBOX(1, gid) = huge(1)
-                GBOX(2, gid) = huge(1)
-                GBOX(3, gid) = -huge(1)
-                GBOX(4, gid) = -huge(1)
-                do j = PBEG(gid), PBEG(gid + 1) - 1
-                    if (OBEG(PG(j) + 1) == OBEG(PG(j))) cycle
-                    GBOX(1, gid) = min(GBOX(1, gid), GBOX(1, PG(j)) + PDX(j))
-                    GBOX(2, gid) = min(GBOX(2, gid), GBOX(2, PG(j)) + PDY(j))
-                    GBOX(3, gid) = max(GBOX(3, gid), GBOX(3, PG(j)) + PDX(j))
-                    GBOX(4, gid) = max(GBOX(4, gid), GBOX(4, PG(j)) + PDY(j))
-                end do
-                call shrink_box(gid, shrink(:, gid))
             end do
 
             ! The cmap, and the code point each glyph is first reached by.
@@ -891,6 +893,13 @@ contains
         end do
         CMB(NFACE + 1) = icp + 1
 
+        ! A composite's box is its components', which may come after it,
+        ! in a later face, or be composite themselves.
+        boxed = PBEG(2:NGLYPH + 1) == PBEG(1:NGLYPH)
+        do gid = 1, NGLYPH
+            call composite_box(gid, boxed, shrink)
+        end do
+
         if (ip /= NPT .or. ic /= NCONT .or. ik /= NCOMP .or. icp /= NCMAP &
             .or. ikv /= NKERN .or. nmkh_ /= NMKH .or. nmkv_ /= NMKV &
             .or. nvar_ /= NVAR .or. nasm_ /= NASM .or. npart_ /= NPART) then
@@ -898,6 +907,30 @@ contains
         end if
         deallocate (BUF)
     end subroutine unpack
+
+    ! The ink box of a composite, once its components have theirs.
+    recursive subroutine composite_box(gid, boxed, shrink)
+        integer, intent(in) :: gid, shrink(:, :)
+        logical, intent(inout) :: boxed(:)
+        integer :: j, c, k
+        if (boxed(gid)) return
+        GBOX(1, gid) = huge(1)
+        GBOX(2, gid) = huge(1)
+        GBOX(3, gid) = -huge(1)
+        GBOX(4, gid) = -huge(1)
+        do j = PBEG(gid), PBEG(gid + 1) - 1
+            c = PG(j)
+            call composite_box(c, boxed, shrink)
+            if (OBEG(c + 1) == OBEG(c) .and. PBEG(c + 1) == PBEG(c)) cycle
+            k = FACE_EM(GFACE(gid))/FACE_EM(GFACE(c))
+            GBOX(1, gid) = min(GBOX(1, gid), GBOX(1, c)*k + PDX(j))
+            GBOX(2, gid) = min(GBOX(2, gid), GBOX(2, c)*k + PDY(j))
+            GBOX(3, gid) = max(GBOX(3, gid), GBOX(3, c)*k + PDX(j))
+            GBOX(4, gid) = max(GBOX(4, gid), GBOX(4, c)*k + PDY(j))
+        end do
+        call shrink_box(gid, shrink(:, gid))
+        boxed(gid) = .true.
+    end subroutine composite_box
 
     ! The true ink box of a glyph from the one worked out for it.
     subroutine shrink_box(gid, d)
