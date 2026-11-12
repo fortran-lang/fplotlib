@@ -139,6 +139,17 @@ FORMULAS = [
     r"$x \in \mathbb{N},\ y \notin A$",
     r"$\textstyle \sum_i \scriptstyle x_i$",
     r"$\$5$",
+    # Alignments: LaTeX's array (matrices, cases) and amsmath's aligned
+    # and gathered.
+    r"$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$",
+    r"$\begin{bmatrix} 1 & \frac{1}{2} \\ \frac{1}{3} & x^2 \end{bmatrix}$",
+    r"$\begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc$",
+    r"$\begin{matrix} 1 & 2 & 3 \\ 4 & 5 & 6 \end{matrix}$",
+    r"$\begin{array}{lcr} a & b & c \\ dd & ee & ff \end{array}$",
+    r"$f(x) = \begin{cases} x & x \geq 0 \\ -x & x < 0 \end{cases}$",
+    r"$\displaystyle \begin{aligned} a &= b + c \\ &= d \end{aligned}$",
+    r"$\displaystyle \begin{aligned} x &= \frac{1}{2} & y &= 3 \\ z &= 4 & w &= 5 \end{aligned}$",
+    r"$\displaystyle \begin{gathered} x = y \\ x + 1 = y + 1 \end{gathered}$",
 ]
 
 PREAMBLE = r"""\documentclass{article}

@@ -109,7 +109,11 @@ module fplotlib_mathtext
     ! so on), except for spaces and style changes, which are not atoms.
     integer, parameter :: K_ATOM = 1, K_FRAC = 2, K_RAD = 3, K_SPACE = 4, &
                           K_STYLE = 5, K_ACC = 6, K_OVER = 7, K_UNDER = 8, &
-                          K_LR = 9, K_MID = 10, K_BIG = 11
+                          K_LR = 9, K_MID = 10, K_BIG = 11, K_ARRAY = 12
+
+    ! Alignments: LaTeX's array (matrix, cases, array) and amsmath's
+    ! \ialign (aligned, gathered).
+    integer, parameter :: AR_ARRAY = 1, AR_ALIGNED = 2, AR_GATHERED = 3
 
     ! What a nucleus is.
     integer, parameter :: NUC_NONE = 0, NUC_CHAR = 1, NUC_LIST = 2, NUC_TEXT = 3
@@ -126,6 +130,8 @@ module fplotlib_mathtext
     ! \delimitershortfall (5pt), and the strut of a 12pt baseline, which
     ! \cfrac puts into its numerators. \delimiterfactor is 901.
     real(dp), parameter :: NULL_DELIM = 0.12_dp, SHORTFALL = 0.5_dp
+    ! A TeX point, in the big points fplotlib measures in.
+    real(dp), parameter :: PT = 72.0_dp/72.27_dp
     real(dp), parameter :: STRUT_H = 0.84_dp, STRUT_D = 0.36_dp
     real(dp), parameter :: DELIM_FACTOR = 901.0_dp/500.0_dp
     ! How much less than its contents an automatic delimiter may cover, in
@@ -211,6 +217,18 @@ module fplotlib_mathtext
     integer, allocatable :: IT_KIND(:), IT_GID(:)
     real(dp), allocatable :: IT_X(:), IT_Y(:), IT_S(:), IT_W(:), IT_H(:)
     integer :: NI = 0
+
+    ! The alignments of the formula: table t has AR_NR(t) rows and
+    ! AR_NC(t) columns, the list of the cell in row r and column c being
+    ! CELLS(AR_C0(t) + (r - 1)*AR_NC(t) + c) (0 for an empty one); its
+    ! kind, its columns' alignments (l, c or r), whether its outer columns
+    ! are padded by \arraycolsep, the space between its columns in ems
+    ! (negative for 2\arraycolsep) and its \arraystretch.
+    integer, allocatable :: AR_NR(:), AR_NC(:), AR_C0(:), AR_KIND(:), CELLS(:)
+    character(len=32), allocatable :: AR_COLS(:)
+    logical, allocatable :: AR_PAD(:)
+    real(dp), allocatable :: AR_SEP(:), AR_STRETCH(:)
+    integer :: NAR = 0, NCELL = 0
 
     ! The size the \middle delimiters of the \left...\right group being
     ! laid out are to have, negative while the group is being measured,
@@ -391,6 +409,8 @@ contains
         end if
         NI = 0
         LR_TARGET = -1.0_dp
+        NAR = 0
+        NCELL = 0
     end subroutine reset_arenas
 
     integer function new_noad(kind, cls) result(k)
@@ -565,6 +585,11 @@ contains
                 case ("left")
                     call parse_left(s, i, alph, k, j)
                     call append(head, tail, k)
+                    cur = k
+                    i = j + 1
+                case ("begin")
+                    call parse_env(s, i, alph, k, j)
+                    if (k > 0) call append(head, tail, k)
                     cur = k
                     i = j + 1
                 case ("middle")
@@ -843,6 +868,416 @@ contains
     ! \left d1 ... \right d2, with s(i:i) the backslash of \left: the
     ! group as one inner atom, j the last character of d2. Without a
     ! matching \right, the left delimiter is an ordinary opening.
+    ! \begin{env} ... \end{env} at s(i:), as a noad k (0 for an unknown
+    ! environment), j the last character of \end{env}. The environments:
+    ! matrix, pmatrix, bmatrix, Bmatrix, vmatrix, Vmatrix and smallmatrix;
+    ! cases; array with a column specification of l, c and r; aligned and
+    ! gathered.
+    recursive subroutine parse_env(s, i, alph, k, j)
+        character(len=*), intent(in) :: s
+        integer, intent(in) :: i, alph
+        integer, intent(out) :: k, j
+        character(len=:), allocatable :: env, body, spec, cell
+        integer :: a, b, p, q, depth, nr, nc, r, c, t, kind, dl, dr, lr, n0, ncol
+        integer, allocatable :: rs(:), cs(:)
+        character(len=24) :: name
+
+        k = 0
+        j = len(s)
+        a = i + 6
+        if (a > len(s)) return
+        if (s(a:a) /= "{") return
+        call group_end(s, a, b)
+        env = s(a + 1:b - 1)
+        p = b + 1
+        spec = ""
+        if (env == "array") then
+            do while (p <= len(s))
+                if (s(p:p) /= " ") exit
+                p = p + 1
+            end do
+            if (p <= len(s)) then
+                if (s(p:p) == "{") then
+                    call group_end(s, p, q)
+                    spec = s(p + 1:q - 1)
+                    p = q + 1
+                end if
+            end if
+        end if
+        ! The matching \end, environments nesting.
+        depth = 0
+        q = p
+        do while (q <= len(s))
+            if (s(q:q) == BS) then
+                name = cmd_name(s(q:))
+                if (name == "begin") depth = depth + 1
+                if (name == "end") then
+                    if (depth == 0) exit
+                    depth = depth - 1
+                end if
+                q = q + max(len_trim(name), 1) + 1
+                cycle
+            end if
+            q = q + 1
+        end do
+        body = s(p:min(q - 1, len(s)))
+        j = len(s)
+        if (q <= len(s)) then
+            j = index(s(q:), "}")
+            j = q + j - 1
+        end if
+
+        ! The cells: & between columns and \\ between rows, outside
+        ! groups and inner environments.
+        call split_cells(body, rs, cs, nr, nc)
+        if (nr == 0) return
+        kind = AR_ARRAY
+        dl = 0
+        dr = 0
+        select case (env)
+        case ("aligned", "split", "align", "align*", "alignat", "alignat*")
+            kind = AR_ALIGNED
+        case ("gathered", "gather", "gather*")
+            kind = AR_GATHERED
+        case ("pmatrix")
+            dl = iachar("(")
+            dr = iachar(")")
+        case ("bmatrix")
+            dl = iachar("[")
+            dr = iachar("]")
+        case ("Bmatrix")
+            dl = iachar("{")
+            dr = iachar("}")
+        case ("vmatrix")
+            dl = iachar("|")
+            dr = iachar("|")
+        case ("Vmatrix")
+            dl = 8214
+            dr = 8214
+        case ("cases")
+            dl = iachar("{")
+        case ("matrix", "smallmatrix", "array")
+        case default
+            return
+        end select
+
+        call ar_reserve(nr*nc)
+        NAR = NAR + 1
+        t = NAR
+        AR_NR(t) = nr
+        AR_NC(t) = nc
+        AR_C0(t) = NCELL
+        AR_KIND(t) = kind
+        AR_PAD(t) = .false.
+        AR_STRETCH(t) = 1.0_dp
+        AR_SEP(t) = -1.0_dp
+        select case (env)
+        case ("cases")
+            AR_COLS(t) = "ll"
+            AR_SEP(t) = 1.0_dp
+            AR_STRETCH(t) = 1.2_dp
+        case ("array")
+            AR_COLS(t) = ""
+            ncol = 0
+            do a = 1, len(spec)
+                if (index("lcr", spec(a:a)) > 0) then
+                    ncol = ncol + 1
+                    AR_COLS(t)(ncol:ncol) = spec(a:a)
+                end if
+            end do
+            AR_PAD(t) = .true.
+        case ("aligned", "split", "align", "align*", "alignat", "alignat*")
+            AR_COLS(t) = repeat("rl", 16)
+        case ("gathered", "gather", "gather*")
+            AR_COLS(t) = repeat("c", 32)
+        case default
+            AR_COLS(t) = repeat("c", 32)
+        end select
+        n0 = NCELL
+        NCELL = NCELL + nr*nc
+        do r = 1, nr
+            do c = 1, nc
+                cell = cell_text(body, rs, cs, nr, nc, r, c)
+                ! The left of a pair of aligned columns starts with {}, so
+                ! that a relation there is spaced as one.
+                if (kind == AR_ALIGNED .and. mod(c, 2) == 0) cell = "{}"//cell
+                if (len_trim(cell) == 0) then
+                    CELLS(n0 + (r - 1)*nc + c) = 0
+                else
+                    CELLS(n0 + (r - 1)*nc + c) = parse_list(cell, alph)
+                end if
+            end do
+        end do
+        k = new_noad(K_ARRAY, CL_ORD)
+        NOADS(k)%a = t
+        if (env == "smallmatrix") NOADS(k)%style = ST_S
+        if (dl /= 0 .or. dr /= 0) then
+            lr = new_noad(K_LR, CL_INNER)
+            NOADS(lr)%a = k
+            NOADS(lr)%dl = dl
+            NOADS(lr)%dr = dr
+            k = lr
+        end if
+    end subroutine parse_env
+
+    ! Where the rows and cells of an alignment's body start: row r's
+    ! cells begin at the positions cs((r - 1)*nc + 1...), nc being the
+    ! most cells in a row, and a cell ends where the next begins less its
+    ! separator. A last row that is empty (after a final \\) is dropped.
+    subroutine split_cells(body, rs, cs, nr, nc)
+        character(len=*), intent(in) :: body
+        integer, allocatable, intent(out) :: rs(:), cs(:)
+        integer, intent(out) :: nr, nc
+        integer, allocatable :: start(:), row(:)
+        integer :: p, depth, envd, n, k, r, cnt
+        character(len=24) :: name
+        allocate (start(len(body) + 2), row(len(body) + 2))
+        n = 1
+        start(1) = 1
+        row(1) = 1
+        r = 1
+        depth = 0
+        envd = 0
+        p = 1
+        do while (p <= len(body))
+            select case (body(p:p))
+            case ("{")
+                depth = depth + 1
+            case ("}")
+                depth = depth - 1
+            case ("&")
+                if (depth == 0 .and. envd == 0) then
+                    n = n + 1
+                    start(n) = p + 1
+                    row(n) = r
+                end if
+            case (BS)
+                if (p < len(body)) then
+                    if (body(p + 1:p + 1) == BS) then
+                        if (depth == 0 .and. envd == 0) then
+                            r = r + 1
+                            n = n + 1
+                            start(n) = p + 2
+                            row(n) = r
+                        end if
+                        p = p + 2
+                        cycle
+                    end if
+                    name = cmd_name(body(p:))
+                    if (name == "begin") envd = envd + 1
+                    if (name == "end") envd = envd - 1
+                    p = p + max(len_trim(name), 1) + 1
+                    cycle
+                end if
+            end select
+            p = p + 1
+        end do
+        ! A final empty row goes.
+        nr = r
+        if (len_trim(body(start(n):)) == 0 .and. nr > 1) then
+            if (count(row(1:n) == nr) == 1) nr = nr - 1
+        end if
+        nc = 0
+        do k = 1, nr
+            cnt = count(row(1:n) == k)
+            nc = max(nc, cnt)
+        end do
+        ! Cells rs(r) to rs(r + 1) - 1 are row r's.
+        allocate (rs(nr + 1), cs(n + 1))
+        cs(1:n) = start(1:n)
+        cs(n + 1) = len(body) + 2
+        rs = n + 1
+        do k = n, 1, -1
+            if (row(k) <= nr + 1) rs(row(k)) = k
+        end do
+    end subroutine split_cells
+
+    ! The text of the cell in row r and column c, empty if the row has
+    ! fewer cells.
+    function cell_text(body, rs, cs, nr, nc, r, c) result(t)
+        character(len=*), intent(in) :: body
+        integer, intent(in) :: rs(:), cs(:), nr, nc, r, c
+        character(len=:), allocatable :: t
+        integer :: k, e
+        t = ""
+        if (r > nr .or. c > nc) return
+        k = rs(r) + c - 1
+        if (k >= rs(r + 1)) return
+        ! The cell ends before the separator of the next one, & or \\, or
+        ! at the end.
+        if (k + 1 > size(cs) - 1) then
+            e = len(body)
+        else if (k + 1 == rs(r + 1)) then
+            e = cs(k + 1) - 3
+        else
+            e = cs(k + 1) - 2
+        end if
+        if (e >= cs(k)) t = body(cs(k):e)
+    end function cell_text
+
+    subroutine ar_reserve(ncells)
+        integer, intent(in) :: ncells
+        integer, allocatable :: ti(:)
+        integer :: cap
+        if (.not. allocated(AR_NR)) then
+            allocate (AR_NR(16), AR_NC(16), AR_C0(16), AR_KIND(16), AR_COLS(16), &
+                      AR_PAD(16), AR_SEP(16), AR_STRETCH(16), CELLS(256))
+        end if
+        if (NAR + 1 > size(AR_NR)) call grow_tables()
+        if (NCELL + ncells > size(CELLS)) then
+            cap = 2*(NCELL + ncells)
+            allocate (ti(cap))
+            ti(1:NCELL) = CELLS(1:NCELL)
+            call move_alloc(ti, CELLS)
+        end if
+    contains
+        subroutine grow_tables()
+            integer, allocatable :: a(:)
+            character(len=32), allocatable :: c(:)
+            logical, allocatable :: l(:)
+            real(dp), allocatable :: x(:)
+            integer :: m
+            m = 2*size(AR_NR)
+            allocate (a(m)); a(1:NAR) = AR_NR(1:NAR); call move_alloc(a, AR_NR)
+            allocate (a(m)); a(1:NAR) = AR_NC(1:NAR); call move_alloc(a, AR_NC)
+            allocate (a(m)); a(1:NAR) = AR_C0(1:NAR); call move_alloc(a, AR_C0)
+            allocate (a(m)); a(1:NAR) = AR_KIND(1:NAR); call move_alloc(a, AR_KIND)
+            allocate (c(m)); c(1:NAR) = AR_COLS(1:NAR); call move_alloc(c, AR_COLS)
+            allocate (l(m)); l(1:NAR) = AR_PAD(1:NAR); call move_alloc(l, AR_PAD)
+            allocate (x(m)); x(1:NAR) = AR_SEP(1:NAR); call move_alloc(x, AR_SEP)
+            allocate (x(m)); x(1:NAR) = AR_STRETCH(1:NAR); call move_alloc(x, AR_STRETCH)
+        end subroutine grow_tables
+    end subroutine ar_reserve
+
+    ! An alignment, laid out as LaTeX and amsmath set it and centred on
+    ! the axis (\vcenter):
+    !   * array, matrix and cases are LaTeX's array: each cell a formula in
+    !     text style, each row at least as high and deep as \arraystretch
+    !     times a strut, the rows stacked without interline glue, and
+    !     \arraycolsep on either side of each column (the matrices take
+    !     the outer ones back; cases has @{}l@{\quad}l@{});
+    !   * aligned and gathered are amsmath's: cells in display style,
+    !     columns right and left aligned in pairs (centred for gathered),
+    !     \minalignsep between pairs, each row with a strut and the rows
+    !     with \baselineskip, \lineskip and \lineskiplimit opened up by
+    !     \jot.
+    ! The lengths are LaTeX's at 10 pt, in TeX's points, scaled to the
+    ! size; \baselineskip is 1.2 times the size.
+    recursive subroutine make_array(q, size, box)
+        integer, intent(in) :: q
+        real(dp), intent(in) :: size
+        type(mbox_t), intent(out) :: box
+        integer :: t, nr, nc, r, c, cell, st, i0
+        type(mbox_t), allocatable :: cb(:, :)
+        real(dp), allocatable :: cw(:), rh(:), rd(:), cx(:), base(:)
+        real(dp) :: f, colsep, pad, sh, sd, y, total, a, x, g, bl, ls, lsl
+        character :: al
+
+        t = NOADS(q)%a
+        nr = AR_NR(t)
+        nc = AR_NC(t)
+        f = size/10.0_dp*PT
+        st = ST_T
+        if (AR_KIND(t) /= AR_ARRAY) st = ST_D
+        if (NOADS(q)%style >= 0) st = NOADS(q)%style
+        allocate (cb(nr, nc), cw(nc), rh(nr), rd(nr), cx(nc), base(nr))
+        i0 = NI + 1
+        cw = 0.0_dp
+        sh = AR_STRETCH(t)*STRUT_H*size
+        sd = AR_STRETCH(t)*STRUT_D*size
+        rh = sh
+        rd = sd
+        do r = 1, nr
+            do c = 1, nc
+                cell = CELLS(AR_C0(t) + (r - 1)*nc + c)
+                if (cell > 0) then
+                    call mlist_box(cell, st, .false., size, cb(r, c))
+                else
+                    cb(r, c) = empty_box()
+                    cb(r, c)%i0 = NI + 1
+                    cb(r, c)%i1 = NI
+                end if
+                cw(c) = max(cw(c), cb(r, c)%w)
+                rh(r) = max(rh(r), cb(r, c)%h)
+                rd(r) = max(rd(r), cb(r, c)%d)
+            end do
+        end do
+
+        ! The columns.
+        pad = 0.0_dp
+        if (AR_KIND(t) == AR_ARRAY) then
+            if (AR_SEP(t) < 0.0_dp) then
+                colsep = 10.0_dp*f
+            else
+                colsep = AR_SEP(t)*size
+            end if
+            if (AR_PAD(t)) then
+                pad = 5.0_dp*f
+                colsep = 10.0_dp*f
+            end if
+        else
+            colsep = 0.0_dp
+        end if
+        x = pad
+        do c = 1, nc
+            cx(c) = x
+            x = x + cw(c)
+            if (c < nc) then
+                if (AR_KIND(t) == AR_ALIGNED) then
+                    ! \minalignsep after the left column of a pair.
+                    if (mod(c, 2) == 0) x = x + 10.0_dp*f
+                else
+                    x = x + colsep
+                end if
+            end if
+        end do
+        box%w = x + pad
+
+        ! The rows.
+        base(1) = 0.0_dp
+        if (AR_KIND(t) == AR_ARRAY) then
+            do r = 2, nr
+                base(r) = base(r - 1) - rd(r - 1) - rh(r)
+            end do
+        else
+            ! \baselineskip, \lineskip 1pt and \lineskiplimit 0pt, each
+            ! opened up by \jot, 3pt.
+            bl = 1.2_dp*size + 3.0_dp*f
+            ls = 4.0_dp*f
+            lsl = 3.0_dp*f
+            do r = 2, nr
+                ! TeX compares in scaled points, where struts make the
+                ! glue exactly \lineskiplimit; in floating point it may
+                ! come out a hair under, which must not count.
+                g = bl - rd(r - 1) - rh(r)
+                if (g < lsl - 1.0e-6_dp) g = ls
+                base(r) = base(r - 1) - rd(r - 1) - g - rh(r)
+            end do
+        end if
+        total = rh(1) - base(nr) + rd(nr)
+        ! Centred on the axis.
+        a = math_const(MC_AXIS_HEIGHT)*size
+        y = a + 0.5_dp*total - rh(1)
+        do r = 1, nr
+            do c = 1, nc
+                al = AR_COLS(t)(min(c, 32):min(c, 32))
+                select case (al)
+                case ("r")
+                    x = cx(c) + cw(c) - cb(r, c)%w
+                case ("c")
+                    x = cx(c) + 0.5_dp*(cw(c) - cb(r, c)%w)
+                case default
+                    x = cx(c)
+                end select
+                call move_box(cb(r, c), x, y + base(r))
+            end do
+        end do
+        box%i0 = i0
+        box%i1 = NI
+        box%h = a + 0.5_dp*total
+        box%d = 0.5_dp*total - a
+    end subroutine make_array
+
     recursive subroutine parse_left(s, i, alph, k, j)
         character(len=*), intent(in) :: s
         integer, intent(in) :: i, alph
@@ -1496,6 +1931,8 @@ contains
                 end if
             case (K_BIG)
                 call make_big(q, cur, size, bx(k))
+            case (K_ARRAY)
+                call make_array(q, size, bx(k))
             case default
                 ! A binary operator with nothing, or with an operator,
                 ! relation, opening or punctuation before it, is ordinary;
@@ -1521,7 +1958,7 @@ contains
             end select
             ! Whatever else carries scripts takes them on its box.
             select case (NOADS(q)%kind)
-            case (K_FRAC, K_RAD, K_OVER, K_UNDER, K_LR, K_BIG)
+            case (K_FRAC, K_RAD, K_OVER, K_UNDER, K_LR, K_BIG, K_ARRAY)
                 if (NOADS(q)%sup >= 0 .or. NOADS(q)%sub >= 0) &
                     call make_scripts(q, cur, cramped, size, bx(k))
             end select
