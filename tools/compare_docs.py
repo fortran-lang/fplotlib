@@ -287,7 +287,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
     ap.add_argument("--out", default="compare_docs", help="where the PNGs go")
-    ap.add_argument("--dpi", type=float, default=80)
+    ap.add_argument("--dpi", type=int, default=80)
     ap.add_argument("examples", nargs="*", help="gallery programs (default: all)")
     args = ap.parse_args()
     examples = [Path(e).resolve() for e in args.examples] or sorted(GALLERY.glob("plot_*.f90"))
