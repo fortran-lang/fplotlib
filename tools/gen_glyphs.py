@@ -293,6 +293,8 @@ class Glyph:
         self.name = name
         self.adv = 0
         self.contours = []      # [(points, on-curve flags)], for a simple glyph
+        self.ref = None         # the glyph it is stored as a difference from
+        self.turns = None       # where each contour was started, when stored
         self.comps = None       # [(name, dx, dy, face)], for a composite one;
                                 # face is the index of another face the
                                 # component comes from, None for this one
@@ -312,6 +314,7 @@ class Face:
         self.math = None
         self.oscale = 1         # outline units are this many font units
         self.xref = None        # the face components may come from too
+        self.resid = False      # whether glyphs may be stored as differences
         self.kern_from = None   # the face whose kerning this one uses
         self.kern_pred = None   # the face this one's kerning is predicted from
 
@@ -1215,7 +1218,7 @@ def best_storage(contours, cubic, delta_cost):
     step in from the contour before takes its place. A cubic contour has
     to start on the curve, which is where the decoder starts drawing it.
     """
-    stored = []
+    stored, turns = [], []
     cur = (0, 0)
     for pts, on in contours:
         n = len(pts)
@@ -1226,8 +1229,52 @@ def best_storage(contours, cubic, delta_cost):
         )
         stored.append(([pts[(k + i) % n] for i in range(n)],
                        [on[(k + i) % n] for i in range(n)]))
+        turns.append(k)
         cur = pts[(k - 1) % n]
-    return stored
+    return stored, turns
+
+
+def turned(contours, turns):
+    """Contours each started at the point turns names."""
+    return [([pts[(k + i) % len(pts)] for i in range(len(pts))],
+             [on[(k + i) % len(pts)] for i in range(len(pts))])
+            for (pts, on), k in zip(contours, turns)]
+
+
+def plan_residuals(face):
+    """Which of the math face's glyphs are stored as the difference from
+    another: a script-size alternate from its glyph, a size variant from
+    the variant before it. Each must have the same contours, point for
+    point, as the glyph it is stored from, which must come before it, and
+    the difference must be the cheaper to store (by a rough count)."""
+    m = face.math
+    pairs = [(alt, base) for base, alt in m["ssty"].items()]
+    for key in ("vert", "horiz"):
+        for gname, (var, _) in m[key].items():
+            names = [gname] + [v for v, _ in var if v != gname]
+            pairs += [(names[k], names[k - 1]) for k in range(1, len(names))]
+
+    def rough(vals):
+        return sum(2.5 + max(zigzag(v).bit_length() - 1, 0) for v in vals)
+    n = 0
+    for name, ref in pairs:
+        g, r = face.glyphs[face.index[name]], face.glyphs[face.index[ref]]
+        if g.ref is not None or g.comps is not None or r.comps is not None:
+            continue
+        if face.index[ref] >= face.index[name] or not g.contours:
+            continue
+        if [(len(p), o) for p, o in g.contours] != [(len(p), o) for p, o in r.contours]:
+            continue
+        plain, diff, px, py, rx0, ry0 = [], [], 0, 0, 0, 0
+        for (p, _), (q, _) in zip(g.contours, r.contours):
+            for (x, y), (xr, yr) in zip(p, q):
+                plain += [x - px, y - py]
+                diff += [(x - xr) - rx0, (y - yr) - ry0]
+                px, py, rx0, ry0 = x, y, x - xr, y - yr
+        if rough(diff) < rough(plain):
+            g.ref = ref
+            n += 1
+    print(f"{face.tag}: {n} glyphs stored as differences from another")
 
 
 def computed_box(face, g, faces):
@@ -1328,16 +1375,28 @@ def encode(faces, clen):
                     w.delta(dy // face.oscale)
             else:
                 w.bit(0)
-                w.gamma(len(g.contours) + 1)
-                for pts, _ in g.contours:
-                    w.gamma(len(pts))
-                px = py = 0
-                for pts, on in g.contours:
-                    for (x, y), o in zip(pts, on):
-                        w.bit(1 if o else 0)
-                        w.delta((x - px) // face.oscale)
-                        w.delta((y - py) // face.oscale)
-                        px, py = x, y
+                if face.resid:
+                    w.bit(0 if g.ref is None else 1)
+                if g.ref is not None:
+                    r = face.glyphs[face.index[g.ref]]
+                    w.raw(face.index[g.ref], lbits)
+                    px = py = 0
+                    for (pts, _), (rpts, _) in zip(g.contours, r.contours):
+                        for (x, y), (xr, yr) in zip(pts, rpts):
+                            w.delta((x - xr - px) // face.oscale)
+                            w.delta((y - yr - py) // face.oscale)
+                            px, py = x - xr, y - yr
+                else:
+                    w.gamma(len(g.contours) + 1)
+                    for pts, _ in g.contours:
+                        w.gamma(len(pts))
+                    px = py = 0
+                    for pts, on in g.contours:
+                        for (x, y), o in zip(pts, on):
+                            w.bit(1 if o else 0)
+                            w.delta((x - px) // face.oscale)
+                            w.delta((y - py) // face.oscale)
+                            px, py = x, y
             if g.comps or g.contours:
                 cx0, cy0, cx1, cy1 = computed_box(face, g, faces)
                 x0, y0, x1, y1 = g.bbox
@@ -1533,6 +1592,18 @@ def decode(blob, clen, faces):
                     idx = r.raw(lbits if src is None else nbits(len(faces[src].glyphs)))
                     comps.append((idx, r.delta() * face.oscale, r.delta() * face.oscale, src))
                 contours = None
+            elif face.resid and r.bit():
+                comps = None
+                ref = glyphs[r.raw(lbits)][1]
+                contours = []
+                px = py = 0
+                for rpts, ron in ref:
+                    pts = []
+                    for xr, yr in rpts:
+                        px += r.delta() * face.oscale
+                        py += r.delta() * face.oscale
+                        pts.append((xr + px, yr + py))
+                    contours.append((pts, list(ron)))
             else:
                 comps = None
                 counts = [r.gamma() for _ in range(r.gamma() - 1)]
@@ -1789,6 +1860,8 @@ def main() -> None:
     font_file("LICENSE.txt", args.fonts)
     mface = faces[-1]
     refit_text_faces(faces, [gs for _, _, gs, _ in loaded])
+    mface.resid = True
+    plan_residuals(mface)
     for fi, src in KERN_SHARED.items():
         faces[fi].kern_from = src
         if set(faces[fi].kern) != set(faces[src].kern):
@@ -1824,13 +1897,19 @@ def main() -> None:
 
     for face in faces:
         cost = cost_in(face.oscale)
-        for g in face.glyphs:
+        # A glyph stored as a difference starts its contours where the
+        # glyph it is the difference from does.
+        for g in sorted(face.glyphs, key=lambda g: g.ref is not None):
             if g.comps is None:
-                turned = best_storage(g.contours, face.cubic, cost)
-                if not same_shape(contours_to_path(turned, face.cubic),
+                if g.ref is None:
+                    new, g.turns = best_storage(g.contours, face.cubic, cost)
+                else:
+                    g.turns = face.glyphs[face.index[g.ref]].turns
+                    new = turned(g.contours, g.turns)
+                if not same_shape(contours_to_path(new, face.cubic),
                                   contours_to_path(g.contours, face.cubic)):
                     raise SystemExit(f"{face.tag} {g.name}: turning changed it")
-                g.contours = turned
+                g.contours = new
 
     second = encode(faces, None)
     maxcls = max(i for i, f in enumerate(second.freq) if f)
@@ -1905,6 +1984,8 @@ def main() -> None:
     ]
     L += int_array("FACE_OSCALE", [f.oscale for f in faces])
     L += int_array("FACE_XREF", [0 if f.xref is None else f.xref + 1 for f in faces])
+    L += ["    ! Whether a face's glyphs may be stored as differences from others."]
+    L += logical_array("FACE_RESID", [f.resid for f in faces])
     L += int_array("FACE_PRED", [0 if f.pred is None else f.pred + 1 for f in faces])
     L += [
         "",

@@ -26,11 +26,16 @@
 !     components, gamma coded, and for each -- after a bit saying whether
 !     it comes from face FACE_XREF, for a face that has one -- the index
 !     in its face of the glyph it places (in as many raw bits as that
-!     face's glyph count needs) and its offset as two deltas, or the
-!     number of contours plus one, each contour's number of points, and
-!     for every point one bit saying whether it lies on the curve and its
-!     x and y as deltas from the point before it (the first is a delta
-!     from the origin); coordinates and offsets are in outline units of
+!     face's glyph count needs) and its offset as two deltas, or -- after
+!     a bit saying whether it is stored as the difference from an earlier
+!     glyph with the same contours, for a face that has FACE_RESID, and
+!     if it is, that glyph's face-local index in raw bits and, for each
+!     point, how far it is from that glyph's point, as deltas from how far
+!     the point before it is -- the number of contours plus one, each
+!     contour's number of points, and for every point one bit saying
+!     whether it lies on the curve and its x and y as deltas from the
+!     point before it (the first is a delta from the origin); coordinates
+!     and offsets are in outline units of
 !     FACE_OSCALE font units, and a component from another face is scaled
 !     from its face's units per em to this one's; and, for
 !     a glyph with contours or components, its ink box: the decoder works
@@ -87,7 +92,7 @@ module fplotlib_glyphs
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
                                  BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
-                                 FACE_OSCALE, FACE_XREF, &
+                                 FACE_OSCALE, FACE_XREF, FACE_RESID, &
                                  NPART, NMKH, NMKV, MATH_CONSTANT
     implicit none
     private
@@ -738,7 +743,7 @@ contains
     subroutine unpack()
         integer :: f, k, j, gid, base, ng, lbits, nc, n, ip, ic, icp, ik, ikv
         integer :: guess, prev_adv, xx, yy, cp, prev, nl, nr, l, c, cnt, pf
-        integer :: shrink(4, NGLYPH), xf
+        integer :: shrink(4, NGLYPH), xf, rg, r0
         logical :: boxed(NGLYPH)
 
         call from_base85()
@@ -810,20 +815,44 @@ contains
                     end do
                     nc = 0
                 else
-                    nc = get_gamma() - 1
-                    do j = 1, nc
-                        CBEG(ic + j + 1) = CBEG(ic + j) + get_gamma()
-                    end do
-                    n = CBEG(ic + nc + 1) - CBEG(ic + 1)
-                    xx = 0
-                    yy = 0
-                    do j = 1, n
-                        QON(ip + j) = get_bit() == 1
-                        xx = xx + get_delta()
-                        yy = yy + get_delta()
-                        QX(ip + j) = int(xx*FACE_OSCALE(f), int16)
-                        QY(ip + j) = int(yy*FACE_OSCALE(f), int16)
-                    end do
+                    rg = 0
+                    if (FACE_RESID(f)) then
+                        if (get_bit() == 1) rg = base + get_bits(lbits) + 1
+                    end if
+                    if (rg > 0) then
+                        ! The contours of glyph rg, point for point, moved.
+                        nc = OBEG(rg + 1) - OBEG(rg)
+                        do j = 1, nc
+                            CBEG(ic + j + 1) = CBEG(ic + j) + CBEG(OBEG(rg) + j) &
+                                               - CBEG(OBEG(rg) + j - 1)
+                        end do
+                        n = CBEG(ic + nc + 1) - CBEG(ic + 1)
+                        r0 = CBEG(OBEG(rg)) - 1
+                        xx = 0
+                        yy = 0
+                        do j = 1, n
+                            QON(ip + j) = QON(r0 + j)
+                            xx = xx + get_delta()
+                            yy = yy + get_delta()
+                            QX(ip + j) = int(QX(r0 + j) + xx*FACE_OSCALE(f), int16)
+                            QY(ip + j) = int(QY(r0 + j) + yy*FACE_OSCALE(f), int16)
+                        end do
+                    else
+                        nc = get_gamma() - 1
+                        do j = 1, nc
+                            CBEG(ic + j + 1) = CBEG(ic + j) + get_gamma()
+                        end do
+                        n = CBEG(ic + nc + 1) - CBEG(ic + 1)
+                        xx = 0
+                        yy = 0
+                        do j = 1, n
+                            QON(ip + j) = get_bit() == 1
+                            xx = xx + get_delta()
+                            yy = yy + get_delta()
+                            QX(ip + j) = int(xx*FACE_OSCALE(f), int16)
+                            QY(ip + j) = int(yy*FACE_OSCALE(f), int16)
+                        end do
+                    end if
                     ip = ip + n
                 end if
                 ic = ic + nc
