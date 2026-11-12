@@ -278,7 +278,14 @@ pixi run compare-png   # PNG, pixel by pixel
 pixi run compare-pdf   # PDF, rasterized by pdftoppm
 pixi run compare-eps   # EPS, rasterized by ghostscript
 pixi run compare-gif   # GIF, frame by frame
+
+# Build the documentation and run its Fortran gallery examples
+pixi run gallery       # HTML in docs/_build/html/
+pixi run gallery-serve # build, then serve at http://127.0.0.1:8000 (Ctrl-C to stop)
 ```
+
+The gallery has its own environment with Python, GFortran, and the documentation
+dependencies, including the gallery extension from this checkout.
 
 ## Tests
 
