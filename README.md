@@ -289,7 +289,9 @@ cover the layout Markdown has no words for, as in Pandoc.
 lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
 requires the same lines, hyphenated at the same places, with every glyph
 within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
-to 5 font units).
+to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
+fplotlib, with LaTeX (Pandoc and Tectonic) and with Typst, with the same
+fonts, and puts the pages side by side.
 
 ## Using fplotlib in your project
 
