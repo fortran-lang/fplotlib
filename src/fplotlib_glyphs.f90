@@ -35,10 +35,14 @@
 !     point order the step from the previous code point, gamma coded, and
 !     one bit when its glyph is the one after the previous entry's, else
 !     that bit and the glyph's face-local index in raw bits;
-!   * the pair kerning: the numbers of left and right classes plus one,
-!     each glyph's left and right class in raw bits, then per left class
-!     its non-zero cells plus one, gamma coded, and per cell the step to
-!     its right class, gamma coded, and the adjustment as a delta;
+!   * the pair kerning, unless the face uses another's (FACE_KERN): the
+!     numbers of left and right classes plus one, each glyph's left and
+!     right class in raw bits, then per left class its non-zero cells plus
+!     one, gamma coded, and per cell the step to its right class, gamma
+!     coded, and the adjustment in steps of KERN_STEP units as a delta --
+!     from the adjustment face FACE_KPRED makes between the glyphs at the
+!     same indices as the first glyphs of the two classes, when it names
+!     one;
 !   * for the math face (FACE_HAS_MATH), its MATH table: per glyph a bit
 !     and a delta for an italic correction, a bit and a delta from half
 !     the advance for a top accent attachment, a bit for an extended
@@ -75,6 +79,7 @@ module fplotlib_glyphs
                                  NCLASS, CLEN, NRECOMP, RECOMP_BASE, &
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
                                  BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
+                                 FACE_KERN, FACE_KPRED, KERN_STEP, &
                                  NPART, NMKH, NMKV, MATH_CONSTANT
     implicit none
     private
@@ -247,20 +252,25 @@ contains
         glyph_inked = OBEG(gid + 1) > OBEG(gid) .or. PBEG(gid + 1) > PBEG(gid)
     end function glyph_inked
 
-    ! The pair kerning between two glyphs of a face, in ems.
+    ! The pair kerning between two glyphs of a face, in ems. A face that
+    ! uses another's kerning looks its glyphs up at the same indices there.
     function glyph_kern(face, g1, g2) result(k)
         integer, intent(in) :: face, g1, g2
         real(dp) :: k
-        integer :: l, r
+        integer :: l, r, src, i1, i2
         call ensure_loaded()
         k = 0.0_dp
         if (face < 1 .or. face > NFACE) return
         if (g1 < 1 .or. g1 > NGLYPH .or. g2 < 1 .or. g2 > NGLYPH) return
         if (GFACE(g1) /= face .or. GFACE(g2) /= face) return
-        l = KLC(g1)
-        r = KRC(g2)
+        src = FACE_KERN(face)
+        i1 = g1 - FBASE(face)
+        i2 = g2 - FBASE(face)
+        if (i1 > FACE_NG(src) .or. i2 > FACE_NG(src)) return
+        l = KLC(FBASE(src) + i1)
+        r = KRC(FBASE(src) + i2)
         if (l == 0 .or. r == 0) return
-        k = real(KVAL(KOFF(face) + l*(KNR(face) + 1) + r + 1), dp) &
+        k = real(KVAL(KOFF(src) + l*(KNR(src) + 1) + r + 1)*KERN_STEP, dp) &
             /real(FACE_EM(face), dp)
     end function glyph_kern
 
@@ -824,24 +834,29 @@ contains
             end do
 
             ! The kerning classes and the cells of their matrix.
-            nl = get_gamma() - 1
-            nr = get_gamma() - 1
-            do k = 1, ng
-                KLC(base + k) = get_bits(nbits(nl))
-                KRC(base + k) = get_bits(nbits(nr))
-            end do
-            KNR(f) = nr
-            KOFF(f) = ikv
-            KVAL(ikv + 1:ikv + (nl + 1)*(nr + 1)) = 0_int16
-            do l = 1, nl
-                cnt = get_gamma() - 1
-                c = 0
-                do j = 1, cnt
-                    c = c + get_gamma()
-                    KVAL(ikv + l*(nr + 1) + c + 1) = int(get_delta(), int16)
+            KLC(base + 1:base + ng) = 0
+            KRC(base + 1:base + ng) = 0
+            if (FACE_KERN(f) == f) then
+                nl = get_gamma() - 1
+                nr = get_gamma() - 1
+                do k = 1, ng
+                    KLC(base + k) = get_bits(nbits(nl))
+                    KRC(base + k) = get_bits(nbits(nr))
                 end do
-            end do
-            ikv = ikv + (nl + 1)*(nr + 1)
+                KNR(f) = nr
+                KOFF(f) = ikv
+                KVAL(ikv + 1:ikv + (nl + 1)*(nr + 1)) = 0_int16
+                do l = 1, nl
+                    cnt = get_gamma() - 1
+                    c = 0
+                    do j = 1, cnt
+                        c = c + get_gamma()
+                        KVAL(ikv + l*(nr + 1) + c + 1) = &
+                            int(get_delta() + kern_guess(f, l, c), int16)
+                    end do
+                end do
+                ikv = ikv + (nl + 1)*(nr + 1)
+            end if
             if (FACE_HAS_MATH(f)) call unpack_math(base, ng, lbits)
         end do
         CMB(NFACE + 1) = icp + 1
@@ -853,6 +868,28 @@ contains
         end if
         deallocate (BUF)
     end subroutine unpack
+
+    ! What face FACE_KPRED(f) kerns the first glyphs of left class l and
+    ! right class r of face f by, in steps; 0 when f has no such face.
+    integer function kern_guess(f, l, r) result(v)
+        integer, intent(in) :: f, l, r
+        integer :: p, i, j, k
+        v = 0
+        p = FACE_KPRED(f)
+        if (p == 0) return
+        i = 0
+        j = 0
+        do k = 1, FACE_NG(f)
+            if (i == 0 .and. KLC(FBASE(f) + k) == l) i = k
+            if (j == 0 .and. KRC(FBASE(f) + k) == r) j = k
+            if (i > 0 .and. j > 0) exit
+        end do
+        if (i == 0 .or. j == 0 .or. i > FACE_NG(p) .or. j > FACE_NG(p)) return
+        i = KLC(FBASE(p) + i)
+        j = KRC(FBASE(p) + j)
+        if (i == 0 .or. j == 0) return
+        v = KVAL(KOFF(p) + i*(KNR(p) + 1) + j + 1)
+    end function kern_guess
 
     ! The MATH section of the face whose gids follow base.
     subroutine unpack_math(base, ng, lbits)

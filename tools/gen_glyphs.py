@@ -52,6 +52,7 @@ which fplotlib_glyphs unpacks on first use.
 import argparse
 import hashlib
 import heapq
+import json
 import math
 import sys
 import unicodedata
@@ -93,6 +94,16 @@ TEXT_FACES = [
 ]
 # The math face comes after them.
 MATH_FACE = "LeteSansMath.otf"
+
+# Kerning is stored in steps of KERN_STEP font units (2.5 units, 0.00125
+# em, at most off). Bold kerns exactly the pairs Regular does, by a median
+# of 3 units more or less, so it uses Regular's kerning (KERN_SHARED); and
+# Italic's values are stored as the difference from Regular's value for
+# the same pair (KERN_PREDICTED). The glyphs of the three faces line up,
+# a letter at the same index in each, which both rely on.
+KERN_STEP = 5
+KERN_SHARED = {1: 0}
+KERN_PREDICTED = {2: 0}
 
 
 def _r(a, b):
@@ -279,6 +290,8 @@ class Face:
         self.cubic = False
         self.pred = None
         self.math = None
+        self.kern_from = None   # the face whose kerning this one uses
+        self.kern_pred = None   # the face this one's kerning is predicted from
 
     def add(self, g):
         self.index[g.name] = len(self.glyphs)
@@ -1042,7 +1055,7 @@ def kern_classes(face):
     """
     names = [g.name for g in face.glyphs]
     rows, cols = {}, {}
-    for (a, b), v in face.kern.items():
+    for (a, b), v in face.kernq.items():
         rows.setdefault(a, []).append((face.index[b], v))
         cols.setdefault(b, []).append((face.index[a], v))
     lclass = [0] * len(names)
@@ -1056,9 +1069,32 @@ def kern_classes(face):
             key = tuple(sorted(cols[n]))
             rclass[i] = rkeys.setdefault(key, len(rkeys) + 1)
     cells = {}
-    for (a, b), v in face.kern.items():
+    for (a, b), v in face.kernq.items():
         cells[(lclass[face.index[a]], rclass[face.index[b]])] = v
     return lclass, rclass, len(lkeys), len(rkeys), cells
+
+
+def kern_predictor(src, lclass, rclass):
+    """The prediction of each cell of a face's kerning from face src's.
+
+    A class is represented by its first glyph, and the prediction is what
+    src kerns the glyphs at the same indices by; the decoder does the
+    same, having unpacked src first.
+    """
+    slc, src_rc, _, _, scells = kern_classes(src)
+    first_l, first_r = {}, {}
+    for i, c in enumerate(lclass):
+        first_l.setdefault(c, i)
+    for i, c in enumerate(rclass):
+        first_r.setdefault(c, i)
+    ns = len(src.glyphs)
+
+    def pred(lc, rc):
+        i, j = first_l[lc], first_r[rc]
+        if i >= ns or j >= ns:
+            return 0
+        return scells.get((slc[i], src_rc[j]), 0)
+    return pred
 
 
 def encode(faces, clen):
@@ -1116,20 +1152,23 @@ def encode(faces, clen):
                 w.raw(i, lbits)
             prev_cp, prev = cp, i
 
-        lclass, rclass, nl, nr, cells = kern_classes(face)
-        w.gamma(nl + 1)
-        w.gamma(nr + 1)
-        for i in range(len(face.glyphs)):
-            w.raw(lclass[i], nbits(nl))
-            w.raw(rclass[i], nbits(nr))
-        for lc in range(1, nl + 1):
-            row = sorted((rc, v) for (l, rc), v in cells.items() if l == lc)
-            w.gamma(len(row) + 1)
-            prev_rc = 0
-            for rc, v in row:
-                w.gamma(rc - prev_rc)
-                w.delta(v)
-                prev_rc = rc
+        if face.kern_from is None:
+            lclass, rclass, nl, nr, cells = kern_classes(face)
+            pred = (kern_predictor(faces[face.kern_pred], lclass, rclass)
+                    if face.kern_pred is not None else (lambda lc, rc: 0))
+            w.gamma(nl + 1)
+            w.gamma(nr + 1)
+            for i in range(len(face.glyphs)):
+                w.raw(lclass[i], nbits(nl))
+                w.raw(rclass[i], nbits(nr))
+            for lc in range(1, nl + 1):
+                row = sorted((rc, v) for (l, rc), v in cells.items() if l == lc)
+                w.gamma(len(row) + 1)
+                prev_rc = 0
+                for rc, v in row:
+                    w.gamma(rc - prev_rc)
+                    w.delta(v - pred(lc, rc))
+                    prev_rc = rc
         if face.math is not None:
             encode_math(w, face, lbits)
     return w
@@ -1306,18 +1345,21 @@ def decode(blob, clen, faces):
             cp += r.gamma()
             prev = prev + 1 if r.bit() else r.raw(lbits)
             cmap[cp] = prev
-        nl = r.gamma() - 1
-        nr = r.gamma() - 1
-        lc, rc = [], []
-        for _ in range(ng):
-            lc.append(r.raw(nbits(nl)))
-            rc.append(r.raw(nbits(nr)))
-        cells = {}
-        for l in range(1, nl + 1):
-            c = 0
-            for _ in range(r.gamma() - 1):
-                c += r.gamma()
-                cells[(l, c)] = r.delta()
+        lc, rc, nl, nr, cells = None, None, 0, 0, {}
+        if face.kern_from is None:
+            nl = r.gamma() - 1
+            nr = r.gamma() - 1
+            lc, rc = [], []
+            for _ in range(ng):
+                lc.append(r.raw(nbits(nl)))
+                rc.append(r.raw(nbits(nr)))
+            pred = (kern_predictor(faces[face.kern_pred], lc, rc)
+                    if face.kern_pred is not None else (lambda a, b: 0))
+            for l in range(1, nl + 1):
+                c = 0
+                for _ in range(r.gamma() - 1):
+                    c += r.gamma()
+                    cells[(l, c)] = r.delta() + pred(l, c)
         math = decode_math(r, glyphs, lbits) if face.math is not None else None
         out.append({"glyphs": glyphs, "cmap": cmap, "lc": lc, "rc": rc,
                     "nl": nl, "nr": nr, "cells": cells, "math": math})
@@ -1335,7 +1377,9 @@ def check_round_trip(faces, back):
                 raise SystemExit(f"{face.tag} {g.name}: the outline decodes differently")
         if d["cmap"] != {cp: face.index[n] for cp, n in face.cmap.items()}:
             raise SystemExit(f"{face.tag}: the cmap decodes differently")
-        for (a, b), v in face.kern.items():
+        if face.kern_from is not None:
+            continue
+        for (a, b), v in face.kernq.items():
             ia, ib = face.index[a], face.index[b]
             if d["cells"].get((d["lc"][ia], d["rc"][ib])) != v:
                 raise SystemExit(f"{face.tag}: kerning {a} {b} decodes differently")
@@ -1343,7 +1387,7 @@ def check_round_trip(faces, back):
                                   for i in range(len(face.glyphs))
                                   for j in range(len(face.glyphs))]
                  if (l, r) in d["cells"])
-        if nk != len(face.kern):
+        if nk != len(face.kernq):
             raise SystemExit(f"{face.tag}: the kerning classes kern other pairs too")
         if face.math is not None and d["math"] != math_tables(face):
             raise SystemExit(f"{face.tag}: the MATH data decodes differently")
@@ -1447,10 +1491,68 @@ def logical_array(name, vals):
     return [f"    logical, parameter :: {name}({len(vals)}) = [{s}]"]
 
 
+def expectation(faces):
+    """What fplotlib_glyphs must hand out for every glyph, as JSON data.
+
+    For checking the Fortran decoder (tools/check_glyphs.f90 dumps what it
+    gets): advances, ink boxes and outlines in ems, the cmaps, the
+    kerning of every pair and the MATH data, all from the data as stored.
+    """
+    base = [0]
+    for f in faces:
+        base.append(base[-1] + len(f.glyphs))
+    out = {"glyphs": [], "cmap": [], "kern": [], "math": {}}
+    for fi, f in enumerate(faces):
+        e = f.em
+        for g in f.glyphs:
+            v, pts = contours_to_path(resolved(f, g), f.cubic)
+            out["glyphs"].append({
+                "face": fi + 1, "adv": g.adv / e,
+                "bbox": [c / e for c in (g.bbox if g.ink else (0, 0, 0, 0))],
+                "verbs": v, "pts": [[x / e, y / e] for x, y in pts]})
+        for cp, n in f.cmap.items():
+            out["cmap"].append([fi + 1, cp, base[fi] + f.index[n] + 1])
+        src = faces[f.kern_from] if f.kern_from is not None else f
+        for (a, b), v in src.kernq.items():
+            ia, ib = src.index[a], src.index[b]
+            out["kern"].append([base[fi] + ia + 1, base[fi] + ib + 1,
+                                v * KERN_STEP / e])
+    mi = next(i for i, f in enumerate(faces) if f.math is not None)
+    mf = faces[mi]
+    m = mf.math
+
+    def gid(n):
+        return base[mi] + mf.index[n] + 1
+    for g in mf.glyphs:
+        n = g.name
+        d = {"italic": m["italic"].get(n, 0) / mf.em,
+             "accent": m["accent"].get(n, g.adv // 2) / mf.em,
+             "ext": n in m["extended"],
+             "ssty": gid(m["ssty"][n]) if n in m["ssty"] else gid(n),
+             "dtls": gid(m["dtls"][n]) if n in m["dtls"] else gid(n),
+             "kern": m["kern"].get(n), "cons": []}
+        for key in ("vert", "horiz"):
+            if n in m[key]:
+                var, asm = m[key][n]
+                d["cons"].append([[[gid(vn), a / mf.em] for vn, a in var],
+                                  None if asm is None else
+                                  [asm[0] / mf.em, [[gid(p[0]), p[1] / mf.em, p[2] / mf.em,
+                                                     p[3] / mf.em, bool(p[4])]
+                                                    for p in asm[1]]]])
+            else:
+                d["cons"].append([[], None])
+        out["math"][gid(n)] = d
+    out["em"] = mf.em
+    out["constants"] = [c / mf.em for c in m["constants"]]
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="read the pinned files from this directory "
                     "instead of downloading them")
+    ap.add_argument("--expect", help="also write, as JSON, what fplotlib_glyphs "
+                    "must hand out (for tools/check_glyphs.py)")
     args = ap.parse_args()
 
     faces = []
@@ -1468,6 +1570,22 @@ def main() -> None:
     font_file("OFL.txt", args.fonts)
     font_file("LICENSE.txt", args.fonts)
     mface = faces[-1]
+    for fi, src in KERN_SHARED.items():
+        faces[fi].kern_from = src
+        if set(faces[fi].kern) != set(faces[src].kern):
+            raise SystemExit(f"{faces[fi].tag} does not kern the pairs {faces[src].tag} does")
+    for fi, src in KERN_PREDICTED.items():
+        faces[fi].kern_pred = src
+    for fi in list(KERN_SHARED) + list(KERN_PREDICTED):
+        src = faces[KERN_SHARED.get(fi, KERN_PREDICTED.get(fi))]
+        for a, b in faces[fi].kern:
+            for n in (a, b):
+                k = faces[fi].index[n]
+                if k >= len(src.glyphs) or src.glyphs[k].name != n:
+                    raise SystemExit(f"{faces[fi].tag} {n} is not where {src.tag} has it")
+    for face in faces:
+        face.kernq = {k: round(v / KERN_STEP) for k, v in face.kern.items()
+                      if round(v / KERN_STEP)}
 
     # Turning contours to their cheapest start needs the code lengths and
     # the code lengths depend on the deltas, so the code is fitted to the
@@ -1507,7 +1625,7 @@ def main() -> None:
               for p, _ in g.contours)
     ncomp = sum(len(g.comps) for f in faces for g in f.glyphs if g.comps is not None)
     ncmap = sum(len(f.cmap) for f in faces)
-    kc = [kern_classes(f) for f in faces]
+    kc = [kern_classes(f) for f in faces if f.kern_from is None]
     nkern = sum((k[2] + 1) * (k[3] + 1) for k in kc)
     recomp = recomposition(TEXT_REPERTOIRE)
 
@@ -1558,6 +1676,18 @@ def main() -> None:
     L += int_array("FACE_CAP", [f.cap for f in faces])
     L += logical_array("FACE_CUBIC", [f.cubic for f in faces])
     L += int_array("FACE_PRED", [0 if f.pred is None else f.pred + 1 for f in faces])
+    L += [
+        "",
+        "    ! Kerning is in steps of KERN_STEP font units. A face uses the",
+        "    ! kerning of FACE_KERN, itself unless it shares another's, and",
+        "    ! stores its values as differences from those of FACE_KPRED, 0 for",
+        "    ! none.",
+        f"    integer, parameter :: KERN_STEP = {KERN_STEP}",
+    ]
+    L += int_array("FACE_KERN", [i + 1 if f.kern_from is None else f.kern_from + 1
+                                 for i, f in enumerate(faces)])
+    L += int_array("FACE_KPRED", [0 if f.kern_pred is None else f.kern_pred + 1
+                                  for f in faces])
     mp, mcons, mssty, mdtls = math_tables(mface)
     L += logical_array("FACE_HAS_MATH", [f.math is not None for f in faces])
     L += [
@@ -1606,6 +1736,8 @@ def main() -> None:
     L += ["", "end module fplotlib_glyphs_data", ""]
 
     OUT.write_text("\n".join(L), encoding="utf-8", newline="\n")
+    if args.expect:
+        Path(args.expect).write_text(json.dumps(expectation(faces)), encoding="utf-8")
     size = OUT.stat().st_size
     print(f"wrote {OUT}: {nglyph} glyphs ({ncomp} component references), "
           f"{npt} points, {sum(len(f.kern) for f in faces)} kerning pairs, "
