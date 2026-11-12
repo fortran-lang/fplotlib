@@ -25,7 +25,9 @@ module fplotlib
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-    use fplotlib_markdown, only: md_typeset
+    use fplotlib_doctree, only: doc_t
+    use fplotlib_markdown, only: md_parse
+    use fplotlib_docclass, only: doc_typeset
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
@@ -7516,21 +7518,25 @@ contains
     end subroutine savefig
 
     ! ------------------------------------------------------------------
-    ! Documents. typeset sets a Markdown document (see fplotlib_markdown)
-    ! into pages with TeX's paragraph and page layout (fplotlib_typeset)
-    ! and writes them as save_document does: a PDF holds every page; an
-    ! SVG, PNG or EPS file holds one, so a document of several pages is
-    ! written as name-1.svg, name-2.svg, ... A PNG is 150 dpi unless dpi is
-    ! given. As for savefig, a file that cannot be written is returned in
-    ! status when the caller passes one, and otherwise stops the program
-    ! with exit code 2. The figures are not touched.
+    ! Documents. typeset reads a Markdown document into a tree
+    ! (fplotlib_markdown, fplotlib_doctree), sets the tree as LaTeX's
+    ! article or book class does (fplotlib_docclass) into pages with TeX's
+    ! paragraph and page layout (fplotlib_typeset), and writes them as
+    ! save_document does: a PDF holds every page; an SVG, PNG or EPS file
+    ! holds one, so a document of several pages is written as name-1.svg,
+    ! name-2.svg, ... A PNG is 150 dpi unless dpi is given. As for savefig,
+    ! a file that cannot be written is returned in status when the caller
+    ! passes one, and otherwise stops the program with exit code 2. The
+    ! figures are not touched.
     ! ------------------------------------------------------------------
 
     subroutine typeset_text(text, filename, dpi, status)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
-        call md_typeset(text)
+        type(doc_t) :: doc
+        call md_parse(text, doc)
+        call doc_typeset(doc)
         call write_pages(filename, dpi, status)
     end subroutine typeset_text
 
