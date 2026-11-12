@@ -13,6 +13,8 @@ fplotlib_cmap
 fplotlib_colors
 fplotlib_contour
 fplotlib_dates
+fplotlib_docclass
+fplotlib_doctree
 fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs

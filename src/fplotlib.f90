@@ -21,7 +21,9 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_markdown, only: md_typeset
+    use fplotlib_doctree, only: doc_t
+    use fplotlib_markdown, only: md_parse
+    use fplotlib_docclass, only: doc_typeset
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
@@ -6172,9 +6174,10 @@ contains
     end subroutine savefig
 
     ! ------------------------------------------------------------------
-    ! Documents. typeset sets a Markdown document (see fplotlib_markdown)
-    ! into pages with TeX's paragraph and page layout (fplotlib_typeset)
-    ! and writes them: a PDF holds every page; an SVG, PNG or EPS file holds
+    ! Documents. typeset reads a Markdown document into a tree
+    ! (fplotlib_markdown, fplotlib_doctree), sets the tree as LaTeX's
+    ! article or book class does (fplotlib_docclass) into pages with TeX's
+    ! paragraph and page layout (fplotlib_typeset), and writes them: a PDF holds every page; an SVG, PNG or EPS file holds
     ! one, so a document of several pages is written as name-1.svg,
     ! name-2.svg, ... The figures are not touched.
     ! ------------------------------------------------------------------
@@ -6182,7 +6185,9 @@ contains
     subroutine typeset_text(text, filename, dpi)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
-        call md_typeset(text)
+        type(doc_t) :: doc
+        call md_parse(text, doc)
+        call doc_typeset(doc)
         call write_pages(filename, dpi)
     end subroutine typeset_text
 

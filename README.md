@@ -268,7 +268,17 @@ spacing of its article and book classes:
 - displays get `\abovedisplayskip` or the short skips, equation numbers
   at the right margin, and the paragraph goes on after them unindented.
 
-The Markdown is Pandoc's (`fplotlib_markdown`): YAML front matter (`title`,
+A document goes through three layers, as in Pandoc and LaTeX: a reader
+(`fplotlib_markdown`) reads the text into a tree of blocks and inlines
+(`fplotlib_doctree`, Pandoc's); a document class (`fplotlib_docclass`) sets
+the tree with LaTeX's styles, numbering sections and equations from a first
+pass over it as LaTeX does from its `.aux` file; and the engine
+(`fplotlib_typeset`) works at the level of TeX's primitives: words, glue,
+kerns, penalties, paragraphs, formulas, marks, and the page builder with
+its output routine. A program
+can also build a tree itself and give it to the class.
+
+The Markdown is Pandoc's: YAML front matter (`title`,
 `author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
 `align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
 headings, emphasis, lists, block quotes, code, rules, links, fenced divs
@@ -399,7 +409,9 @@ src/           library modules
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
-               fplotlib_markdown.f90 Markdown documents onto it
+               fplotlib_doctree.f90 a document as a tree of blocks and inlines
+               fplotlib_markdown.f90 Markdown into that tree
+               fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
                fplotlib.f90         the plotting API
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
