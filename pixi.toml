@@ -39,7 +39,7 @@ demo-flang = "fpm run --example demo --compiler flang"
 # LFortran cannot share an environment with flang: conda-forge builds it
 # against clang 21 and flang against clang 22.
 [feature.lfortran.dependencies]
-lfortran = ">=0.66.0,<0.67"
+lfortran = ">=0.69.0,<0.70"
 
 [feature.lfortran.tasks]
 test-lfortran = "fpm test --compiler lfortran"
