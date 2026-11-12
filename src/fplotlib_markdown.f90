@@ -1139,7 +1139,8 @@ contains
         type(style_t), intent(in) :: st0
         type(style_t) :: st, sp
         character(len=:), allocatable :: w, src, tag, cmd, arg
-        integer :: i, j, k, r, cp, nb
+        integer :: i, j, k, r, cp, nb, sp_face
+        real(dp) :: sp_size
         logical :: space, em_open, strong_open, lf, rf
         character :: c, em_c, strong_c, prev, next
 
@@ -1168,6 +1169,11 @@ contains
                     end if
                 end if
                 call flush()
+                ! The space is the type's it is in, as TeX's is.
+                if (.not. space) then
+                    sp_face = face_of(st)
+                    sp_size = st%size
+                end if
                 space = .true.
                 i = i + 1
             case ("*", "_")
@@ -1204,7 +1210,7 @@ contains
                     if (r == 1 .or. r == 3) then
                         em_open = .true.
                         em_c = c
-                        st%italic = .not. st0%italic .or. st%italic
+                        st%italic = .not. st0%italic
                     end if
                     if (r >= 2) then
                         strong_open = .true.
@@ -1228,11 +1234,12 @@ contains
                     cycle
                 end if
                 call flush()
+                call flush_space()
                 sp = st
                 sp%code = .true.
                 sp%bold = .false.
                 sp%italic = .false.
-                call plain(trim(adjustl(s(i + r:i + r + j - 2))), sp, space, verbatim=.true.)
+                call plain(trim(adjustl(s(i + r:i + r + j - 2))), sp, verbatim=.true.)
                 i = i + r + j - 1 + r
             case ("$")
                 if (i < len(s)) then
@@ -1259,7 +1266,8 @@ contains
                 end if
                 j = closing_dollar(s, i)
                 if (j > 0) then
-                    call flush_space(st)
+                    call flush()
+                    call flush_space()
                     call ts_math(s(i + 1:j - 1), st%size, st%color)
                     i = j + 1
                 else
@@ -1441,7 +1449,7 @@ contains
         ! The word so far goes out, after a space if one came before it.
         subroutine flush()
             if (len(w) == 0) return
-            call flush_space(st)
+            call flush_space()
             if (st%code) then
                 call ts_word(w, FACE_REGULAR, st%size, CODE_COL)
             else
@@ -1450,9 +1458,8 @@ contains
             w = ""
         end subroutine flush
 
-        subroutine flush_space(sst)
-            type(style_t), intent(in) :: sst
-            if (space) call ts_space(face_of(sst), sst%size)
+        subroutine flush_space()
+            if (space) call ts_space(sp_face, sp_size)
             space = .false.
         end subroutine flush_space
 
@@ -1493,11 +1500,11 @@ contains
                 if (cmd == "textrm" .or. cmd == "textup") sx%italic = .false.
                 call inline_sub(arg, sx)
             case ("TeX")
-                call flush_space(st)
+                call flush_space()
                 call tex_logo(st, .false.)
                 k = j
             case ("LaTeX")
-                call flush_space(st)
+                call flush_space()
                 call tex_logo(st, .true.)
                 k = j
             case ("eqref", "ref")
@@ -1524,24 +1531,18 @@ contains
         recursive subroutine inline_sub(t, sx)
             character(len=*), intent(in) :: t
             type(style_t), intent(in) :: sx
-            if (space) then
-                call ts_space(face_of(st), st%size)
-                space = .false.
-            end if
+            call flush_space()
             call inline(t, sx)
         end subroutine inline_sub
 
     end subroutine inline
 
     ! Text set as it is, without markup (code spans).
-    subroutine plain(t, st, space, verbatim)
+    subroutine plain(t, st, verbatim)
         character(len=*), intent(in) :: t
         type(style_t), intent(in) :: st
-        logical, intent(inout) :: space
         logical, intent(in) :: verbatim
         integer :: i, j
-        if (space) call ts_space(FACE_REGULAR, st%size)
-        space = .false.
         i = 1
         do while (i <= len(t))
             if (t(i:i) == " ") then
