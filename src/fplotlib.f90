@@ -21,6 +21,10 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
+    use fplotlib_doctree, only: doc_t
+    use fplotlib_markdown, only: md_parse
+    use fplotlib_docclass, only: doc_typeset
+    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
 
@@ -63,6 +67,7 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
+    public :: typeset
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -211,6 +216,11 @@ module fplotlib
     interface violinplot
         module procedure violinplot_one, violinplot_many
     end interface violinplot
+
+    ! A document: Markdown with TeX math, set by TeX's rules into pages.
+    interface typeset
+        module procedure typeset_text, typeset_lines
+    end interface typeset
 
     interface subplots
         module procedure subplots_grid, subplots_row, subplots_one
@@ -6162,6 +6172,115 @@ contains
         fig_dpi = saved_dpi
         call write_bytes(filename, svg)
     end subroutine savefig
+
+    ! ------------------------------------------------------------------
+    ! Documents. typeset reads a Markdown document into a tree
+    ! (fplotlib_markdown, fplotlib_doctree), sets the tree as LaTeX's
+    ! article or book class does (fplotlib_docclass) into pages with TeX's
+    ! paragraph and page layout (fplotlib_typeset), and writes them: a PDF holds every page; an SVG, PNG or EPS file holds
+    ! one, so a document of several pages is written as name-1.svg,
+    ! name-2.svg, ... The figures are not touched.
+    ! ------------------------------------------------------------------
+
+    subroutine typeset_text(text, filename, dpi)
+        character(len=*), intent(in) :: text, filename
+        real(dp), intent(in), optional :: dpi
+        type(doc_t) :: doc
+        call md_parse(text, doc)
+        call doc_typeset(doc)
+        call write_pages(filename, dpi)
+    end subroutine typeset_text
+
+    ! The document as an array of lines, which is how a Fortran program
+    ! most easily spells one; trailing blanks are dropped, so a hard line
+    ! break is a backslash at the end of a line.
+    subroutine typeset_lines(lines, filename, dpi)
+        character(len=*), intent(in) :: lines(:), filename
+        real(dp), intent(in), optional :: dpi
+        character(len=:), allocatable :: text
+        integer :: k
+        text = ""
+        do k = 1, size(lines)
+            text = text//trim(lines(k))//new_line("a")
+        end do
+        call typeset_text(text, filename, dpi)
+    end subroutine typeset_lines
+
+    subroutine write_pages(filename, dpi)
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        type(pdf_renderer_t) :: pdf
+        real(dp) :: w, h, res
+        integer :: p, n, col, bg(3)
+        character(len=:), allocatable :: ext
+
+        call ts_page_size(w, h, col)
+        bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
+        n = ts_page_count()
+        res = 150.0_dp
+        if (present(dpi)) res = dpi
+        ext = file_ext(filename)
+        select case (ext)
+        case ("pdf")
+            call pdf%open_canvas(w, h, bg_rgb=bg)
+            do p = 1, n
+                if (p > 1) call pdf%new_page()
+                call ts_page_draw(pdf, p)
+            end do
+            call pdf%close_canvas()
+            call write_bytes(filename, pdf%bytes())
+        case ("svg", "png", "eps")
+            do p = 1, n
+                call write_page(page_file(filename, p, n), ext, p, w, h, bg, res)
+            end do
+        case default
+            call reject_ext(filename)
+        end select
+    end subroutine write_pages
+
+    subroutine write_page(filename, ext, p, w, h, bg, res)
+        character(len=*), intent(in) :: filename, ext
+        integer, intent(in) :: p, bg(3)
+        real(dp), intent(in) :: w, h, res
+        type(svg_renderer_t) :: svg
+        type(png_renderer_t) :: png
+        type(eps_renderer_t) :: eps
+        select case (ext)
+        case ("svg")
+            call svg%open_canvas(w, h, bg_rgb=bg)
+            call ts_page_draw(svg, p)
+            call svg%close_canvas()
+            call write_bytes(filename, svg%bytes())
+        case ("png")
+            call png%set_dpi(res)
+            call png%open_canvas(w, h, bg_rgb=bg)
+            call ts_page_draw(png, p)
+            call png%close_canvas()
+            call write_bytes(filename, png%bytes())
+        case ("eps")
+            call eps%open_canvas(w, h, bg_rgb=bg)
+            call ts_page_draw(eps, p)
+            call eps%close_canvas()
+            call write_bytes(filename, eps%bytes())
+        end select
+    end subroutine write_page
+
+    ! The file page p of n goes into: the name itself for a single page,
+    ! name-p.ext for each of several.
+    function page_file(filename, p, n) result(f)
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: p, n
+        character(len=:), allocatable :: f
+        character(len=16) :: num
+        integer :: dot
+        if (n <= 1) then
+            f = filename
+            return
+        end if
+        write (num, "(I0)") p
+        dot = index(filename, ".", back=.true.)
+        f = filename(1:dot - 1)//"-"//trim(num)//filename(dot:)
+    end function page_file
 
     subroutine write_bytes(filename, data)
         character(len=*), intent(in) :: filename, data

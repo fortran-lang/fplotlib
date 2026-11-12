@@ -187,8 +187,10 @@ call suptitle("figure title")
   `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
   `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
   Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
-  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
-  and rule of 83 test formulas, and the layout is checked against it
+  `\quad`, ...); and the alignments `matrix`, `pmatrix`, `bmatrix`,
+  `Bmatrix`, `vmatrix`, `Vmatrix`, `cases`, `array`, `aligned` and
+  `gathered`. `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 92 test formulas, and the layout is checked against it
 - Automatic delimiters, as Typst has them: matched `( )`, `[ ]`, `\{ \}`,
   `| |`, `\| \|`, `\langle \rangle`, `\lfloor \rfloor` and `\lceil \rceil`
   grow to fit what they enclose, so `$(\frac{a}{b})$` needs no `\left` and
@@ -232,6 +234,74 @@ call suptitle("figure title")
 - Colors as CSS4/X11 names, `tab:` names, `#rgb`, `#rrggbb`, `#rrggbbaa`,
   single letters, `C0`-`C9`, or a greyscale fraction such as `"0.5"`
 - SVG defaults aligned with matplotlib (6.4×4.8 in, tab10 colors, subplot margins)
+
+## Documents
+
+`typeset` sets a whole document, written in Markdown with TeX mathematics
+(`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
+PNG or EPS file per page:
+
+```fortran
+call typeset([character(len=80) :: &
+    "---", &
+    "title: Notes", &
+    "numbersections: true", &
+    "---", &
+    "# Energy", &
+    "", &
+    "The energy of a mass at rest is", &
+    "$$ E = mc^2 $$ {#eq:einstein}", &
+    "and @eq:einstein is the best known formula of physics."], "notes.pdf")
+```
+
+The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
+spacing of its article and book classes:
+
+- paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
+  `line_break` with its two passes, badness, demerits and fitness
+  classes, and hyphenated with Liang's algorithm and the patterns LaTeX
+  and Typst use for English (`hyph-en-us`); interword glue is XeTeX's
+  for an OpenType font, and the space factor is `\nonfrenchspacing`'s;
+- lines go onto a vertical list with `\baselineskip`, `\lineskip` and
+  TeX's club, widow and broken penalties, and TeX's page builder cuts it
+  into pages at the breaks of least cost;
+- displays get `\abovedisplayskip` or the short skips, equation numbers
+  at the right margin, and the paragraph goes on after them unindented.
+
+A document goes through three layers, as in Pandoc and LaTeX: a reader
+(`fplotlib_markdown`) reads the text into a tree of blocks and inlines
+(`fplotlib_doctree`, Pandoc's); a document class (`fplotlib_docclass`) sets
+the tree with LaTeX's styles, numbering sections and equations from a first
+pass over it as LaTeX does from its `.aux` file; and the engine
+(`fplotlib_typeset`) works at the level of TeX's primitives: words, glue,
+kerns, penalties, paragraphs, formulas, marks, and the page builder with
+its output routine. A program
+can also build a tree itself and give it to the class.
+
+The Markdown is Pandoc's: YAML front matter (`title`,
+`author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
+`align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
+headings, emphasis, lists, block quotes, code, rules, links, fenced divs
+and bracketed spans for alignment, size and colour (`::: {.center .Huge
+color=darkred}`), cross references (`$$...$$ {#eq:name}` and `@eq:name`,
+`# Title {#sec:name}` and `@sec:name`, `\label`, `\eqref`, `\ref`), and the
+TeX commands `\newpage`, `\vspace`, `\vspace*{\fill}`, `\bigskip`, `\hfill`
+and `\quad`. The book class sets chapters, running heads and flush bottoms.
+Lengths are PostScript points (1/72 in), as in Typst.
+
+Why Markdown and not TeX: TeX as input means TeX's macro language
+(category codes, `\def`, expansion) and LaTeX on top of it, and anything
+less would break on the first document pasted from LaTeX. Markdown is small
+and readable, the mathematics stays TeX, and a handful of TeX commands
+cover the layout Markdown has no words for, as in Pandoc.
+
+`tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
+lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
+requires the same lines, hyphenated at the same places, with every glyph
+within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
+to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
+fplotlib, with LaTeX (Pandoc and Tectonic) and with Typst, with the same
+fonts, and puts the pages side by side.
 
 ## Using fplotlib in your project
 
@@ -345,6 +415,10 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
+               fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
+               fplotlib_doctree.f90 a document as a tree of blocks and inlines
+               fplotlib_markdown.f90 Markdown into that tree
+               fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
                fplotlib.f90         the plotting API
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
@@ -364,7 +438,11 @@ OFL notice alongside the MIT one, and the plots fplotlib produces carry no
 obligations. Because "Lato" is a Reserved Font Name, the fonts fplotlib
 embeds in PDF and EPS files have names of their own: `FplotlibSans-Regular`,
 `FplotlibSans-Bold`, `FplotlibSans-Italic` and `FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
-files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
+files. The hyphenation patterns in `src/fplotlib_hyph_data.f90` are generated by
+`tools/gen_hyph.py` from `hyph-en-us.tex` of the hyph-utf8 project, © Gerard
+D.C. Kuiken, whose licence permits copying and distribution with or without
+modification provided the copyright notice is kept, as it is in the file.
+The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.
 
@@ -406,7 +484,7 @@ attaches its own ids and metadata.
 Math is the exception: matplotlib's mathtext is its own approximation of TeX,
 and fplotlib follows TeX itself, so the formulas are checked against XeTeX
 instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
-unicode-math and the same font files) puts every glyph and rule of 83
+unicode-math and the same font files) puts every glyph and rule of 92
 formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
 The automatic delimiters, which TeX does not have, are checked against
 Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,

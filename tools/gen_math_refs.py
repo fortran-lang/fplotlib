@@ -81,6 +81,7 @@ FORMULAS = [
     # Fractions and stacks.
     r"$\binom{n}{k}$",
     r"$\dbinom{n}{k} + \tbinom{n}{k}$",
+    r"$\displaystyle \binom{n+1}{k} B_k$",
     r"${a \atop b}$",
     r"${a \over b}$",
     r"$\dfrac{1}{2} + \tfrac{1}{2}$",
@@ -139,6 +140,17 @@ FORMULAS = [
     r"$x \in \mathbb{N},\ y \notin A$",
     r"$\textstyle \sum_i \scriptstyle x_i$",
     r"$\$5$",
+    # Alignments: LaTeX's array (matrices, cases) and amsmath's aligned
+    # and gathered.
+    r"$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$",
+    r"$\begin{bmatrix} 1 & \frac{1}{2} \\ \frac{1}{3} & x^2 \end{bmatrix}$",
+    r"$\begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc$",
+    r"$\begin{matrix} 1 & 2 & 3 \\ 4 & 5 & 6 \end{matrix}$",
+    r"$\begin{array}{lcr} a & b & c \\ dd & ee & ff \end{array}$",
+    r"$f(x) = \begin{cases} x & x \geq 0 \\ -x & x < 0 \end{cases}$",
+    r"$\displaystyle \begin{aligned} a &= b + c \\ &= d \end{aligned}$",
+    r"$\displaystyle \begin{aligned} x &= \frac{1}{2} & y &= 3 \\ z &= 4 & w &= 5 \end{aligned}$",
+    r"$\displaystyle \begin{gathered} x = y \\ x + 1 = y + 1 \end{gathered}$",
 ]
 
 PREAMBLE = r"""\documentclass{article}
@@ -179,11 +191,6 @@ ALPHABETS = {r"\mathbf": r"\symbf", r"\mathsf": r"\symsf", r"\mathit": r"\symit"
              r"\mathbb": r"\symbb", r"\mathcal": r"\symcal"}
 
 
-# fplotlib's \binom is \atopwithdelims() as TeX sets it; amsmath's sizes
-# its parentheses by \fontdimen 20 and 21, which under XeTeX are unrelated
-# MATH constants.
-BINOM = re.compile(r"\\([dt]?)binom\{([^{}]*)\}\{([^{}]*)\}")
-BINOM_STYLE = {"": "", "d": r"\displaystyle", "t": r"\textstyle"}
 
 
 # fplotlib's escaped \( \) \[ \] are the plain characters, which TeX
@@ -196,8 +203,6 @@ def page(formula):
         formula = formula.replace(a + "{", b + "{")
     for a, b in ESCAPES.items():
         formula = formula.replace(a, b)
-    formula = BINOM.sub(lambda m: r"{%s{{%s}\atopwithdelims(){%s}}}"
-                        % (BINOM_STYLE[m[1]], m[2], m[3]), formula)
     return (r"\vrule width %gbp height %gbp depth 0pt\kern-%gbp%s\newpage" "\n"
             % (MARK, MARK, MARK, formula))
 

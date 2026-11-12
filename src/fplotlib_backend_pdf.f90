@@ -48,10 +48,22 @@ module fplotlib_backend_pdf
         character(len=:), allocatable :: alpha
     end type pdf_image_t
 
+    ! A finished page's content stream.
+    type :: pdf_page_t
+        character(len=:), allocatable :: content
+    end type pdf_page_t
+
     type, extends(renderer_t) :: pdf_renderer_t
         ! The page content stream. The file itself is assembled in
         ! close_canvas, once the length of this is known.
         type(svg_builder) :: c
+        ! The pages before the current one, for a document of several;
+        ! they share the fonts, images and alpha states.
+        integer :: npages = 0
+        type(pdf_page_t), allocatable :: pages(:)
+        logical :: has_bg = .false.
+        integer :: bg(3) = 255
+        real(dp) :: bga = 1.0_dp
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
@@ -75,6 +87,7 @@ module fplotlib_backend_pdf
         procedure :: draw_markers => pdf_draw_markers
         procedure :: draw_glyphs => pdf_draw_glyphs
         procedure :: draw_image => pdf_draw_image
+        procedure :: new_page => pdf_new_page
     end type pdf_renderer_t
 
 
@@ -224,7 +237,6 @@ contains
         integer, intent(in), optional :: bg_rgb(3)
         real(dp), intent(in), optional :: bg_alpha
         real(dp), intent(in), optional :: x0, y0
-        type(paint_t) :: p
 
         self%w = width
         self%h = height
@@ -234,22 +246,48 @@ contains
         if (present(y0)) self%y0 = y0
         self%n_alpha = 0
         self%n_img = 0
+        self%npages = 0
         call t3_reset(self%t3)
-        call builder_init(self%c)
-
-        ! One matrix for the whole page turns the API's top-left origin with
-        ! y downwards into PDF's bottom-left origin with y upwards, and
-        ! applies the canvas origin at the same time.
-        call put(self, "1 0 0 -1 "//num_str(-self%x0)//" " &
-                 //num_str(self%y0 + height)//" cm"//new_line("a"))
-
-        if (present(bg_rgb)) then
-            p%filled = .true.
-            p%fill_rgb = bg_rgb
-            if (present(bg_alpha)) p%fill_alpha = bg_alpha
-            call pdf_draw_rect(self, self%x0, self%y0, width, height, p)
-        end if
+        self%has_bg = present(bg_rgb)
+        if (present(bg_rgb)) self%bg = bg_rgb
+        self%bga = 1.0_dp
+        if (present(bg_alpha)) self%bga = bg_alpha
+        call start_page(self)
     end subroutine pdf_open_canvas
+
+    ! A page's content starts with the matrix that turns the API's
+    ! top-left origin with y downwards into PDF's bottom-left origin with
+    ! y upwards, and applies the canvas origin at the same time; then the
+    ! background, if there is one.
+    subroutine start_page(self)
+        class(pdf_renderer_t), intent(inout) :: self
+        type(paint_t) :: p
+        call builder_init(self%c)
+        call put(self, "1 0 0 -1 "//num_str(-self%x0)//" " &
+                 //num_str(self%y0 + self%h)//" cm"//new_line("a"))
+        if (self%has_bg) then
+            p%filled = .true.
+            p%fill_rgb = self%bg
+            p%fill_alpha = self%bga
+            call pdf_draw_rect(self, self%x0, self%y0, self%w, self%h, p)
+        end if
+    end subroutine start_page
+
+    ! Finish the page drawn so far and start another of the same size: a
+    ! document of several pages in one file.
+    subroutine pdf_new_page(self)
+        class(pdf_renderer_t), intent(inout) :: self
+        type(pdf_page_t), allocatable :: t(:)
+        if (.not. allocated(self%pages)) allocate (self%pages(4))
+        if (self%npages >= size(self%pages)) then
+            allocate (t(2*size(self%pages)))
+            t(1:self%npages) = self%pages(1:self%npages)
+            call move_alloc(t, self%pages)
+        end if
+        self%npages = self%npages + 1
+        self%pages(self%npages)%content = builder_get(self%c)
+        call start_page(self)
+    end subroutine pdf_new_page
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(pdf_renderer_t), intent(inout) :: self
@@ -483,14 +521,17 @@ contains
     subroutine pdf_close_canvas(self)
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
-        character(len=:), allocatable :: content, res, gs, xo, ft
+        character(len=:), allocatable :: content, res, gs, xo, ft, kids
         integer, allocatable :: off(:), font_obj(:)
-        integer :: nobj, i, pos, xref_pos
+        integer :: nobj, i, pos, xref_pos, np, k
         integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
         character(len=1) :: eol
 
         eol = new_line("a")
         content = builder_get(self%c)
+        ! Page k is object 2k + 1 and its content 2k + 2; the last page is
+        ! the one being drawn.
+        np = self%npages + 1
 
         ! /ExtGState entries for the alpha values the figure actually used.
         gs = ""
@@ -503,7 +544,7 @@ contains
         ! Each font is three kinds of object: its dictionary, its map back
         ! to Unicode, and one stream per glyph. The images follow, one
         ! object each and a second for a soft mask where one is needed.
-        nobj = 4
+        nobj = 2 + 2*np
         allocate (font_obj(self%t3%nfont))
         ft = ""
         do i = 1, self%t3%nfont
@@ -542,20 +583,33 @@ contains
         call emit(f, pos, "1 0 obj"//eol//"<< /Type /Catalog /Pages 2 0 R >>" &
                   //eol//"endobj"//eol)
 
+        kids = ""
+        do k = 1, np
+            if (k > 1) kids = kids//" "
+            kids = kids//int_str(2*k + 1)//" 0 R"
+        end do
         off(2) = pos
-        call emit(f, pos, "2 0 obj"//eol//"<< /Type /Pages /Kids [3 0 R] /Count 1 >>" &
-                  //eol//"endobj"//eol)
+        call emit(f, pos, "2 0 obj"//eol//"<< /Type /Pages /Kids ["//kids//"] /Count " &
+                  //int_str(np)//" >>"//eol//"endobj"//eol)
 
-        off(3) = pos
-        call emit(f, pos, "3 0 obj"//eol//"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " &
-                  //num_str(self%w)//" "//num_str(self%h)//"] /Contents 4 0 R /Resources " &
-                  //res//" >>"//eol//"endobj"//eol)
-
-        off(4) = pos
-        call emit(f, pos, "4 0 obj"//eol//"<< /Length "//int_str(len(content)) &
-                  //" >>"//eol//"stream"//eol)
-        call emit(f, pos, content)
-        call emit(f, pos, "endstream"//eol//"endobj"//eol)
+        do k = 1, np
+            off(2*k + 1) = pos
+            call emit(f, pos, int_str(2*k + 1)//" 0 obj"//eol &
+                      //"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " &
+                      //num_str(self%w)//" "//num_str(self%h)//"] /Contents " &
+                      //int_str(2*k + 2)//" 0 R /Resources "//res//" >>"//eol//"endobj"//eol)
+            off(2*k + 2) = pos
+            if (k < np) then
+                call emit(f, pos, int_str(2*k + 2)//" 0 obj"//eol//"<< /Length " &
+                          //int_str(len(self%pages(k)%content))//" >>"//eol//"stream"//eol)
+                call emit(f, pos, self%pages(k)%content)
+            else
+                call emit(f, pos, int_str(2*k + 2)//" 0 obj"//eol//"<< /Length " &
+                          //int_str(len(content))//" >>"//eol//"stream"//eol)
+                call emit(f, pos, content)
+            end if
+            call emit(f, pos, "endstream"//eol//"endobj"//eol)
+        end do
 
         do i = 1, self%t3%nfont
             call emit_font(self, f, pos, off, i, font_obj(i))
