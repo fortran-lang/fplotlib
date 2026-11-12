@@ -96,7 +96,7 @@ module fplotlib_glyphs
                                  FACE_XH, FACE_CAP, FACE_CUBIC, FACE_PRED, &
                                  NRECOMP, RECOMP_BASE, &
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
-                                 BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
+                                 blob_text, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
                                  FACE_OSCALE, FACE_XREF, FACE_RESID, &
                                  NPART, NMKH, NMKV, MATH_CONSTANT
@@ -1146,19 +1146,16 @@ contains
         end do
     end function nbits
 
-    ! Five characters back into four bytes, most significant first.
-    ! The blob is stored as rows of equal length because ifx caps a
-    ! character named constant at 7198 characters; gluing them back
-    ! together at run time is not bound by that.
+    ! Five characters back into four bytes, most significant first. The
+    ! blob is stored as rows of equal length because ifx caps a character
+    ! named constant at 7198 characters; blob_text glues them back
+    ! together at run time, which is not bound by that.
     subroutine from_base85()
-        integer :: val(0:127), i, j, k, n, r, w
+        integer :: val(0:127), i, j, k, n
         integer(int64) :: acc
         character(len=:), allocatable :: blob
         allocate (character(len=BLOB_LEN) :: blob)
-        w = len(BLOB_ROWS)
-        do r = 1, size(BLOB_ROWS)
-            blob((r - 1)*w + 1:min(r*w, BLOB_LEN)) = BLOB_ROWS(r)
-        end do
+        call blob_text(blob)
         val = -1
         do i = 1, len(ALPHABET)
             val(iachar(ALPHABET(i:i))) = i - 1

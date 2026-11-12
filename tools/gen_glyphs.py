@@ -258,9 +258,6 @@ ALPHABET = "".join(
 
 VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE = 1, 2, 3, 4
 
-# The longest code a magnitude class may get. The decoder reads a code a
-# bit at a time, so this only bounds a loop.
-
 
 # --- the font files --------------------------------------------------
 
@@ -1866,42 +1863,51 @@ def recomposition(repertoire):
 # --- the module ------------------------------------------------------
 
 
-def literal(text, width=118, rows_per_chunk=100):
-    """The blob as an array of equal-length row parameters.
+def literal(text, width=127, rows_per_chunk=100):
+    """The blob as row parameters, and blob_text to put them together.
 
     One long literal would be simplest, but ifx caps a single token at
     7194 characters and a character named constant at 7198, so the blob
-    cannot be one parameter, however it is spelled. An array of short rows
-    has neither problem, and fplotlib_glyphs glues the rows back together
-    at run time, where no limit applies. BLOB_LEN is the true length; the
-    constructor blank-pads the last row to the common width.
+    cannot be one parameter, however it is spelled. Short rows have
+    neither problem, and blob_text glues them back together at run time,
+    where no limit applies; BLOB_LEN is the true length, the constructor
+    blank-pads the last row to the common width.
 
-    The rows are declared in chunks which BLOB_ROWS then concatenates,
-    because a statement may carry only 255 continuation lines before
-    Fortran 2023 and there are more rows than that. 118 payload characters
-    plus quotes, comma and ampersand at an 8-column indent is the 132
-    column limit.
+    The rows are declared in chunks because a statement may carry only 255
+    continuation lines before Fortran 2023, and there are more rows than
+    that. They are not gathered into one array parameter, which would be a
+    second copy of the blob in the object file. A row is its 127
+    characters, quotes, a comma and an ampersand, the 132 column limit.
     """
     rows = [text[i:i + width] for i in range(0, len(text), width)]
     chunks = [rows[i:i + rows_per_chunk]
               for i in range(0, len(rows), rows_per_chunk)]
-    out = [f"    integer, parameter :: BLOB_LEN = {len(text)}"]
+    decl = [f"    integer, parameter :: BLOB_LEN = {len(text)}",
+            f"    integer, parameter :: BLOB_ROW = {width}"]
     for k, chunk in enumerate(chunks):
-        out.append(f"    character(len={width}), parameter :: "
-                   f"BLOB_ROWS_{k + 1}({len(chunk)}) = "
-                   f"[character(len={width}) :: &")
+        decl.append(f"    character(len={width}), parameter :: "
+                    f"BLOB_ROWS_{k + 1}({len(chunk)}) = "
+                    f"[character(len={width}) :: &")
         for i, row in enumerate(chunk):
             tail = "]" if i == len(chunk) - 1 else ", &"
-            out.append(f'        "{row}"{tail}')
-        out.append("")
-    # The concatenation itself is a statement too, so it is chunked the
-    # same way once there are more than a couple of hundred chunks.
-    out.append(f"    character(len={width}), parameter :: "
-               f"BLOB_ROWS({len(rows)}) = [ &")
+            decl.append(f'"{row}"{tail}')
+        decl.append("")
+    body = [
+        "    ! The blob, the rows end to end; s is BLOB_LEN long.",
+        "    subroutine blob_text(s)",
+        "        character(len=*), intent(out) :: s",
+        "        integer :: r, k",
+        "        k = 0",
+    ]
     for k in range(len(chunks)):
-        tail = "]" if k == len(chunks) - 1 else ", &"
-        out.append(f"        BLOB_ROWS_{k + 1}{tail}")
-    return out
+        body += [
+            f"        do r = 1, size(BLOB_ROWS_{k + 1})",
+            f"            s(k + 1:min(k + BLOB_ROW, len(s))) = BLOB_ROWS_{k + 1}(r)",
+            "            k = k + BLOB_ROW",
+            "        end do",
+        ]
+    body += ["    end subroutine blob_text"]
+    return decl, body
 
 
 def int_array(name, vals, per_line=12, indent="    "):
@@ -2169,7 +2175,9 @@ def main() -> None:
         f'        "{ALPHABET}"',
         "",
     ]
-    L += literal(text)
+    decl, body = literal(text)
+    L += decl
+    L += ["", "contains", ""] + body
     L += ["", "end module fplotlib_glyphs_data", ""]
 
     OUT.write_text("\n".join(L), encoding="utf-8", newline="\n")
