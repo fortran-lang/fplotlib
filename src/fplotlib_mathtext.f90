@@ -51,7 +51,6 @@ module fplotlib_mathtext
     use fplotlib_glyphs_data, only: MIN_CONNECTOR_OVERLAP, FACE_EM, &
                                MC_SCRIPT_PERCENT_SCALE_DOWN, &
                                MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN, MC_AXIS_HEIGHT, &
-                               MC_DELIMITED_SUB_FORMULA_MIN_HEIGHT, &
                                MC_DISPLAY_OPERATOR_MIN_HEIGHT, MC_ACCENT_BASE_HEIGHT, &
                                MC_SUBSCRIPT_SHIFT_DOWN, MC_SUBSCRIPT_TOP_MAX, &
                                MC_SUBSCRIPT_BASELINE_DROP_MIN, MC_SUPERSCRIPT_SHIFT_UP, &
@@ -130,6 +129,14 @@ module fplotlib_mathtext
     ! \delimitershortfall (5pt), and the strut of a 12pt baseline, which
     ! \cfrac puts into its numerators. \delimiterfactor is 901.
     real(dp), parameter :: NULL_DELIM = 0.12_dp, SHORTFALL = 0.5_dp
+    ! TeX's \delim1 and \delim2, the sizes of the delimiters of \binom
+    ! and \atopwithdelims in display style and in the others, in ems.
+    ! The MATH table has nothing for them; these are Computer Modern's,
+    ! which LuaTeX takes for an OpenType font and LaTeX's \binom gets
+    ! under XeTeX too. (XeTeX's own \atopwithdelims uses
+    ! DelimitedSubFormulaMinHeight, which is meant for something else, and
+    ! comes out shorter than the stack in display style.)
+    real(dp), parameter :: DELIM1 = 2.39_dp, DELIM2 = 1.01_dp
     ! A TeX point, in the big points fplotlib measures in.
     real(dp), parameter :: PT = 72.0_dp/72.27_dp
     real(dp), parameter :: STRUT_H = 0.84_dp, STRUT_D = 0.36_dp
@@ -2341,10 +2348,10 @@ contains
     ! denominator cramped, each centred over the other. A fraction's
     ! halves are moved out until they clear the rule, which sits on the
     ! axis, by the minimum gap; a stack's are moved apart, half each, to
-    ! its minimum gap. The delimiters of \binom and \choose are
-    ! DelimitedSubFormulaMinHeight tall in display style and at most 1.5
-    ! ems otherwise, as in XeTeX; a fraction without delimiters has a null
-    ! delimiter's space on either side, as TeX leaves it.
+    ! its minimum gap. The delimiters of \binom and \choose are at least
+    ! TeX's \delim1 tall in display style and \delim2 otherwise; a
+    ! fraction without delimiters has a null delimiter's space on either
+    ! side, as TeX leaves it.
     recursive subroutine make_frac(q, style0, cramped, size, box)
         integer, intent(in) :: q, style0
         logical, intent(in) :: cramped
@@ -2365,8 +2372,8 @@ contains
         if (NOADS(q)%rule) th = math_const(MC_FRACTION_RULE_THICKNESS)*sz
 
         if (NOADS(q)%dl > 0) then
-            target = math_const(MC_DELIMITED_SUB_FORMULA_MIN_HEIGHT)*sz
-            if (style /= ST_D) target = min(1.5_dp*sz, target)
+            target = DELIM1*sz
+            if (style /= ST_D) target = DELIM2*sz
             call make_delim(NOADS(q)%dl, target, style, size, dl)
         end if
         call mlist_box(NOADS(q)%a, frac_style(style), cramped, size, num)
