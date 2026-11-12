@@ -699,7 +699,7 @@ contains
     ! The minus of a number written as U+2212 rather than a hyphen, which
     ! is what matplotlib's formatters do (axes.unicode_minus): the hyphen
     ! is shorter than a plus and sits lower than the digits.
-    pure subroutine fix_minus(s, n)
+    pure elemental subroutine fix_minus(s, n)
         character(len=*), intent(inout) :: s
         integer, intent(inout) :: n
         character(len=len(s)) :: t

@@ -212,7 +212,7 @@ contains
         end if
     end function t3_unicode
 
-    pure function hex4(v) result(s)
+    pure elemental function hex4(v) result(s)
         integer, intent(in) :: v
         character(len=4) :: s
         character(len=16), parameter :: H = "0123456789ABCDEF"

@@ -303,7 +303,7 @@ contains
 
     ! The dollar sign that closes a formula opened before i, skipping
     ! the ones written \$; len(s) + 1 when there is none.
-    pure integer function dollar(s, i) result(j)
+    pure elemental integer function dollar(s, i) result(j)
         character(len=*), intent(in) :: s
         integer, intent(in) :: i
         j = i
@@ -1098,7 +1098,7 @@ contains
 
     ! The accent a command puts over its argument, and whether it grows
     ! to the argument's width; 0 for a command that is not an accent.
-    pure subroutine accent_code(name, code, wide)
+    pure elemental subroutine accent_code(name, code, wide)
         character(len=*), intent(in) :: name
         integer, intent(out) :: code
         logical, intent(out) :: wide
@@ -1125,7 +1125,7 @@ contains
         end select
     end subroutine accent_code
 
-    pure integer function alphabet_of(name) result(alph)
+    pure elemental integer function alphabet_of(name) result(alph)
         character(len=*), intent(in) :: name
         select case (name)
         case ("mathit", "mathnormal"); alph = ALPH_IT
@@ -1239,7 +1239,7 @@ contains
     ! ------------------------------------------------------------------
 
     ! The font size of a style, for a formula set at size.
-    pure real(dp) function style_size(style, size) result(sz)
+    pure elemental real(dp) function style_size(style, size) result(sz)
         integer, intent(in) :: style
         real(dp), intent(in) :: size
         select case (style)
@@ -1253,7 +1253,7 @@ contains
     end function style_size
 
     ! The style of a superscript, and of a fraction's halves.
-    pure integer function sup_style(style)
+    pure elemental integer function sup_style(style)
         integer, intent(in) :: style
         select case (style)
         case (ST_D, ST_T); sup_style = ST_S
@@ -1261,7 +1261,7 @@ contains
         end select
     end function sup_style
 
-    pure integer function frac_style(style)
+    pure elemental integer function frac_style(style)
         integer, intent(in) :: style
         select case (style)
         case (ST_D); frac_style = ST_T
@@ -1386,7 +1386,7 @@ contains
         b%sz = sz
     end subroutine glyph_box
     ! Make a box at least as high and as deep as given, as a strut does.
-    pure subroutine strut_box(b, h, d)
+    pure elemental subroutine strut_box(b, h, d)
         type(mbox_t), intent(inout) :: b
         real(dp), intent(in) :: h, d
         b%h = max(b%h, h)
@@ -2582,7 +2582,7 @@ contains
     end subroutine cmd_arg
     ! The optional [argument] of a command, i0:i1 inside the brackets,
     ! empty when there is none.
-    pure subroutine opt_arg(s, i0, i1)
+    pure elemental subroutine opt_arg(s, i0, i1)
         character(len=*), intent(in) :: s
         integer, intent(out) :: i0, i1
         integer :: j, k
@@ -2622,7 +2622,7 @@ contains
         j = len(s)
     end subroutine group_end
     ! How many braced arguments a command takes.
-    pure integer function cmd_nargs(name) result(n)
+    pure elemental integer function cmd_nargs(name) result(n)
         character(len=*), intent(in) :: name
         integer :: code, cls
         logical :: wide

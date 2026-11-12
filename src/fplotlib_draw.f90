@@ -129,7 +129,7 @@ contains
 
     ! Baseline of the x tick labels: hanging from the ticks below the axes,
     ! or standing on them above it.
-    pure function xtick_base(a, edge) result(v)
+    pure elemental function xtick_base(a, edge) result(v)
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: edge
         real(dp) :: v
@@ -400,7 +400,7 @@ contains
 
     ! What the x tick labels take up above the axes, when the x axis is on
     ! top (spy, matshow, twiny): the ticks, the pad and the labels.
-    pure function xtop_band(a) result(v)
+    pure elemental function xtop_band(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
         v = 0.0_dp
@@ -410,7 +410,7 @@ contains
 
     ! Distance from the top of the axes up to the title's baseline: the
     ! title pad, above any x tick labels on top, as matplotlib places it.
-    pure function title_gap(a) result(v)
+    pure elemental function title_gap(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
         v = xtop_band(a) + 0.5_dp*a%title_size

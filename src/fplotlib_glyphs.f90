@@ -315,7 +315,7 @@ contains
     end function glyph_char
 
     ! The character a base and one combining mark compose to, 0 if none.
-    pure integer function glyph_recompose(base, mark) result(c)
+    pure elemental integer function glyph_recompose(base, mark) result(c)
         integer, intent(in) :: base, mark
         integer :: i
         c = 0
@@ -329,22 +329,22 @@ contains
 
     ! A face's ascender, descender (negative), x-height and cap height,
     ! in ems.
-    pure real(dp) function face_ascent(face)
+    pure elemental real(dp) function face_ascent(face)
         integer, intent(in) :: face
         face_ascent = real(FACE_ASC(face), dp)/real(FACE_EM(face), dp)
     end function face_ascent
 
-    pure real(dp) function face_descent(face)
+    pure elemental real(dp) function face_descent(face)
         integer, intent(in) :: face
         face_descent = real(FACE_DESC(face), dp)/real(FACE_EM(face), dp)
     end function face_descent
 
-    pure real(dp) function face_xheight(face)
+    pure elemental real(dp) function face_xheight(face)
         integer, intent(in) :: face
         face_xheight = real(FACE_XH(face), dp)/real(FACE_EM(face), dp)
     end function face_xheight
 
-    pure real(dp) function face_capheight(face)
+    pure elemental real(dp) function face_capheight(face)
         integer, intent(in) :: face
         face_capheight = real(FACE_CAP(face), dp)/real(FACE_EM(face), dp)
     end function face_capheight
@@ -353,12 +353,12 @@ contains
 
     ! A MATH constant in ems. The three that are percentages are read with
     ! math_percent instead.
-    pure real(dp) function math_const(i)
+    pure elemental real(dp) function math_const(i)
         integer, intent(in) :: i
         math_const = real(MATH_CONSTANT(i), dp)/real(FACE_EM(FACE_MATH), dp)
     end function math_const
 
-    pure real(dp) function math_percent(i)
+    pure elemental real(dp) function math_percent(i)
         integer, intent(in) :: i
         math_percent = real(MATH_CONSTANT(i), dp)
     end function math_percent
@@ -1135,7 +1135,7 @@ contains
     end subroutine unpack_math
 
     ! Bits for a number in 0..n.
-    pure integer function nbits(n)
+    pure elemental integer function nbits(n)
         integer, intent(in) :: n
         integer :: m
         m = max(n, 1)
@@ -1302,7 +1302,7 @@ contains
 
     ! The magnitude class of a delta: the position of the leading one of
     ! its fold to a non-negative number.
-    pure integer function vcls(v)
+    pure elemental integer function vcls(v)
         integer, intent(in) :: v
         integer :: u
         u = merge(2*v, -2*v - 1, v >= 0)

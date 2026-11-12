@@ -32,7 +32,7 @@ module fplotlib_text
 contains
 
     ! The face a weight and a slant ask for.
-    pure integer function text_face(weight, slant) result(face)
+    pure elemental integer function text_face(weight, slant) result(face)
         integer, intent(in) :: weight, slant
         logical :: b, i
         b = weight == WEIGHT_BOLD

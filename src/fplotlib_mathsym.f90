@@ -144,7 +144,7 @@ contains
 
     ! The character and class a command name stands for; code is 0 when
     ! the name is not a symbol.
-    pure subroutine sym_lookup(name, code, cls)
+    pure elemental subroutine sym_lookup(name, code, cls)
         character(len=*), intent(in) :: name
         integer, intent(out) :: code, cls
         integer :: i
@@ -162,7 +162,7 @@ contains
     ! The class of a character typed into a formula: that of the command
     ! that stands for it, or TeX's for the ASCII characters it gives a
     ! class of their own.
-    pure integer function sym_class(code) result(cls)
+    pure elemental integer function sym_class(code) result(cls)
         integer, intent(in) :: code
         integer :: i
         select case (code)

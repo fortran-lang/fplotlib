@@ -358,7 +358,7 @@ contains
         call put(self, "grestore"//eol)
     end subroutine eps_draw_glyphs
 
-    pure function hex2(v) result(s)
+    pure elemental function hex2(v) result(s)
         integer, intent(in) :: v
         character(len=2) :: s
         character(len=16), parameter :: H = "0123456789ABCDEF"

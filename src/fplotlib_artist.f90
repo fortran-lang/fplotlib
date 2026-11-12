@@ -418,19 +418,19 @@ contains
     ! the font's ascender and descender, which is what matplotlib sizes a
     ! line of text by and aligns it with. A line is their sum, 1.2 ems in
     ! Lato.
-    pure real(dp) function text_ascent(size)
+    pure elemental real(dp) function text_ascent(size)
         real(dp), intent(in) :: size
         text_ascent = face_ascent(FACE_REGULAR)*size
     end function text_ascent
 
-    pure real(dp) function text_descent(size)
+    pure elemental real(dp) function text_descent(size)
         real(dp), intent(in) :: size
         text_descent = -face_descent(FACE_REGULAR)*size
     end function text_descent
 
     ! Where the baseline goes for text centred on y, below it: matplotlib's
     ! "center" puts the middle of the line there.
-    pure real(dp) function text_mid(size)
+    pure elemental real(dp) function text_mid(size)
         real(dp), intent(in) :: size
         text_mid = 0.5_dp*(text_ascent(size) - text_descent(size))
     end function text_mid
