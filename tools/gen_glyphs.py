@@ -260,7 +260,6 @@ VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE = 1, 2, 3, 4
 
 # The longest code a magnitude class may get. The decoder reads a code a
 # bit at a time, so this only bounds a loop.
-MAXLEN = 15
 
 
 # --- the font files --------------------------------------------------
@@ -1078,130 +1077,241 @@ def unzigzag(u):
     return u // 2 if u % 2 == 0 else -(u + 1) // 2
 
 
-def huffman_lengths(freq):
-    """Code lengths of a Huffman code for these frequencies, at most MAXLEN.
+# The stream is written with an adaptive binary range coder, the one LZMA
+# uses: every bit is coded with a probability, 11 bits wide, that the bits
+# before it in the same context have moved towards them by 1/2**MOVE_BITS
+# each. A value is binarized: a flag is one such bit; a delta, folded to
+# a non-negative number u, is its magnitude class (the position of u's
+# leading one, 0 for zero) spelled out as five bits down a binary tree,
+# then the bit under the leading one, then the rest of u's bits at a
+# fixed even chance; a gamma is Elias gamma, its run of zeros modelled
+# bit by bit and its low bits at even chance; and raw bits are at even
+# chance. Each kind of value has a context of its own, and the points of
+# an outline have contexts that say what the point before them was.
+MOVE_BITS = 3
 
-    Every class up to the largest used one gets a code, so the code is
-    complete and the decoder never meets a gap.
-    """
-    n = len(freq)
-    heap = [(max(f, 1), i, [i]) for i, f in enumerate(freq)]
-    heapq.heapify(heap)
-    lengths = [0] * n
-    tie = n
-    while len(heap) > 1:
-        fa, _, a = heapq.heappop(heap)
-        fb, _, b = heapq.heappop(heap)
-        for s in a + b:
-            lengths[s] += 1
-        heapq.heappush(heap, (fa + fb, tie, a + b))
-        tie += 1
-    if n == 1:
-        lengths = [1]
-    if max(lengths) > MAXLEN:
-        raise SystemExit("a magnitude class needs a code longer than MAXLEN")
-    return lengths
-
-
-def canonical(lengths):
-    """Codes for a canonical prefix code, shortest and lowest symbol first."""
-    order = sorted(range(len(lengths)), key=lambda s: (lengths[s], s))
-    codes = {}
-    code = 0
-    prev = 0
-    for sym in order:
-        code <<= lengths[sym] - prev
-        prev = lengths[sym]
-        codes[sym] = code
-        code += 1
-    if sum(2.0 ** -length for length in lengths) != 1.0:
-        raise SystemExit("the magnitude classes are not a complete prefix code")
-    return codes
+# Delta contexts.
+D_ADV, D_CX, D_CY, D_INK, D_ITAL, D_ACC, D_MKH, D_MKV, D_VAR, D_ASM = range(10)
+D_CIDX = 10  # component index, from the last composite's: + 0 first, 1 later
+D_KERN = 12  # kerning: + the previous value's class in the row
+D_OX = 32    # outline x: + ((on * 2 + previous on) * 12 + previous x class) * 2
+             #             + whether the previous y delta was zero
+D_OY = 128   # outline y: + ((on * 2 + previous on) * 8 + previous y class) * 8 + x class
+D_RX = 384   # difference x: + previous x class
+D_RY = 396   # difference y: + previous y class * 8 + x class
+ND = 460
+# Flag contexts.
+B_ON = 0     # on the curve: + previous on * 4 + the one before * 2 + cubic
+(B_COMP, B_RESID, B_XREF, B_INK, B_CMAP, B_ITAL, B_ACC, B_EXT, B_MKERN, B_ASM,
+ B_PARTX) = range(8, 19)
+NB = 19
+# Gamma contexts.
+(G_NCOMP, G_NCONT, G_NPTS, G_CMAPN, G_CMAPSTEP, G_KCLS, G_KROW, G_KSTEP, G_MKN,
+ G_CONS, G_NVAR, G_NPART, G_PAIRS) = range(13)
+NG = 13
 
 
-class Writer:
-    """Writes the stream; with no code yet, only counts the classes."""
+def cls(v):
+    """The magnitude class of a delta."""
+    return zigzag(v).bit_length()
 
-    def __init__(self, clen=None):
-        self.bits = []
-        self.clen = clen
-        self.codes = canonical(clen) if clen else None
-        self.freq = [0] * 32
 
-    def bit(self, b):
-        self.bits.append(b)
+def outline_ctx(on, onp, cpx, cpy, cdx):
+    """The contexts of a point's x and y deltas."""
+    k = on * 2 + onp
+    return (D_OX + (k * 12 + min(cpx, 11)) * 2 + (1 if cpy == 0 else 0),
+            D_OY + (k * 8 + min(cpy, 7)) * 8 + min(cdx, 7))
+
+
+def resid_ctx(cpx, cpy, cdx):
+    """The contexts of a point's x and y differences."""
+    return D_RX + min(cpx, 11), D_RY + min(cpy, 7) * 8 + min(cdx, 7)
+
+
+class Model:
+    """The probabilities, all starting at even."""
+
+    def __init__(self):
+        self.d = [[1024] * 32 for _ in range(ND)]
+        self.m = [[1024] * 96 for _ in range(ND)]
+        self.b = [1024] * NB
+        self.g = [[1024] * 33 for _ in range(NG)]
+        self.t = [[1024] * 512 for _ in range(2)]
+
+
+class Writer(Model):
+    """The range encoder, with the binarization of each kind of value."""
+
+    def __init__(self):
+        super().__init__()
+        self.low = 0
+        self.range = 0xFFFFFFFF
+        self.cache = 0
+        self.cache_size = 1
+        self.out = bytearray()
+
+    def _shift_low(self):
+        if self.low < 0xFF000000 or self.low >= 1 << 32:
+            carry = self.low >> 32
+            temp = self.cache
+            while True:
+                self.out.append((temp + carry) & 0xFF)
+                temp = 0xFF
+                self.cache_size -= 1
+                if self.cache_size == 0:
+                    break
+            self.cache = (self.low >> 24) & 0xFF
+        self.cache_size += 1
+        self.low = (self.low & 0x00FFFFFF) << 8
+
+    def _norm(self):
+        while self.range < 1 << 24:
+            self.range <<= 8
+            self._shift_low()
+
+    def _bit(self, probs, i, bit):
+        p = probs[i]
+        bound = (self.range >> 11) * p
+        if bit:
+            self.low += bound
+            self.range -= bound
+            probs[i] = p - (p >> MOVE_BITS)
+        else:
+            self.range = bound
+            probs[i] = p + ((2048 - p) >> MOVE_BITS)
+        self._norm()
 
     def raw(self, value, n):
         if value < 0 or value >= 1 << n:
             raise SystemExit(f"{value} does not fit in {n} bits")
         for k in range(n - 1, -1, -1):
-            self.bits.append((value >> k) & 1)
+            self.range >>= 1
+            if (value >> k) & 1:
+                self.low += self.range
+            self._norm()
 
-    def gamma(self, n):
-        """Elias gamma: the length in zeros, then the number itself."""
+    def flag(self, ctx, bit):
+        self._bit(self.b, ctx, 1 if bit else 0)
+
+    def gamma(self, ctx, n):
         if n < 1:
             raise SystemExit(f"gamma of {n}")
-        length = n.bit_length()
-        self.raw(0, length - 1)
-        self.raw(n, length)
+        z = n.bit_length() - 1
+        for i in range(z):
+            self._bit(self.g[ctx], min(i, 32), 0)
+        self._bit(self.g[ctx], min(z, 32), 1)
+        self.raw(n - (1 << z), z)
 
-    def delta(self, v):
+    def tree(self, side, v, n):
+        """v in n bits, down a binary tree of probabilities."""
+        node = 1
+        for k in range(n - 1, -1, -1):
+            b = (v >> k) & 1
+            self._bit(self.t[side], node, b)
+            node = 2 * node + b
+
+    def delta(self, ctx, v):
         u = zigzag(v)
-        cls = u.bit_length()
-        self.freq[cls] += 1
-        if self.codes is not None:
-            if cls >= len(self.clen):
-                raise SystemExit(f"delta {v} needs class {cls}")
-            self.raw(self.codes[cls], self.clen[cls])
-        if cls > 1:
-            self.raw(u - (1 << (cls - 1)), cls - 1)
+        c = u.bit_length()
+        if c > 31:
+            raise SystemExit(f"delta {v} too large")
+        node = 1
+        for k in range(4, -1, -1):
+            b = (c >> k) & 1
+            self._bit(self.d[ctx], node, b)
+            node = 2 * node + b
+        if c >= 2:
+            b1 = (u >> (c - 2)) & 1
+            self._bit(self.m[ctx], c, b1)
+            if c >= 3:
+                self._bit(self.m[ctx], 32 + 2 * c + b1, (u >> (c - 3)) & 1)
+                self.raw(u & ((1 << (c - 3)) - 1), c - 3)
 
     def bytes(self):
-        pad = (-len(self.bits)) % 32
-        bits = self.bits + [0] * pad
-        return bytes(
-            int("".join(str(b) for b in bits[i:i + 8]), 2)
-            for i in range(0, len(bits), 8)
-        )
+        for _ in range(5):
+            self._shift_low()
+        out = bytes(self.out)
+        return out + bytes((-len(out)) % 4)
 
 
-class Reader:
-    def __init__(self, blob, clen):
+class Reader(Model):
+    """The range decoder, mirroring Writer."""
+
+    def __init__(self, blob):
+        super().__init__()
         self.blob = blob
         self.pos = 0
-        self.clen = clen
-        self.codes = canonical(clen)
+        self.range = 0xFFFFFFFF
+        self.code = 0
+        for _ in range(5):
+            self.code = (self.code << 8) | self._byte()
 
-    def bit(self):
-        b = (self.blob[self.pos >> 3] >> (7 - (self.pos & 7))) & 1
+    def _byte(self):
+        b = self.blob[self.pos] if self.pos < len(self.blob) else 0
         self.pos += 1
+        return b
+
+    def _norm(self):
+        while self.range < 1 << 24:
+            self.range <<= 8
+            self.code = ((self.code << 8) | self._byte()) & 0xFFFFFFFF
+
+    def _bit(self, probs, i):
+        p = probs[i]
+        bound = (self.range >> 11) * p
+        if self.code < bound:
+            self.range = bound
+            probs[i] = p + ((2048 - p) >> MOVE_BITS)
+            b = 0
+        else:
+            self.code -= bound
+            self.range -= bound
+            probs[i] = p - (p >> MOVE_BITS)
+            b = 1
+        self._norm()
         return b
 
     def raw(self, n):
         v = 0
         for _ in range(n):
-            v = 2 * v + self.bit()
+            self.range >>= 1
+            b = 1 if self.code >= self.range else 0
+            if b:
+                self.code -= self.range
+            v = 2 * v + b
+            self._norm()
         return v
 
-    def gamma(self):
-        zeros = 0
-        while self.bit() == 0:
-            zeros += 1
-        return (1 << zeros) | self.raw(zeros)
+    def flag(self, ctx):
+        return self._bit(self.b, ctx)
 
-    def delta(self):
-        code = 0
-        length = 0
-        while True:
-            code = 2 * code + self.bit()
-            length += 1
-            for sym, clen in enumerate(self.clen):
-                if clen == length and self.codes[sym] == code:
-                    if sym == 0:
-                        return 0
-                    return unzigzag((1 << (sym - 1)) | self.raw(sym - 1))
-            if length > MAXLEN:
-                raise SystemExit("bad prefix code in blob")
+    def gamma(self, ctx):
+        z = 0
+        while self._bit(self.g[ctx], min(z, 32)) == 0:
+            z += 1
+        return (1 << z) | self.raw(z)
+
+    def tree(self, side, n):
+        node = 1
+        for _ in range(n):
+            node = 2 * node + self._bit(self.t[side], node)
+        return node - (1 << n)
+
+    def delta(self, ctx):
+        node = 1
+        for _ in range(5):
+            node = 2 * node + self._bit(self.d[ctx], node)
+        c = node - 32
+        if c == 0:
+            return 0
+        u = 1
+        if c >= 2:
+            b1 = self._bit(self.m[ctx], c)
+            u = 2 | b1
+            if c >= 3:
+                u = (2 * u | self._bit(self.m[ctx], 32 + 2 * c + b1)) << (c - 3) \
+                    | self.raw(c - 3)
+        return unzigzag(u)
 
 
 def nbits(n):
@@ -1348,79 +1458,84 @@ def kern_predictor(src, lclass, rclass):
     return pred
 
 
-def encode(faces, clen):
-    """The whole table as one bit stream; see fplotlib_glyphs for the layout."""
-    w = Writer(clen)
+def encode(faces):
+    """The whole table as one coded stream; see fplotlib_glyphs for the layout."""
+    w = Writer()
     for fi, face in enumerate(faces):
         lbits = nbits(len(face.glyphs))
+        cubic = 1 if face.cubic else 0
         prev_adv = 0
+        last_comp = {}
         for k, g in enumerate(face.glyphs):
             if face.pred is not None and k < len(faces[face.pred].glyphs):
                 guess = faces[face.pred].glyphs[k].adv
             else:
                 guess = prev_adv
-            w.delta(g.adv - guess)
+            w.delta(D_ADV, g.adv - guess)
             prev_adv = g.adv
+            w.flag(B_COMP, g.comps is not None)
             if g.comps is not None:
-                w.bit(1)
-                w.gamma(len(g.comps))
-                for name, dx, dy, src in g.comps:
+                w.gamma(G_NCOMP, len(g.comps))
+                for j, (name, dx, dy, src) in enumerate(g.comps):
                     if face.xref is not None:
-                        w.bit(0 if src is None else 1)
-                    if src is None:
-                        w.raw(face.index[name], lbits)
-                    else:
-                        w.raw(faces[src].index[name], nbits(len(faces[src].glyphs)))
-                    w.delta(dx // face.oscale)
-                    w.delta(dy // face.oscale)
+                        w.flag(B_XREF, src is not None)
+                    idx = (face if src is None else faces[src]).index[name]
+                    key = (src is not None, min(j, 1))
+                    w.delta(D_CIDX + min(j, 1), idx - last_comp.get(key, 0))
+                    last_comp[key] = idx
+                    w.delta(D_CX, dx // face.oscale)
+                    w.delta(D_CY, dy // face.oscale)
             else:
-                w.bit(0)
                 if face.resid:
-                    w.bit(0 if g.ref is None else 1)
+                    w.flag(B_RESID, g.ref is not None)
                 if g.ref is not None:
                     r = face.glyphs[face.index[g.ref]]
                     w.raw(face.index[g.ref], lbits)
-                    px = py = 0
+                    px = py = cpx = cpy = 0
                     for (pts, _), (rpts, _) in zip(g.contours, r.contours):
                         for (x, y), (xr, yr) in zip(pts, rpts):
-                            w.delta((x - xr - px) // face.oscale)
-                            w.delta((y - yr - py) // face.oscale)
-                            px, py = x - xr, y - yr
+                            dx = (x - xr - px) // face.oscale
+                            dy = (y - yr - py) // face.oscale
+                            cx, cy = resid_ctx(cpx, cpy, cls(dx))
+                            w.delta(cx, dx)
+                            w.delta(cy, dy)
+                            px, py, cpx, cpy = x - xr, y - yr, cls(dx), cls(dy)
                 else:
-                    w.gamma(len(g.contours) + 1)
+                    w.gamma(G_NCONT, len(g.contours) + 1)
                     for pts, _ in g.contours:
-                        w.gamma(len(pts))
-                    px = py = 0
+                        w.gamma(G_NPTS, len(pts))
+                    px = py = cpx = cpy = 0
+                    onp = onp2 = 1
                     for pts, on in g.contours:
                         for (x, y), o in zip(pts, on):
-                            w.bit(1 if o else 0)
-                            w.delta((x - px) // face.oscale)
-                            w.delta((y - py) // face.oscale)
-                            px, py = x, y
+                            o = 1 if o else 0
+                            w.flag(B_ON + onp * 4 + onp2 * 2 + cubic, o)
+                            dx = (x - px) // face.oscale
+                            dy = (y - py) // face.oscale
+                            cx, cy = outline_ctx(o, onp, cpx, cpy, cls(dx))
+                            w.delta(cx, dx)
+                            w.delta(cy, dy)
+                            px, py, cpx, cpy = x, y, cls(dx), cls(dy)
+                            onp2, onp = onp, o
             if g.comps or g.contours:
                 cx0, cy0, cx1, cy1 = computed_box(face, g, faces)
                 x0, y0, x1, y1 = g.bbox
-                if (x0, y0, x1, y1) == (cx0, cy0, cx1, cy1):
-                    w.bit(0)
-                else:
-                    w.bit(1)
-                    w.delta(x0 - cx0)
-                    w.delta(y0 - cy0)
-                    w.delta(cx1 - x1)
-                    w.delta(cy1 - y1)
+                same = (x0, y0, x1, y1) == (cx0, cy0, cx1, cy1)
+                w.flag(B_INK, not same)
+                if not same:
+                    for v in (x0 - cx0, y0 - cy0, cx1 - x1, cy1 - y1):
+                        w.delta(D_INK, v)
 
         # The cmap, in code point order: the step to the next code point,
         # and the glyph, which is usually the one after the last.
-        w.gamma(len(face.cmap) + 1)
+        w.gamma(G_CMAPN, len(face.cmap) + 1)
         prev_cp = 0
         prev = -1
         for cp in sorted(face.cmap):
             i = face.index[face.cmap[cp]]
-            w.gamma(cp - prev_cp)
-            if i == prev + 1:
-                w.bit(1)
-            else:
-                w.bit(0)
+            w.gamma(G_CMAPSTEP, cp - prev_cp)
+            w.flag(B_CMAP, i == prev + 1)
+            if i != prev + 1:
                 w.raw(i, lbits)
             prev_cp, prev = cp, i
 
@@ -1428,19 +1543,21 @@ def encode(faces, clen):
             lclass, rclass, nl, nr, cells = kern_classes(face)
             pred = (kern_predictor(faces[face.kern_pred], lclass, rclass)
                     if face.kern_pred is not None else (lambda lc, rc: 0))
-            w.gamma(nl + 1)
-            w.gamma(nr + 1)
+            w.gamma(G_KCLS, nl + 1)
+            w.gamma(G_KCLS, nr + 1)
             for i in range(len(face.glyphs)):
-                w.raw(lclass[i], nbits(nl))
-                w.raw(rclass[i], nbits(nr))
+                w.tree(0, lclass[i], nbits(nl))
+                w.tree(1, rclass[i], nbits(nr))
             for lc in range(1, nl + 1):
                 row = sorted((rc, v) for (l, rc), v in cells.items() if l == lc)
-                w.gamma(len(row) + 1)
+                w.gamma(G_KROW, len(row) + 1)
                 prev_rc = 0
+                pc = 0
                 for rc, v in row:
-                    w.gamma(rc - prev_rc)
-                    w.delta(v - pred(lc, rc))
-                    prev_rc = rc
+                    w.gamma(G_KSTEP, rc - prev_rc)
+                    d = v - pred(lc, rc)
+                    w.delta(D_KERN + min(pc, 7), d)
+                    prev_rc, pc = rc, cls(d)
         if face.math is not None:
             encode_math(w, face, lbits)
     return w
@@ -1473,50 +1590,50 @@ def encode_math(w, face, lbits):
     """The MATH section of a face; see fplotlib_glyphs for the layout."""
     per, cons, ssty, dtls = math_tables(face)
     for g, (ital, acc, ext, kern) in zip(face.glyphs, per):
-        w.bit(0 if ital is None else 1)
+        w.flag(B_ITAL, ital is not None)
         if ital is not None:
-            w.delta(ital)
-        w.bit(0 if acc is None else 1)
+            w.delta(D_ITAL, ital)
+        w.flag(B_ACC, acc is not None)
         if acc is not None:
-            w.delta(acc - g.adv // 2)
-        w.bit(1 if ext else 0)
-        w.bit(0 if kern is None else 1)
+            w.delta(D_ACC, acc - g.adv // 2)
+        w.flag(B_EXT, ext)
+        w.flag(B_MKERN, kern is not None)
         if kern is not None:
             for hs, ks in kern:
-                w.gamma(len(hs) + 1)
+                w.gamma(G_MKN, len(hs) + 1)
                 prev = 0
                 for h in hs:
-                    w.delta(h - prev)
+                    w.delta(D_MKH, h - prev)
                     prev = h
                 prev = 0
                 for k in ks:
-                    w.delta(k - prev)
+                    w.delta(D_MKV, k - prev)
                     prev = k
     for table in cons:
-        w.gamma(len(table) + 1)
+        w.gamma(G_CONS, len(table) + 1)
         for g, var, asm in table:
             w.raw(g, lbits)
-            w.gamma(len(var) + 1)
+            w.gamma(G_NVAR, len(var) + 1)
             prev = 0
             for v, a in var:
                 w.raw(v, lbits)
-                w.delta(a - prev)
+                w.delta(D_VAR, a - prev)
                 prev = a
-            w.bit(0 if asm is None else 1)
+            w.flag(B_ASM, asm is not None)
             if asm is not None:
-                w.delta(asm[0])
-                w.gamma(len(asm[1]))
+                w.delta(D_ASM, asm[0])
+                w.gamma(G_NPART, len(asm[1]))
                 for pg, st, en, full, ext in asm[1]:
                     w.raw(pg, lbits)
-                    w.delta(st)
-                    w.delta(en)
-                    w.delta(full)
-                    w.bit(ext)
-    w.gamma(len(ssty) + 1)
+                    w.delta(D_ASM, st)
+                    w.delta(D_ASM, en)
+                    w.delta(D_ASM, full)
+                    w.flag(B_PARTX, ext)
+    w.gamma(G_PAIRS, len(ssty) + 1)
     for a, b in ssty:
         w.raw(a, lbits)
         w.raw(b, lbits)
-    w.gamma(len(dtls) + 1)
+    w.gamma(G_PAIRS, len(dtls) + 1)
     for a, b in dtls:
         w.raw(a, lbits)
         w.raw(b, lbits)
@@ -1525,129 +1642,152 @@ def encode_math(w, face, lbits):
 def decode_math(r, glyphs, lbits):
     per = []
     for adv, *_ in glyphs:
-        ital = r.delta() if r.bit() else None
-        acc = adv // 2 + r.delta() if r.bit() else None
-        ext = r.bit() == 1
+        ital = r.delta(D_ITAL) if r.flag(B_ITAL) else None
+        acc = adv // 2 + r.delta(D_ACC) if r.flag(B_ACC) else None
+        ext = r.flag(B_EXT) == 1
         kern = None
-        if r.bit():
+        if r.flag(B_MKERN):
             kern = []
             for _ in range(4):
-                n = r.gamma() - 1
+                n = r.gamma(G_MKN) - 1
                 hs, ks = [], []
                 prev = 0
                 for _ in range(n):
-                    prev += r.delta()
+                    prev += r.delta(D_MKH)
                     hs.append(prev)
                 prev = 0
                 for _ in range(n + 1):
-                    prev += r.delta()
+                    prev += r.delta(D_MKV)
                     ks.append(prev)
                 kern.append((hs, ks))
         per.append((ital, acc, ext, kern))
     cons = []
     for _ in range(2):
         table = []
-        for _ in range(r.gamma() - 1):
+        for _ in range(r.gamma(G_CONS) - 1):
             g = r.raw(lbits)
             var = []
             prev = 0
-            for _ in range(r.gamma() - 1):
+            for _ in range(r.gamma(G_NVAR) - 1):
                 v = r.raw(lbits)
-                prev += r.delta()
+                prev += r.delta(D_VAR)
                 var.append((v, prev))
             asm = None
-            if r.bit():
-                ital = r.delta()
+            if r.flag(B_ASM):
+                ital = r.delta(D_ASM)
                 parts = []
-                for _ in range(r.gamma()):
-                    parts.append((r.raw(lbits), r.delta(), r.delta(), r.delta(), r.bit()))
+                for _ in range(r.gamma(G_NPART)):
+                    parts.append((r.raw(lbits), r.delta(D_ASM), r.delta(D_ASM),
+                                  r.delta(D_ASM), r.flag(B_PARTX)))
                 asm = (ital, parts)
             table.append((g, var, asm))
         cons.append(table)
-    ssty = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
-    dtls = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma() - 1)]
+    ssty = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma(G_PAIRS) - 1)]
+    dtls = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma(G_PAIRS) - 1)]
     return per, cons, ssty, dtls
 
 
-def decode(blob, clen, faces):
+def decode(blob, faces):
     """The inverse of encode, so that the round trip can be checked."""
-    r = Reader(blob, clen)
+    r = Reader(blob)
     out = []
     for fi, face in enumerate(faces):
         ng = len(face.glyphs)
         lbits = nbits(ng)
+        cubic = 1 if face.cubic else 0
         glyphs = []
         prev_adv = 0
+        last_comp = {}
         for k in range(ng):
             if face.pred is not None and k < len(out[face.pred]["glyphs"]):
                 guess = out[face.pred]["glyphs"][k][0]
             else:
                 guess = prev_adv
-            adv = guess + r.delta()
+            adv = guess + r.delta(D_ADV)
             prev_adv = adv
-            if r.bit():
+            if r.flag(B_COMP):
                 comps = []
-                for _ in range(r.gamma()):
-                    src = face.xref if face.xref is not None and r.bit() else None
-                    idx = r.raw(lbits if src is None else nbits(len(faces[src].glyphs)))
-                    comps.append((idx, r.delta() * face.oscale, r.delta() * face.oscale, src))
+                for j in range(r.gamma(G_NCOMP)):
+                    src = face.xref if face.xref is not None and r.flag(B_XREF) else None
+                    key = (src is not None, min(j, 1))
+                    idx = last_comp.get(key, 0) + r.delta(D_CIDX + min(j, 1))
+                    last_comp[key] = idx
+                    comps.append((idx, r.delta(D_CX) * face.oscale,
+                                  r.delta(D_CY) * face.oscale, src))
                 contours = None
-            elif face.resid and r.bit():
+            elif face.resid and r.flag(B_RESID):
                 comps = None
                 ref = glyphs[r.raw(lbits)][1]
                 contours = []
-                px = py = 0
+                px = py = cpx = cpy = 0
                 for rpts, ron in ref:
                     pts = []
                     for xr, yr in rpts:
-                        px += r.delta() * face.oscale
-                        py += r.delta() * face.oscale
+                        cx, _ = resid_ctx(cpx, cpy, 0)
+                        dx = r.delta(cx)
+                        _, cy = resid_ctx(cpx, cpy, cls(dx))
+                        dy = r.delta(cy)
+                        px += dx * face.oscale
+                        py += dy * face.oscale
+                        cpx, cpy = cls(dx), cls(dy)
                         pts.append((xr + px, yr + py))
                     contours.append((pts, list(ron)))
             else:
                 comps = None
-                counts = [r.gamma() for _ in range(r.gamma() - 1)]
+                counts = [r.gamma(G_NPTS) for _ in range(r.gamma(G_NCONT) - 1)]
                 contours = []
-                px = py = 0
+                px = py = cpx = cpy = 0
+                onp = onp2 = 1
                 for n in counts:
                     pts, on = [], []
                     for _ in range(n):
-                        on.append(r.bit() == 1)
-                        px += r.delta() * face.oscale
-                        py += r.delta() * face.oscale
+                        o = r.flag(B_ON + onp * 4 + onp2 * 2 + cubic)
+                        cx, _ = outline_ctx(o, onp, cpx, cpy, 0)
+                        dx = r.delta(cx)
+                        _, cy = outline_ctx(o, onp, cpx, cpy, cls(dx))
+                        dy = r.delta(cy)
+                        px += dx * face.oscale
+                        py += dy * face.oscale
+                        cpx, cpy = cls(dx), cls(dy)
+                        onp2, onp = onp, o
+                        on.append(o == 1)
                         pts.append((px, py))
                     contours.append((pts, on))
             bbox = (0, 0, 0, 0)
             if comps or contours:
                 g = face.glyphs[k]
                 cx0, cy0, cx1, cy1 = computed_box(face, g, faces)
-                if r.bit():
-                    bbox = (cx0 + r.delta(), cy0 + r.delta(), cx1 - r.delta(), cy1 - r.delta())
+                if r.flag(B_INK):
+                    d = [r.delta(D_INK) for _ in range(4)]
+                    bbox = (cx0 + d[0], cy0 + d[1], cx1 - d[2], cy1 - d[3])
                 else:
                     bbox = (cx0, cy0, cx1, cy1)
             glyphs.append((adv, contours, comps, bbox))
         cmap = {}
         cp = 0
         prev = -1
-        for _ in range(r.gamma() - 1):
-            cp += r.gamma()
-            prev = prev + 1 if r.bit() else r.raw(lbits)
+        for _ in range(r.gamma(G_CMAPN) - 1):
+            cp += r.gamma(G_CMAPSTEP)
+            prev = prev + 1 if r.flag(B_CMAP) else r.raw(lbits)
             cmap[cp] = prev
         lc, rc, nl, nr, cells = None, None, 0, 0, {}
         if face.kern_from is None:
-            nl = r.gamma() - 1
-            nr = r.gamma() - 1
+            nl = r.gamma(G_KCLS) - 1
+            nr = r.gamma(G_KCLS) - 1
             lc, rc = [], []
             for _ in range(ng):
-                lc.append(r.raw(nbits(nl)))
-                rc.append(r.raw(nbits(nr)))
+                lc.append(r.tree(0, nbits(nl)))
+                rc.append(r.tree(1, nbits(nr)))
             pred = (kern_predictor(faces[face.kern_pred], lc, rc)
                     if face.kern_pred is not None else (lambda a, b: 0))
             for l in range(1, nl + 1):
                 c = 0
-                for _ in range(r.gamma() - 1):
-                    c += r.gamma()
-                    cells[(l, c)] = r.delta() + pred(l, c)
+                pc = 0
+                for _ in range(r.gamma(G_KROW) - 1):
+                    c += r.gamma(G_KSTEP)
+                    d = r.delta(D_KERN + min(pc, 7))
+                    cells[(l, c)] = d + pred(l, c)
+                    pc = cls(d)
         math = decode_math(r, glyphs, lbits) if face.math is not None else None
         out.append({"glyphs": glyphs, "cmap": cmap, "lc": lc, "rc": rc,
                     "nl": nl, "nr": nr, "cells": cells, "math": math})
@@ -1879,19 +2019,15 @@ def main() -> None:
         face.kernq = {k: round(v / KERN_STEP) for k, v in face.kern.items()
                       if round(v / KERN_STEP)}
 
-    # Turning contours to their cheapest start needs the code lengths and
-    # the code lengths depend on the deltas, so the code is fitted to the
-    # unturned data and the turn fitted to that code.
-    first = encode(faces, None)
-    maxcls = max(i for i, f in enumerate(first.freq) if f)
-    clen = huffman_lengths(first.freq[:maxcls + 1])
-
+    # Contours are turned to start where a rough count of the bits says
+    # they are cheapest: a magnitude class costs about two, and the bits
+    # under its leading one about one each.
     def cost_in(scale):
         def cost(a, b):
             t = 0
             for v in (b[0] - a[0], b[1] - a[1]):
                 c = zigzag(v // scale).bit_length()
-                t += (clen[c] if c < len(clen) else 99) + max(c - 1, 0)
+                t += 2 + max(c - 1, 0)
             return t
         return cost
 
@@ -1911,12 +2047,9 @@ def main() -> None:
                     raise SystemExit(f"{face.tag} {g.name}: turning changed it")
                 g.contours = new
 
-    second = encode(faces, None)
-    maxcls = max(i for i, f in enumerate(second.freq) if f)
-    clen = huffman_lengths(second.freq[:maxcls + 1])
-    w = encode(faces, clen)
+    w = encode(faces)
     blob = w.bytes()
-    check_round_trip(faces, decode(blob, clen, faces))
+    check_round_trip(faces, decode(blob, faces))
     text = base85(blob)
 
     ngl = [len(f.glyphs) for f in faces]
@@ -2020,13 +2153,6 @@ def main() -> None:
                         for i, c in enumerate(name)).upper()
         L.append(f"    integer, parameter :: MC_{snake} = {k + 1}")
     L += int_array("MATH_CONSTANT", mface.math["constants"])
-    L += [
-        "",
-        "    ! Code lengths of the prefix code for the magnitude classes of a",
-        "    ! delta, a Huffman code for this data.",
-        f"    integer, parameter :: NCLASS = {len(clen)}",
-    ]
-    L += int_array("CLEN", clen, per_line=16)
     L += [
         "",
         "    ! Canonical composition of a base and one combining mark, for the",

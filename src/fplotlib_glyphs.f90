@@ -11,12 +11,18 @@
 ! glyph need not have a code point -- the pieces composite glyphs are
 ! built from have none -- so everything below the cmap speaks gids.
 !
-! The bit stream, most significant bit first. A delta is a signed number
-! folded to a non-negative one, small magnitudes staying small, and then
-! written as the position of its leading one -- a magnitude class, spelled
-! with the canonical prefix code whose lengths are CLEN -- followed by the
-! bits below that one. This is what deflate does with distances. gamma is
-! Elias gamma: the length in zeros, then the number with its leading one.
+! The stream is coded with an adaptive binary range coder, LZMA's: each
+! bit has a probability, in a context of its own, that the bits before it
+! in that context have moved towards them. A flag is one such bit. A delta
+! is a signed number folded to a non-negative one, small magnitudes
+! staying small, and written as the position of its leading one -- its
+! magnitude class, five bits down a binary tree -- then the bit under the
+! leading one, then the bits below that at even chance. gamma is Elias
+! gamma: the run of zeros bit by bit, then the bits under the leading one
+! at even chance. Raw bits are at even chance. Every kind of value has
+! its own context, and an outline point's x and y have contexts saying
+! whether it and the point before it are on the curve and how large the
+! deltas before them were (tools/gen_glyphs.py, Writer, says exactly).
 ! For each face in turn:
 !
 !   * every glyph: its advance width, as a delta from a guess (the glyph
@@ -88,7 +94,7 @@ module fplotlib_glyphs
     use fplotlib_glyphs_data, only: NFACE, NGLYPH, NCONT, NPT, NCOMP, NCMAP, &
                                  NKERN, FACE_NG, FACE_EM, FACE_ASC, FACE_DESC, &
                                  FACE_XH, FACE_CAP, FACE_CUBIC, FACE_PRED, &
-                                 NCLASS, CLEN, NRECOMP, RECOMP_BASE, &
+                                 NRECOMP, RECOMP_BASE, &
                                  RECOMP_MARK, RECOMP_CHAR, ALPHABET, &
                                  BLOB_ROWS, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
@@ -124,8 +130,20 @@ module fplotlib_glyphs
     real(dp), parameter :: DESCENT = real(FACE_DESC(1), dp)
     real(dp), parameter :: XHEIGHT = real(FACE_XH(1), dp)
 
-    ! The longest code a magnitude class can have.
-    integer, parameter :: MAXLEN = 15
+    ! The range coder's adaptation rate, and the contexts it codes with,
+    ! as tools/gen_glyphs.py numbers them.
+    integer, parameter :: MOVE_BITS = 3
+    integer, parameter :: D_ADV = 0, D_CX = 1, D_CY = 2, D_INK = 3, D_ITAL = 4, &
+                          D_ACC = 5, D_MKH = 6, D_MKV = 7, D_VAR = 8, D_ASM = 9, &
+                          D_CIDX = 10, D_KERN = 12, D_OX = 32, D_OY = 128, &
+                          D_RX = 384, D_RY = 396, ND = 460
+    integer, parameter :: B_ON = 0, B_COMP = 8, B_RESID = 9, B_XREF = 10, B_INK = 11, &
+                          B_CMAP = 12, B_ITAL = 13, B_ACC = 14, B_EXT = 15, &
+                          B_MKERN = 16, B_ASM = 17, B_PARTX = 18, NB = 19
+    integer, parameter :: G_NCOMP = 0, G_NCONT = 1, G_NPTS = 2, G_CMAPN = 3, &
+                          G_CMAPSTEP = 4, G_KCLS = 5, G_KROW = 6, G_KSTEP = 7, &
+                          G_MKN = 8, G_CONS = 9, G_NVAR = 10, G_NPART = 11, &
+                          G_PAIRS = 12, NG = 13
 
     ! The unpacked tables. Module variables are saved, so the work is done
     ! once however many figures are drawn.
@@ -165,13 +183,14 @@ module fplotlib_glyphs
     ! Script and scriptscript alternates, and dotless forms; 0 for none.
     integer :: SSTY(2, NGLYPH), DTLS(NGLYPH)
 
-    ! The canonical prefix code for the magnitude classes, built from
-    ! CLEN: how many codes have each length, the smallest of them, and the
-    ! symbols in the order the codes run.
-    integer :: NLEN(MAXLEN), FIRST(MAXLEN), CBASE(MAXLEN), CSYM(NCLASS)
+    ! The range decoder: its probabilities, one per context and tree
+    ! node, its range and code, and the byte it has got to.
+    integer :: RC_D(31, 0:ND - 1), RC_M(95, 0:ND - 1), RC_B(0:NB - 1), &
+               RC_G(0:32, 0:NG - 1), RC_T(511, 0:1)
+    integer(int64) :: RRANGE, RCODE
 
-    ! The bit stream while it is being read, and how far into the MATH
-    ! arrays it has got.
+    ! The bytes while they are being read, and how far into the MATH
+    ! arrays the reading has got.
     integer, allocatable :: BUF(:)
     integer :: BPOS
     integer :: nmkh_, nmkv_, nvar_, nasm_, npart_
@@ -743,12 +762,12 @@ contains
     subroutine unpack()
         integer :: f, k, j, gid, base, ng, lbits, nc, n, ip, ic, icp, ik, ikv
         integer :: guess, prev_adv, xx, yy, cp, prev, nl, nr, l, c, cnt, pf
-        integer :: shrink(4, NGLYPH), xf, rg, r0
+        integer :: shrink(4, NGLYPH), xf, rg, r0, cx, cy, dx, dy, o, onp, onp2
+        integer :: lastc(0:1, 0:1), jj, pc, d
         logical :: boxed(NGLYPH)
 
         call from_base85()
-        call build_code()
-        BPOS = 0
+        call rc_init()
 
         FBASE(1) = 0
         do f = 1, NFACE
@@ -788,6 +807,7 @@ contains
             lbits = nbits(ng)
             pf = FACE_PRED(f)
             prev_adv = 0
+            lastc = 0
             do k = 1, ng
                 gid = base + k
                 GFACE(gid) = f
@@ -795,29 +815,33 @@ contains
                 if (pf > 0) then
                     if (k <= FACE_NG(pf)) guess = GADV(FBASE(pf) + k)
                 end if
-                GADV(gid) = guess + get_delta()
+                GADV(gid) = guess + get_delta(D_ADV)
                 prev_adv = GADV(gid)
-                if (get_bit() == 1) then
-                    n = get_gamma()
+                if (get_flag(B_COMP) == 1) then
+                    n = get_gamma(G_NCOMP)
                     do j = 1, n
                         ik = ik + 1
                         xf = 0
                         if (FACE_XREF(f) > 0) then
-                            if (get_bit() == 1) xf = FACE_XREF(f)
+                            if (get_flag(B_XREF) == 1) xf = FACE_XREF(f)
                         end if
+                        ! The index, from the last one at this position.
+                        jj = min(j - 1, 1)
+                        lastc(merge(1, 0, xf > 0), jj) = lastc(merge(1, 0, xf > 0), jj) &
+                                                        + get_delta(D_CIDX + jj)
                         if (xf > 0) then
-                            PG(ik) = FBASE(xf) + get_bits(nbits(FACE_NG(xf))) + 1
+                            PG(ik) = FBASE(xf) + lastc(1, jj) + 1
                         else
-                            PG(ik) = base + get_bits(lbits) + 1
+                            PG(ik) = base + lastc(0, jj) + 1
                         end if
-                        PDX(ik) = get_delta()*FACE_OSCALE(f)
-                        PDY(ik) = get_delta()*FACE_OSCALE(f)
+                        PDX(ik) = get_delta(D_CX)*FACE_OSCALE(f)
+                        PDY(ik) = get_delta(D_CY)*FACE_OSCALE(f)
                     end do
                     nc = 0
                 else
                     rg = 0
                     if (FACE_RESID(f)) then
-                        if (get_bit() == 1) rg = base + get_bits(lbits) + 1
+                        if (get_flag(B_RESID) == 1) rg = base + get_raw(lbits) + 1
                     end if
                     if (rg > 0) then
                         ! The contours of glyph rg, point for point, moved.
@@ -830,25 +854,44 @@ contains
                         r0 = CBEG(OBEG(rg)) - 1
                         xx = 0
                         yy = 0
+                        cx = 0
+                        cy = 0
                         do j = 1, n
                             QON(ip + j) = QON(r0 + j)
-                            xx = xx + get_delta()
-                            yy = yy + get_delta()
+                            dx = get_delta(D_RX + min(cx, 11))
+                            dy = get_delta(D_RY + min(cy, 7)*8 + min(vcls(dx), 7))
+                            xx = xx + dx
+                            yy = yy + dy
+                            cx = vcls(dx)
+                            cy = vcls(dy)
                             QX(ip + j) = int(QX(r0 + j) + xx*FACE_OSCALE(f), int16)
                             QY(ip + j) = int(QY(r0 + j) + yy*FACE_OSCALE(f), int16)
                         end do
                     else
-                        nc = get_gamma() - 1
+                        nc = get_gamma(G_NCONT) - 1
                         do j = 1, nc
-                            CBEG(ic + j + 1) = CBEG(ic + j) + get_gamma()
+                            CBEG(ic + j + 1) = CBEG(ic + j) + get_gamma(G_NPTS)
                         end do
                         n = CBEG(ic + nc + 1) - CBEG(ic + 1)
                         xx = 0
                         yy = 0
+                        cx = 0
+                        cy = 0
+                        onp = 1
+                        onp2 = 1
                         do j = 1, n
-                            QON(ip + j) = get_bit() == 1
-                            xx = xx + get_delta()
-                            yy = yy + get_delta()
+                            o = get_flag(B_ON + onp*4 + onp2*2 + merge(1, 0, FACE_CUBIC(f)))
+                            QON(ip + j) = o == 1
+                            dx = get_delta(D_OX + ((o*2 + onp)*12 + min(cx, 11))*2 &
+                                           + merge(1, 0, cy == 0))
+                            dy = get_delta(D_OY + ((o*2 + onp)*8 + min(cy, 7))*8 &
+                                           + min(vcls(dx), 7))
+                            xx = xx + dx
+                            yy = yy + dy
+                            cx = vcls(dx)
+                            cy = vcls(dy)
+                            onp2 = onp
+                            onp = o
                             QX(ip + j) = int(xx*FACE_OSCALE(f), int16)
                             QY(ip + j) = int(yy*FACE_OSCALE(f), int16)
                         end do
@@ -861,9 +904,9 @@ contains
                 GBOX(:, gid) = 0
                 shrink(:, gid) = 0
                 if (nc > 0 .or. PBEG(gid + 1) > PBEG(gid)) then
-                    if (get_bit() == 1) then
+                    if (get_flag(B_INK) == 1) then
                         do j = 1, 4
-                            shrink(j, gid) = get_delta()
+                            shrink(j, gid) = get_delta(D_INK)
                         end do
                     end if
                 end if
@@ -878,15 +921,15 @@ contains
 
             ! The cmap, and the code point each glyph is first reached by.
             CMB(f) = icp + 1
-            n = get_gamma() - 1
+            n = get_gamma(G_CMAPN) - 1
             cp = 0
             prev = -1
             do j = 1, n
-                cp = cp + get_gamma()
-                if (get_bit() == 1) then
+                cp = cp + get_gamma(G_CMAPSTEP)
+                if (get_flag(B_CMAP) == 1) then
                     prev = prev + 1
                 else
-                    prev = get_bits(lbits)
+                    prev = get_raw(lbits)
                 end if
                 icp = icp + 1
                 CMCP(icp) = cp
@@ -898,22 +941,24 @@ contains
             KLC(base + 1:base + ng) = 0
             KRC(base + 1:base + ng) = 0
             if (FACE_KERN(f) == f) then
-                nl = get_gamma() - 1
-                nr = get_gamma() - 1
+                nl = get_gamma(G_KCLS) - 1
+                nr = get_gamma(G_KCLS) - 1
                 do k = 1, ng
-                    KLC(base + k) = get_bits(nbits(nl))
-                    KRC(base + k) = get_bits(nbits(nr))
+                    KLC(base + k) = get_tree(0, nbits(nl))
+                    KRC(base + k) = get_tree(1, nbits(nr))
                 end do
                 KNR(f) = nr
                 KOFF(f) = ikv
                 KVAL(ikv + 1:ikv + (nl + 1)*(nr + 1)) = 0_int16
                 do l = 1, nl
-                    cnt = get_gamma() - 1
+                    cnt = get_gamma(G_KROW) - 1
                     c = 0
+                    pc = 0
                     do j = 1, cnt
-                        c = c + get_gamma()
-                        KVAL(ikv + l*(nr + 1) + c + 1) = &
-                            int(get_delta() + kern_guess(f, l, c), int16)
+                        c = c + get_gamma(G_KSTEP)
+                        d = get_delta(D_KERN + min(pc, 7))
+                        KVAL(ikv + l*(nr + 1) + c + 1) = int(d + kern_guess(f, l, c), int16)
+                        pc = vcls(d)
                     end do
                 end do
                 ikv = ikv + (nl + 1)*(nr + 1)
@@ -999,25 +1044,25 @@ contains
 
         do k = 1, ng
             gid = base + k
-            if (get_bit() == 1) GITAL(gid) = get_delta()
+            if (get_flag(B_ITAL) == 1) GITAL(gid) = get_delta(D_ITAL)
             GACC(gid) = GADV(gid)/2
-            if (get_bit() == 1) GACC(gid) = GADV(gid)/2 + get_delta()
-            GEXT(gid) = get_bit() == 1
-            if (get_bit() == 1) then
+            if (get_flag(B_ACC) == 1) GACC(gid) = GADV(gid)/2 + get_delta(D_ACC)
+            GEXT(gid) = get_flag(B_EXT) == 1
+            if (get_flag(B_MKERN) == 1) then
                 do c = 1, 4
-                    n = get_gamma() - 1
+                    n = get_gamma(G_MKN) - 1
                     MKN(c, gid) = n
                     MKH0(c, gid) = nmkh_ + 1
                     MKV0(c, gid) = nmkv_ + 1
                     prev = 0
                     do j = 1, n
-                        prev = prev + get_delta()
+                        prev = prev + get_delta(D_MKH)
                         nmkh_ = nmkh_ + 1
                         MKH(nmkh_) = prev
                     end do
                     prev = 0
                     do j = 1, n + 1
-                        prev = prev + get_delta()
+                        prev = prev + get_delta(D_MKV)
                         nmkv_ = nmkv_ + 1
                         MKV(nmkv_) = prev
                     end do
@@ -1025,47 +1070,47 @@ contains
             end if
         end do
         do dim = 1, 2
-            ncons = get_gamma() - 1
+            ncons = get_gamma(G_CONS) - 1
             do k = 1, ncons
-                gid = base + get_bits(lbits) + 1
-                nv = get_gamma() - 1
+                gid = base + get_raw(lbits) + 1
+                nv = get_gamma(G_NVAR) - 1
                 CV0(dim, gid) = nvar_ + 1
                 CVN(dim, gid) = nv
                 prev = 0
                 do j = 1, nv
                     nvar_ = nvar_ + 1
-                    VARG(nvar_) = base + get_bits(lbits) + 1
-                    prev = prev + get_delta()
+                    VARG(nvar_) = base + get_raw(lbits) + 1
+                    prev = prev + get_delta(D_VAR)
                     VARA(nvar_) = prev
                 end do
-                if (get_bit() == 1) then
+                if (get_flag(B_ASM) == 1) then
                     nasm_ = nasm_ + 1
                     CASM(dim, gid) = nasm_
-                    ASMI(nasm_) = get_delta()
-                    np_ = get_gamma()
+                    ASMI(nasm_) = get_delta(D_ASM)
+                    np_ = get_gamma(G_NPART)
                     ASMP0(nasm_) = npart_ + 1
                     ASMN(nasm_) = np_
                     do j = 1, np_
                         npart_ = npart_ + 1
-                        PARTG(npart_) = base + get_bits(lbits) + 1
-                        PARTST(npart_) = get_delta()
-                        PARTEN(npart_) = get_delta()
-                        PARTF(npart_) = get_delta()
-                        PARTX(npart_) = get_bit() == 1
+                        PARTG(npart_) = base + get_raw(lbits) + 1
+                        PARTST(npart_) = get_delta(D_ASM)
+                        PARTEN(npart_) = get_delta(D_ASM)
+                        PARTF(npart_) = get_delta(D_ASM)
+                        PARTX(npart_) = get_flag(B_PARTX) == 1
                     end do
                 end if
             end do
         end do
-        n = get_gamma() - 1
+        n = get_gamma(G_PAIRS) - 1
         do k = 1, n
-            a = base + get_bits(lbits) + 1
-            SSTY(1, a) = base + get_bits(lbits) + 1
+            a = base + get_raw(lbits) + 1
+            SSTY(1, a) = base + get_raw(lbits) + 1
             SSTY(2, a) = SSTY(1, a)
         end do
-        n = get_gamma() - 1
+        n = get_gamma(G_PAIRS) - 1
         do k = 1, n
-            a = base + get_bits(lbits) + 1
-            b = base + get_bits(lbits) + 1
+            a = base + get_raw(lbits) + 1
+            b = base + get_raw(lbits) + 1
             DTLS(a) = b
         end do
 
@@ -1131,77 +1176,125 @@ contains
         end do
     end subroutine from_base85
 
-    ! The canonical code the class lengths describe: codes of one length
-    ! run consecutively, in order of the class they stand for, and each
-    ! length starts where the one before it left off, shifted up a bit.
-    subroutine build_code()
-        integer :: l, s, code, k
-        if (maxval(CLEN) > MAXLEN) error stop "fplotlib_glyphs: code too long"
-        NLEN = 0
-        do s = 1, NCLASS
-            NLEN(CLEN(s)) = NLEN(CLEN(s)) + 1
-        end do
-        code = 0
-        k = 0
-        do l = 1, MAXLEN
-            FIRST(l) = code
-            CBASE(l) = k
-            do s = 1, NCLASS
-                if (CLEN(s) == l) then
-                    k = k + 1
-                    CSYM(k) = s - 1
-                end if
-            end do
-            code = 2*(code + NLEN(l))
-        end do
-    end subroutine build_code
+    ! --- the range decoder ----------------------------------------------
 
-    integer function get_bit()
-        get_bit = ibits(BUF(BPOS/8 + 1), 7 - mod(BPOS, 8), 1)
+    subroutine rc_init()
+        integer :: i
+        RC_D = 1024
+        RC_M = 1024
+        RC_B = 1024
+        RC_G = 1024
+        RC_T = 1024
+        BPOS = 0
+        RRANGE = 4294967295_int64
+        RCODE = 0
+        do i = 1, 5
+            RCODE = ior(ishft(RCODE, 8), int(next_byte(), int64))
+        end do
+    end subroutine rc_init
+
+    integer function next_byte()
+        next_byte = 0
+        if (BPOS < size(BUF)) next_byte = BUF(BPOS + 1)
         BPOS = BPOS + 1
-    end function get_bit
+    end function next_byte
 
-    integer function get_bits(n)
+    subroutine rc_norm()
+        do while (RRANGE < 16777216_int64)
+            RRANGE = ishft(RRANGE, 8)
+            RCODE = iand(ior(ishft(RCODE, 8), int(next_byte(), int64)), 4294967295_int64)
+        end do
+    end subroutine rc_norm
+
+    ! One bit, coded with probability p (of 2048) of being 0, which it
+    ! then moves towards the bit it was.
+    integer function rc_bit(p)
+        integer, intent(inout) :: p
+        integer(int64) :: bound
+        bound = ishft(RRANGE, -11)*p
+        if (RCODE < bound) then
+            RRANGE = bound
+            p = p + ishft(2048 - p, -MOVE_BITS)
+            rc_bit = 0
+        else
+            RCODE = RCODE - bound
+            RRANGE = RRANGE - bound
+            p = p - ishft(p, -MOVE_BITS)
+            rc_bit = 1
+        end if
+        call rc_norm()
+    end function rc_bit
+
+    ! n bits at even chance, most significant first.
+    integer function get_raw(n)
         integer, intent(in) :: n
         integer :: i
-        get_bits = 0
+        get_raw = 0
         do i = 1, n
-            get_bits = 2*get_bits + get_bit()
+            RRANGE = ishft(RRANGE, -1)
+            if (RCODE >= RRANGE) then
+                RCODE = RCODE - RRANGE
+                get_raw = 2*get_raw + 1
+            else
+                get_raw = 2*get_raw
+            end if
+            call rc_norm()
         end do
-    end function get_bits
+    end function get_raw
 
-    integer function get_gamma()
-        integer :: zeros
-        zeros = 0
-        do while (get_bit() == 0)
-            zeros = zeros + 1
+    ! n bits down binary tree side of RC_T.
+    integer function get_tree(side, n)
+        integer, intent(in) :: side, n
+        integer :: node, i, b
+        node = 1
+        do i = 1, n
+            b = rc_bit(RC_T(node, side))
+            node = 2*node + b
         end do
-        get_gamma = ior(ishft(1, zeros), get_bits(zeros))
+        get_tree = node - 2**n
+    end function get_tree
+
+    integer function get_flag(ctx)
+        integer, intent(in) :: ctx
+        get_flag = rc_bit(RC_B(ctx))
+    end function get_flag
+
+    ! Elias gamma: the run of zeros bit by bit, then the bits under the
+    ! leading one.
+    integer function get_gamma(ctx)
+        integer, intent(in) :: ctx
+        integer :: z, b
+        z = 0
+        do
+            b = rc_bit(RC_G(min(z, 32), ctx))
+            if (b == 1) exit
+            z = z + 1
+        end do
+        get_gamma = ior(ishft(1, z), get_raw(z))
     end function get_gamma
 
-    integer function get_class()
-        integer :: code, l, idx
-        code = 0
-        do l = 1, MAXLEN
-            code = 2*code + get_bit()
-            idx = code - FIRST(l)
-            if (idx >= 0 .and. idx < NLEN(l)) then
-                get_class = CSYM(CBASE(l) + idx + 1)
-                return
-            end if
+    ! A delta: its magnitude class down a five-level binary tree, the two
+    ! bits under the leading one (the second in the context of the first),
+    ! then the rest at even chance, and the fold back to a signed number.
+    integer function get_delta(ctx)
+        integer, intent(in) :: ctx
+        integer :: node, i, c, u, b
+        node = 1
+        do i = 1, 5
+            b = rc_bit(RC_D(node, ctx))
+            node = 2*node + b
         end do
-        error stop "fplotlib_glyphs: the glyph blob has a code this module cannot read"
-    end function get_class
-
-    ! One delta: its magnitude class, the bits under the leading one, and
-    ! then the fold back to a signed number.
-    integer function get_delta()
-        integer :: c, u
-        c = get_class()
-        if (c == 0) then
-            u = 0
-        else
-            u = ior(ishft(1, c - 1), get_bits(c - 1))
+        c = node - 32
+        u = 0
+        if (c == 1) then
+            u = 1
+        else if (c >= 2) then
+            b = rc_bit(RC_M(c, ctx))
+            u = ior(2, b)
+            if (c >= 3) then
+                i = rc_bit(RC_M(32 + 2*c + b, ctx))
+                u = ior(ishft(ior(2*u, i), c - 3), get_raw(c - 3))
+            end if
         end if
         if (mod(u, 2) == 0) then
             get_delta = u/2
@@ -1209,5 +1302,18 @@ contains
             get_delta = -(u + 1)/2
         end if
     end function get_delta
+
+    ! The magnitude class of a delta: the position of the leading one of
+    ! its fold to a non-negative number.
+    pure integer function vcls(v)
+        integer, intent(in) :: v
+        integer :: u
+        u = merge(2*v, -2*v - 1, v >= 0)
+        vcls = 0
+        do while (u > 0)
+            vcls = vcls + 1
+            u = u/2
+        end do
+    end function vcls
 
 end module fplotlib_glyphs
