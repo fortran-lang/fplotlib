@@ -44,11 +44,12 @@ module fplotlib_typeset
     public :: typeset_context_t
 
     public :: ts_reset, ts_set_page, ts_set_font
-    public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break
+    public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break, ts_text
+    public :: ts_word_width
     public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_in_par
     public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule
     public :: ts_page_break, ts_mark, ts_nobreak_next, ts_set_clubpenalty
-    public :: ts_vkeep, ts_set_colors, ts_hsize, ts_font_size, ts_strut, ts_set_parskip
+    public :: ts_vkeep, ts_set_colors, ts_hsize, ts_vsize, ts_font_size, ts_strut, ts_set_parskip
     public :: ts_paginate, ts_page_count, ts_page_draw, ts_page_size
     public :: ts_line_count, ts_line_info, ts_par_lines
     public :: ts_glue_t, ts_xheight, ts_quad
@@ -105,6 +106,8 @@ module fplotlib_typeset
         integer :: NCP = 0
         integer, allocatable :: CPA(:), CPFIRST(:), CPLAST(:)
         character(len=:), allocatable :: SOURCE_TEXT
+        ! Explicit plain-text whitespace through this byte must survive extraction.
+        integer :: SOURCE_EXACT_END = 0
         ! The items of the boxes in the list (formulas, labels), about each
         ! box's origin, y up.
         integer :: NBX = 0
@@ -135,6 +138,8 @@ module fplotlib_typeset
 
         integer :: NV = 0
         integer, allocatable :: VK(:), VSO(:), VHO(:), VP(:), VI0(:), VI1(:)
+        integer, allocatable :: VREPEAT(:)
+        logical, allocatable :: VPACKED(:)
         real(dp), allocatable :: VW(:), VH(:), VD(:), VST(:), VSH(:), VX(:)
         ! VK_MARK: a running head, MARKS(VI0) to MARKS(VI1); VSO 0 for the
         ! chapter's (LaTeX's left mark), 1 for a section's (the right mark);
@@ -166,6 +171,7 @@ module fplotlib_typeset
 
         integer :: NPAGE = 0
         integer, allocatable :: PG0(:), PG1(:), PGHEAD0(:), PGHEAD1(:), PGSTART(:)
+        integer, allocatable :: PGREPEAT(:)
         logical, allocatable :: PGPLAIN(:)
         ! How a page's glue is set: by PGSET times its stretch (positive) or
         ! shrink (negative) of order PGORD.
@@ -198,6 +204,10 @@ contains
         state%CLUB_PENALTY = 150
         state%MARKS = ""
         state%SOURCE_TEXT = ""
+        state%SOURCE_EXACT_END = 0
+        if (allocated(state%VREPEAT)) state%VREPEAT(:) = 0
+        if (allocated(state%VPACKED)) state%VPACKED(:) = .false.
+        if (allocated(state%PGREPEAT)) state%PGREPEAT(:) = 0
         call state%graphics%init(0.0_dp, 0.0_dp)
         call ts_set_page(state, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
         call ts_set_font(state, 10.0_dp)
@@ -220,6 +230,11 @@ contains
         type(typeset_context_t), intent(in) :: state
         ts_hsize = state%HSIZE
     end function ts_hsize
+
+    pure real(dp) function ts_vsize(state)
+        type(typeset_context_t), intent(in) :: state
+        ts_vsize = state%VSIZE
+    end function ts_vsize
 
     pure real(dp) function ts_font_size(state)
         type(typeset_context_t), intent(in) :: state
@@ -385,6 +400,45 @@ contains
         if (k0 <= n) call word_piece(state, cps(k0:n), face, size, col, up, first(k0:n), last(k0:n))
     end subroutine ts_word
 
+    ! Plain UTF-8, not markup. Horizontal whitespace uses ordinary word glue;
+    ! its original bytes, including tabs and CRLF, remain in the logical source.
+    subroutine ts_text(state, text, face, size, color)
+        type(typeset_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: face
+        real(dp), intent(in) :: size
+        integer, intent(in), optional :: color
+        integer :: i, first, cp, nb, offset
+
+        if (len(text) == 0) return
+        if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
+        first = 1
+        i = 1
+        do while (i <= len(text))
+            call utf8_next(text, i, cp, nb)
+            if (cp == 9 .or. cp == 10 .or. cp == 13 .or. cp == 32) then
+                if (i > first) call ts_word(state, text(first:i - 1), face, size, color)
+                offset = len(state%SOURCE_TEXT)
+                if (cp == 10 .or. cp == 13) then
+                    if (cp == 13 .and. i < len(text)) then
+                        if (text(i + 1:i + 1) == achar(10)) nb = 2
+                    end if
+                    call ts_strut(state, 0.0_dp, 0.0_dp)
+                    call ts_hard_break(state)
+                    call ts_strut(state, 0.0_dp, 0.0_dp)
+                else
+                    call ts_space(state, face, size)
+                end if
+                state%SOURCE_TEXT = state%SOURCE_TEXT(:offset)//text(i:i + nb - 1)
+                first = i + nb
+            end if
+            i = i + nb
+        end do
+        if (first <= len(text)) call ts_word(state, text(first:), face, size, color)
+        if (state%HN == 0) call ts_strut(state, 0.0_dp, 0.0_dp)
+        state%SOURCE_EXACT_END = len(state%SOURCE_TEXT)
+    end subroutine ts_text
+
     subroutine word_piece(state, cps, face, fs, col, up, first, last)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: cps(:), face, col
@@ -478,6 +532,18 @@ contains
         integer, intent(in) :: i
         call shape(state%CPA(state%HC0(i):state%HC1(i)), state%HFACE(i), state%HSZ(i), state%HW(i), state%HH(i), state%HD(i))
     end subroutine measure
+
+    ! Measure with the same Unicode normalization, font fallback and kerning as ts_word.
+    real(dp) function ts_word_width(text, face, fontsize) result(width)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: face
+        real(dp), intent(in) :: fontsize
+        integer, allocatable :: cps(:)
+        integer :: n
+        real(dp) :: height, depth
+        call code_points(text, cps, n)
+        call shape(cps(1:n), face, fontsize, width, height, depth)
+    end function ts_word_width
 
     subroutine shape(cps, face, s, w, h, d)
         integer, intent(in) :: cps(:), face
@@ -2025,17 +2091,28 @@ contains
         integer :: i, start, best, c, b, pi
         integer :: least
         real(dp) :: total, depth, so_far(6), goal
-        logical :: empty, legal, plain, pplain
+        logical :: empty, legal, plain, pplain, packed
 
         if (state%IN_PAR) call ts_end_par(state)
+        do i = 1, state%NV
+            if (state%VK(i) /= VK_BOX) cycle
+            if (state%VREPEAT(i) > 0) then
+                if (repeat_height(state, state%VREPEAT(i)) + state%VH(i) + state%VD(i) > state%VSIZE) &
+                    error stop "typeset: repeated header and unbreakable row exceed page body"
+            else if (state%VPACKED(i)) then
+                if (max(state%TOPSKIP, state%VH(i)) + state%VD(i) > state%VSIZE) &
+                    error stop "typeset: unbreakable row exceeds page body"
+            end if
+        end do
         state%NPAGE = 0
         if (allocated(state%PG0)) deallocate (state%PG0, state%PG1, state%PGHEAD0, state%PGHEAD1, state%PGPLAIN, &
             state%PGSET, state%PGORD, &
-                                        state%PGSTART)
+                                        state%PGSTART, state%PGREPEAT)
         allocate (state%PG0(state%NV + 1), state%PG1(state%NV + 1), state%PGHEAD0(state%NV + 1), state%PGHEAD1(state%NV &
             + 1), &
                   state%PGPLAIN(state%NV + 1), state%PGSET(state%NV + 1), state%PGORD(state%NV + 1), &
-            state%PGSTART(state%NV + 1))
+            state%PGSTART(state%NV + 1), state%PGREPEAT(state%NV + 1))
+        state%PGREPEAT(:) = 0
         start = 1
         do while (start <= state%NV)
             state%PGSTART(state%NPAGE + 1) = start
@@ -2048,6 +2125,7 @@ contains
             best = 0
             plain = .false.
             pplain = .false.
+            packed = .false.
             i = start
             do while (i <= state%NV)
                 legal = .false.
@@ -2099,11 +2177,17 @@ contains
                 ! The item goes onto the page.
                 select case (state%VK(i))
                 case (VK_BOX)
+                    packed = packed .or. state%VPACKED(i)
                     if (empty) then
                         ! \topskip less the box's height comes first.
                         empty = .false.
                         start = i
-                        total = max(state%TOPSKIP - state%VH(i), 0.0_dp) + state%VH(i)
+                        state%PGREPEAT(state%NPAGE + 1) = state%VREPEAT(i)
+                        if (state%VREPEAT(i) > 0) then
+                            total = repeat_height(state, state%VREPEAT(i)) + state%VH(i)
+                        else
+                            total = max(state%TOPSKIP - state%VH(i), 0.0_dp) + state%VH(i)
+                        end if
                     else
                         total = total + depth + state%VH(i)
                     end if
@@ -2130,8 +2214,12 @@ contains
             if (empty) exit
             ! Running out of material ends the page, as \end{document} does.
             if (i > state%NV) then
-                best = state%NV + 1
-                plain = pplain
+                ! Packed rows need no trailing glue or penalty. An overflowing
+                ! final row must still use the last legal break before it.
+                if (.not. packed .or. total - goal <= so_far(6) .or. best == 0) then
+                    best = state%NV + 1
+                    plain = pplain
+                end if
             end if
             state%NPAGE = state%NPAGE + 1
             state%PG0(state%NPAGE) = start
@@ -2144,6 +2232,14 @@ contains
             start = best
         end do
     end subroutine ts_paginate
+
+    real(dp) function repeat_height(state, handle) result(height)
+        type(typeset_context_t), intent(in) :: state
+        integer, intent(in) :: handle
+        real(dp) :: w, h, baseline
+        call state%graphics%metrics(w, h, baseline, handle)
+        height = h + max(state%TOPSKIP - baseline, 0.0_dp)
+    end function repeat_height
 
     ! The running head of page p, as LaTeX's headings style has it: an
     ! even page carries the chapter's mark (the last on the page or
@@ -2195,7 +2291,11 @@ contains
             select case (state%VK(k))
             case (VK_BOX)
                 if (first) then
-                    total = max(state%TOPSKIP, state%VH(k))
+                    if (state%PGREPEAT(p) > 0) then
+                        total = repeat_height(state, state%PGREPEAT(p)) + state%VH(k)
+                    else
+                        total = max(state%TOPSKIP, state%VH(k))
+                    end if
                     first = .false.
                 else
                     total = total + depth + state%VH(k)
@@ -2253,15 +2353,30 @@ contains
     end subroutine ts_import_frame
 
     ! An unbreakable block. Its contents remain a shared child frame.
-    subroutine ts_place_frame(state, handle, left, right, align)
+    ! interline=false omits the preceding interline glue. repeat_before is
+    ! an imported frame drawn above this block only when it starts a page.
+    subroutine ts_place_frame(state, handle, left, right, align, interline, repeat_before)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: handle
         real(dp), intent(in), optional :: left, right
         integer, intent(in), optional :: align
+        logical, intent(in), optional :: interline
+        integer, intent(in), optional :: repeat_before
         real(dp) :: w, h, baseline, x, remaining, rm
-        integer :: i0, al
+        real(dp) :: rw, rh
+        integer :: i0, al, repeat
+        logical :: packed
         call ts_end_par(state)
         call state%graphics%metrics(w, h, baseline, handle)
+        repeat = 0
+        if (present(repeat_before)) repeat = repeat_before
+        if (repeat < 0 .or. repeat == 1) error stop "typeset: repeat_before is not an imported frame handle"
+        if (repeat > 0) call state%graphics%metrics(rw, rh, handle=repeat)
+        packed = .false.
+        if (present(interline)) then
+            packed = .not. interline
+            if (packed) state%PREV_DEPTH = IGNORE_DEPTH
+        end if
         x = 0.0_dp
         rm = 0.0_dp
         if (present(left)) x = left
@@ -2279,6 +2394,8 @@ contains
         state%ITW(i0) = w
         state%ITH(i0) = h
         call append_box(state, i0, i0, w, baseline, h - baseline, x)
+        state%VREPEAT(state%NV) = repeat
+        state%VPACKED(state%NV) = packed .or. repeat > 0
     end subroutine ts_place_frame
 
     subroutine ts_finish(state, document)
@@ -2315,25 +2432,40 @@ contains
         call frame%set_baseline(baseline)
     end subroutine ts_finish_frame
 
-    subroutine draw_vertical(state, r, first_node, last_node, left, top, ratio, order, bottom, baseline)
+    subroutine draw_vertical(state, r, first_node, last_node, left, top, ratio, order, bottom, baseline, repeat_before)
         type(typeset_context_t), intent(inout) :: state
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: first_node, last_node, order
         real(dp), intent(in) :: left, top, ratio
         real(dp), intent(out) :: bottom, baseline
-        real(dp) :: y, depth, gw
-        integer :: k, source_end
+        integer, intent(in), optional :: repeat_before
+        type(clip_t) :: clip
+        type(glyphrun_t) :: run
+        real(dp) :: y, depth, gw, w, h, base, matrix(6)
+        integer :: k, source_end, repeat
         logical :: first
         y = top
         depth = 0.0_dp
         first = .true.
         baseline = 0.0_dp
         source_end = 0
+        repeat = 0
+        if (present(repeat_before)) repeat = repeat_before
         do k = first_node, last_node
             select case (state%VK(k))
             case (VK_BOX)
                 if (first) then
-                    y = y + max(state%TOPSKIP, state%VH(k))
+                    if (repeat > 0) then
+                        call state%graphics%metrics(w, h, base, repeat)
+                        matrix = IDENTITY
+                        matrix(5:6) = [left + state%VX(k), y + max(state%TOPSKIP - base, 0.0_dp)]
+                        call r%begin_frame(matrix, clip)
+                        call state%graphics%draw(r, repeat)
+                        call r%end_frame()
+                        y = y + repeat_height(state, repeat) + state%VH(k)
+                    else
+                        y = y + max(state%TOPSKIP, state%VH(k))
+                    end if
                     baseline = y
                     first = .false.
                 else
@@ -2357,6 +2489,12 @@ contains
             end select
         end do
         bottom = y + depth
+        if (last_node == state%NV .and. state%SOURCE_EXACT_END > source_end) then
+            if (source_white(state%SOURCE_TEXT(source_end + 1:state%SOURCE_EXACT_END))) then
+                run%text = state%SOURCE_TEXT(source_end + 1:state%SOURCE_EXACT_END)
+                call r%draw_glyphs(left, y, run, color_paint(state%TEXT_COLOR), 0.0_dp)
+            end if
+        end if
     end subroutine draw_vertical
 
     ! Draw page p on r, which the caller has opened at the paper's size.
@@ -2367,7 +2505,7 @@ contains
         real(dp) :: bottom, baseline
         character(len=16) :: num
         call draw_vertical(state, r, state%PG0(p), state%PG1(p), state%MARGIN_L, state%MARGIN_T, &
-                           state%PGSET(p), state%PGORD(p), bottom, baseline)
+                           state%PGSET(p), state%PGORD(p), bottom, baseline, state%PGREPEAT(p))
         if (state%PAGE_NUMBERS .and. (.not. state%HEADINGS .or. state%PGPLAIN(p))) then
             write (num, "(I0)") p
             call draw_string(state, r, trim(num), FACE_REGULAR, state%FONT_SIZE, &
@@ -2404,7 +2542,7 @@ contains
         type(glyphrun_t) :: run
         type(clip_t) :: clip
         real(dp) :: matrix(6)
-        integer :: j, start, c, lo, hi, g
+        integer :: j, start, c, lo, hi, g, cp, nb, next
         j = state%VI0(k)
         do while (j <= state%VI1(k))
             select case (state%ITK(j))
@@ -2425,6 +2563,18 @@ contains
                 end do
                 run%text = ""
                 if (hi >= lo) then
+                    if (state%SOURCE_EXACT_END > 0) then
+                        if (source_end == 0 .and. lo > 1) then
+                            if (source_white(state%SOURCE_TEXT(:lo - 1))) lo = 1
+                        end if
+                        next = hi + 1
+                        do while (next <= state%SOURCE_EXACT_END)
+                            call utf8_next(state%SOURCE_TEXT, next, cp, nb)
+                            if (.not. source_white(state%SOURCE_TEXT(next:next + nb - 1))) exit
+                            hi = next + nb - 1
+                            next = hi + 1
+                        end do
+                    end if
                     if (source_end > 0 .and. lo > source_end + 1) then
                         if (source_white(state%SOURCE_TEXT(source_end + 1:lo - 1))) lo = source_end + 1
                     end if
@@ -2776,6 +2926,8 @@ contains
             call grow_i(state%VP, cap)
             call grow_i(state%VI0, cap)
             call grow_i(state%VI1, cap)
+            call grow_i(state%VREPEAT, cap)
+            call grow_l(state%VPACKED, cap)
             call grow_r(state%VW, cap)
             call grow_r(state%VH, cap)
             call grow_r(state%VD, cap)
@@ -2790,6 +2942,8 @@ contains
         state%VP(state%NV) = 0
         state%VI0(state%NV) = 1
         state%VI1(state%NV) = 0
+        state%VREPEAT(state%NV) = 0
+        state%VPACKED(state%NV) = .false.
         state%VW(state%NV) = 0.0_dp
         state%VH(state%NV) = 0.0_dp
         state%VD(state%NV) = 0.0_dp

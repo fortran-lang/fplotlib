@@ -5,8 +5,10 @@ program test_plots
     use test_typeset, only: para_ref_check
     use test_typeset_core, only: typeset_core_check
     use test_frame_backends, only: frame_backend_check
+    use test_grid, only: grid_check
+    use test_report, only: report_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, npara, ncore, nframes
+    integer :: fig1, nmath, ndelim, nface, npara, ncore, nframes, ngrid, nreport
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1584,6 +1586,8 @@ program test_plots
     call face_check(nface)
     call typeset_core_check(ncore)
     call frame_backend_check(nframes)
+    call grid_check(ngrid)
+    call report_check(nreport)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1594,6 +1598,8 @@ program test_plots
     if (nface > 0) error stop "text around math lost its face"
     if (ncore > 0) error stop "typesetting core failed"
     if (nframes > 0) error stop "frame backends failed"
+    if (ngrid > 0) error stop "grid layout failed"
+    if (nreport > 0) error stop "report API failed"
 
 contains
 

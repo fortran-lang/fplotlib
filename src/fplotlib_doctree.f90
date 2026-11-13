@@ -14,10 +14,10 @@ module fplotlib_doctree
     implicit none
     private
 
-    public :: doc_t, doc_node_t, doc_meta_t
-    public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame
+    public :: doc_t, doc_node_t, doc_meta_t, doc_table_t
+    public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame, doc_add_table
     public :: DOC_ROOT, DOC_PARA, DOC_HEADING, DOC_LIST, DOC_ITEM, DOC_QUOTE, DOC_CODE, &
-              DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES, DOC_FRAME
+              DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES, DOC_FRAME, DOC_FIGURE, DOC_TABLE
     public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, &
               IN_SPAN, IN_RAW, IN_REF
     public :: REF_PLAIN, REF_EQ, REF_AT
@@ -35,6 +35,8 @@ module fplotlib_doctree
     integer, parameter :: DOC_RAW = 10     ! a TeX command, text (\newpage, \vspace{1cm})
     integer, parameter :: DOC_INLINES = 11 ! inlines not in a paragraph (a meta value)
     integer, parameter :: DOC_FRAME = 12   ! supplied graphics; num is its handle
+    integer, parameter :: DOC_FIGURE = 13  ! frame and optional caption blocks
+    integer, parameter :: DOC_TABLE = 14   ! num indexes tables; children are its caption
     ! Inlines.
     integer, parameter :: IN_STR = 20      ! text without spaces
     integer, parameter :: IN_SPACE = 21    ! a space between words
@@ -66,6 +68,8 @@ module fplotlib_doctree
         character(len=:), allocatable :: id
         ! A div's or a span's attributes, as written: .center size=20pt.
         character(len=:), allocatable :: attr
+        character(len=:), allocatable :: number
+        real(dp) :: width = 0.0_dp
     end type doc_node_t
 
     ! A key of the front matter: its value as written, and as inlines.
@@ -74,6 +78,11 @@ module fplotlib_doctree
         integer :: node = 0
     end type doc_meta_t
 
+    type :: doc_table_t
+        character(len=:), allocatable :: cells(:, :), headers(:)
+        logical :: numeric = .false.
+    end type doc_table_t
+
     type :: doc_t
         type(doc_node_t), allocatable :: nodes(:)
         integer :: n = 0
@@ -81,13 +90,15 @@ module fplotlib_doctree
         integer :: nmeta = 0
         type(frame_t) :: graphics
         integer :: ngraphics = 0
+        type(doc_table_t), allocatable :: tables(:)
+        integer :: ntables = 0
     end type doc_t
 
 contains
 
     subroutine doc_init(doc)
         type(doc_t), intent(out) :: doc
-        allocate (doc%nodes(64), doc%meta(16))
+        allocate (doc%nodes(64), doc%meta(16), doc%tables(4))
         doc%n = 1
         doc%nodes(1)%kind = DOC_ROOT
         doc%nmeta = 0
@@ -110,6 +121,7 @@ contains
         doc%nodes(k)%text = ""
         doc%nodes(k)%id = ""
         doc%nodes(k)%attr = ""
+        doc%nodes(k)%number = ""
         if (parent > 0) then
             if (doc%nodes(parent)%last > 0) then
                 doc%nodes(doc%nodes(parent)%last)%next = k
@@ -139,6 +151,42 @@ contains
         doc%nodes(k)%num = handle
         doc%ngraphics = doc%ngraphics + 1
     end function doc_add_frame
+
+    integer function doc_add_table(doc, parent, cells, columns, numeric) result(k)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent
+        character(len=*), intent(in) :: cells(:, :)
+        character(len=*), intent(in), optional :: columns(:)
+        logical, intent(in), optional :: numeric
+        type(doc_table_t), allocatable :: tmp(:)
+        integer :: i, nr, nc
+        nr = size(cells, 1)
+        nc = size(cells, 2)
+        if (nc == 0) error stop "include_table: no columns"
+        if (present(columns)) then
+            if (size(columns) /= nc) error stop "include_table: column labels do not match data"
+        end if
+        if (doc%ntables == size(doc%tables)) then
+            allocate (tmp(2*size(doc%tables)))
+            do i = 1, doc%ntables
+                tmp(i)%numeric = doc%tables(i)%numeric
+                call move_alloc(doc%tables(i)%cells, tmp(i)%cells)
+                call move_alloc(doc%tables(i)%headers, tmp(i)%headers)
+            end do
+            call move_alloc(tmp, doc%tables)
+        end if
+        doc%ntables = doc%ntables + 1
+        i = doc%ntables
+        allocate (character(len=max(1, len(cells))) :: doc%tables(i)%cells(nr, nc))
+        doc%tables(i)%cells = cells
+        if (present(columns)) then
+            allocate (character(len=max(1, len(columns))) :: doc%tables(i)%headers(nc))
+            doc%tables(i)%headers = columns
+        end if
+        if (present(numeric)) doc%tables(i)%numeric = numeric
+        k = doc_add(doc, parent, DOC_TABLE)
+        doc%nodes(k)%num = i
+    end function doc_add_table
 
     ! A key of the front matter, its value, and the value as inlines (a
     ! DOC_INLINES node, not in the document, or 0).

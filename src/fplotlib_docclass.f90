@@ -26,7 +26,9 @@ module fplotlib_docclass
                                face_capheight
     use fplotlib_doctree
     use fplotlib_markdown, only: md_parse
-    use fplotlib_scene, only: frame_t, paged_document_t
+    use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
+    use fplotlib_render, only: clip_t
+    use fplotlib_grid, only: grid_widths, grid_row
     use fplotlib_typeset
     implicit none
     private
@@ -62,6 +64,10 @@ module fplotlib_docclass
         logical :: indent = .true.
     end type ctx_t
 
+    type :: label_t
+        character(len=:), allocatable :: name, text
+    end type label_t
+
     ! The document's settings.
     integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
 
@@ -82,8 +88,7 @@ module fplotlib_docclass
         ! Counters and cross references.
         integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
         integer :: NLAB = 0
-        character(len=64) :: LAB_NAME(512)
-        character(len=24) :: LAB_TEXT(512)
+        type(label_t), allocatable :: label(:)
 
         ! The next paragraph is not indented (after a heading, a display, or
         ! \noindent), and the label the next paragraph of a list item starts
@@ -189,6 +194,7 @@ contains
         state%TEXT_COL = 0
         state%PAGE_COL = 16777215
         state%NLAB = 0
+        if (.not. allocated(state%label)) allocate (state%label(16))
         state%SEC = 0
         state%CHAPTER = 0
         state%EQNO = 0
@@ -434,10 +440,223 @@ contains
                 if (state%graphics_base == 0) error stop "document: missing frame resources"
                 call ts_place_frame(state%engine, state%graphics_base + doc%nodes(c)%num - 1, &
                                     left=ctx%left, right=ctx%right, align=ctx%align)
+            case (DOC_FIGURE)
+                call figure_block(state, doc, c, ctx)
+            case (DOC_TABLE)
+                call table_block(state, doc, c, ctx)
             end select
             c = doc%nodes(c)%next
         end do
     end subroutine set_blocks
+
+    ! Captions get their own workspace, but share the resolved reference
+    ! values. They cannot disturb a report that is being laid out.
+    recursive subroutine caption_frame(state, doc, node, width, ctx, frame)
+        type(layout_context_t), intent(inout) :: state
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: node
+        real(dp), intent(in) :: width
+        type(ctx_t), intent(in) :: ctx
+        type(frame_t), intent(out) :: frame
+        type(layout_context_t) :: nested
+        type(ctx_t) :: sub
+        call ts_reset(nested%engine)
+        call defaults(nested)
+        nested%BASE = state%BASE
+        nested%LEAD = state%LEAD
+        nested%PARINDENT = 0.0_dp
+        nested%NUMBER_EQS = state%NUMBER_EQS
+        nested%BOOK = state%BOOK
+        nested%CHAPTER = state%CHAPTER
+        nested%EQNO = state%EQNO
+        nested%NLAB = state%NLAB
+        deallocate (nested%label)
+        allocate (nested%label(max(16, state%NLAB)))
+        nested%label(1:state%NLAB) = state%label(1:state%NLAB)
+        sub = ctx
+        sub%left = 0.0_dp
+        sub%right = 0.0_dp
+        sub%indent = .false.
+        sub%align = ALIGN_CENTER
+        sub%size = 0.9_dp*ctx%size
+        call ts_set_page(nested%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
+        call ts_set_font(nested%engine, sub%size, nested%LEAD*sub%size)
+        call ts_set_parskip(nested%engine, ts_glue_t())
+        call set_blocks(nested, doc, node, sub)
+        call ts_finish_frame(nested%engine, frame)
+        state%EQNO = nested%EQNO
+    end subroutine caption_frame
+
+    recursive subroutine figure_block(state, doc, node, ctx)
+        type(layout_context_t), intent(inout) :: state
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: node
+        type(ctx_t), intent(in) :: ctx
+        type(frame_t) :: caption, frame
+        type(recording_renderer_t) :: recorder
+        type(clip_t) :: clip
+        real(dp) :: w, h, width, scale_, cw, ch, gap, available, matrix(6), left
+        integer :: graphic, cap, handle
+        graphic = doc%nodes(node)%first
+        if (graphic == 0) error stop "document figure: missing graphics"
+        if (doc%nodes(graphic)%kind /= DOC_FRAME) error stop "document figure: expected a frame"
+        call doc%graphics%metrics(w, h, handle=doc%nodes(graphic)%num)
+        if (w <= 0.0_dp .or. h <= 0.0_dp) error stop "document figure: empty graphics"
+        available = ts_hsize(state%engine) - ctx%left - ctx%right
+        width = min(w, available)
+        if (doc%nodes(node)%width > 0) width = min(doc%nodes(node)%width, available)
+        if (width <= 0.0_dp) error stop "document figure: no horizontal space"
+        cap = doc%nodes(graphic)%next
+        ch = 0.0_dp
+        gap = 0.0_dp
+        if (cap > 0) then
+            call caption_frame(state, doc, cap, width, ctx, caption)
+            call caption%metrics(cw, ch)
+            gap = 0.5_dp*state%BASE
+        end if
+        if (ch + gap >= ts_vsize(state%engine)) error stop "document figure: caption exceeds page height"
+        scale_ = min(width/w, (ts_vsize(state%engine) - ch - gap)/h)
+        left = 0.5_dp*(width - scale_*w)
+        call recorder%open_canvas(width, scale_*h + gap + ch)
+        matrix = [scale_, 0.0_dp, 0.0_dp, scale_, left, 0.0_dp]
+        call recorder%begin_frame(matrix, clip)
+        call doc%graphics%draw(recorder, doc%nodes(graphic)%num)
+        call recorder%end_frame()
+        if (cap > 0) then
+            matrix = IDENTITY
+            matrix(6) = scale_*h + gap
+            call recorder%begin_frame(matrix, clip)
+            call caption%draw(recorder)
+            call recorder%end_frame()
+        end if
+        call recorder%close_canvas()
+        call recorder%take(frame)
+        call ts_end_par(state%engine)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_import_frame(state%engine, frame, handle)
+        call ts_place_frame(state%engine, handle, left=ctx%left, right=ctx%right, &
+                            align=ALIGN_CENTER, interline=.false.)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        state%NOINDENT = .true.
+    end subroutine figure_block
+
+    ! Plain data cells are measured before choosing column widths, then
+    ! paragraphs are laid out to those widths. The core packs rows and
+    ! paginates them, reserving repeated headers on continuation pages.
+    recursive subroutine table_block(state, doc, node, ctx)
+        type(layout_context_t), intent(inout) :: state
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: node
+        type(ctx_t), intent(in) :: ctx
+        type(typeset_context_t) :: cell_state
+        type(frame_t), allocatable :: cells(:)
+        type(frame_t) :: row, caption
+        real(dp), allocatable :: natural(:), minimum(:), widths(:)
+        real(dp) :: available, fs, padding, nw, mw
+        integer :: t, nc, nr, i, j, header, handle, align
+        t = doc%nodes(node)%num
+        if (t < 1 .or. t > doc%ntables) error stop "document table: invalid table"
+        nc = size(doc%tables(t)%cells, 2)
+        nr = size(doc%tables(t)%cells, 1)
+        available = ts_hsize(state%engine) - ctx%left - ctx%right
+        fs = 0.9_dp*ctx%size
+        padding = 0.35_dp*fs
+        allocate (natural(nc), minimum(nc), cells(nc))
+        natural = 0.0_dp
+        minimum = 0.0_dp
+        do j = 1, nc
+            if (allocated(doc%tables(t)%headers)) then
+                call cell_widths(trim(doc%tables(t)%headers(j)), FACE_BOLD, fs, nw, mw)
+                natural(j) = nw
+                minimum(j) = mw
+            end if
+            do i = 1, nr
+                call cell_widths(trim(doc%tables(t)%cells(i, j)), FACE_REGULAR, fs, nw, mw)
+                natural(j) = max(natural(j), nw)
+                minimum(j) = max(minimum(j), mw)
+            end do
+        end do
+        call grid_widths(natural, minimum, available, padding, widths)
+        call ts_end_par(state%engine)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        if (doc%nodes(node)%first > 0) then
+            call caption_frame(state, doc, doc%nodes(node)%first, available, ctx, caption)
+            call ts_import_frame(state%engine, caption, handle)
+            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false.)
+            call ts_penalty(state%engine, 10000)
+            call ts_vskip(state%engine, ts_glue_t(0.4_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        end if
+        header = 0
+        if (allocated(doc%tables(t)%headers)) then
+            do j = 1, nc
+                call cell_frame(cell_state, trim(doc%tables(t)%headers(j)), &
+                                widths(j) - 2*padding, FACE_BOLD, fs, ALIGN_LEFT, cells(j))
+            end do
+            call grid_row(cells, widths, padding, row, background=[238, 242, 247])
+            call ts_import_frame(state%engine, row, header)
+            call ts_place_frame(state%engine, header, left=ctx%left, interline=.false.)
+            if (nr > 0) call ts_penalty(state%engine, 10000)
+        end if
+        align = ALIGN_LEFT
+        if (doc%tables(t)%numeric) align = ALIGN_RIGHT
+        do i = 1, nr
+            do j = 1, nc
+                call cell_frame(cell_state, trim(doc%tables(t)%cells(i, j)), &
+                                widths(j) - 2*padding, FACE_REGULAR, fs, align, cells(j))
+            end do
+            call grid_row(cells, widths, padding, row)
+            call ts_import_frame(state%engine, row, handle)
+            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false., repeat_before=header)
+            call ts_penalty(state%engine, 0)
+        end do
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        state%NOINDENT = .true.
+    end subroutine table_block
+
+    subroutine cell_frame(state, text, width, face, fs, align, frame)
+        type(typeset_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width, fs
+        integer, intent(in) :: face, align
+        type(frame_t), intent(out) :: frame
+        call ts_reset(state)
+        call ts_set_page(state, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
+        call ts_set_font(state, fs, 1.2_dp*fs)
+        call ts_set_parskip(state, ts_glue_t())
+        call ts_begin_par(state, align, 0.0_dp, size=fs)
+        call ts_strut(state, 0.7_dp*fs, 0.3_dp*fs)
+        call ts_text(state, text, face, fs)
+        call ts_finish_frame(state, frame)
+    end subroutine cell_frame
+
+    subroutine cell_widths(text, face, fs, natural, minimum)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: face
+        real(dp), intent(in) :: fs
+        real(dp), intent(out) :: natural, minimum
+        character(len=:), allocatable :: line
+        integer :: a, b, i, j, k
+        natural = 0.0_dp
+        minimum = 0.0_dp
+        a = 1
+        do while (a <= len(text))
+            b = index(text(a:), NL)
+            if (b == 0) b = len(text) - a + 2
+            line = text(a:a + b - 2)
+            do k = 1, len(line)
+                if (line(k:k) == achar(9) .or. line(k:k) == achar(13)) line(k:k) = " "
+            end do
+            natural = max(natural, ts_word_width(line, face, fs))
+            i = 1
+            do while (i <= len(line))
+                j = index(line(i:), " ")
+                if (j == 0) j = len(line) - i + 2
+                minimum = max(minimum, ts_word_width(line(i:i + j - 2), face, fs))
+                i = i + j
+            end do
+            a = a + b
+        end do
+    end subroutine cell_widths
 
     ! A paragraph of inline text in the context's settings.
     subroutine paragraph(state, doc, k, ctx)
@@ -1292,6 +1511,9 @@ contains
                     end if
                     if (len(name) > 0 .and. len(num) > 0) call add_label(state, name, num)
                 end if
+            case (DOC_FIGURE, DOC_TABLE)
+                if (len(doc%nodes(c)%id) > 0) call add_label(state, doc%nodes(c)%id, doc%nodes(c)%number)
+                call labels(state, doc, c)
             case default
                 call labels(state, doc, c)
             end select
@@ -1315,19 +1537,31 @@ contains
                 s = "??"
             end if
         else if (form == REF_EQ .or. (form == REF_AT .and. starts(name, "eq:"))) then
-            s = "("//trim(state%LAB_TEXT(k))//")"
+            s = "("//state%label(k)%text//")"
         else
-            s = trim(state%LAB_TEXT(k))
+            s = state%label(k)%text
         end if
     end function ref_text
 
     subroutine add_label(state, name, text)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: name, text
-        if (state%NLAB >= size(state%LAB_NAME)) return
+        type(label_t), allocatable :: tmp(:)
+        integer :: k
+        do k = 1, state%NLAB
+            if (state%label(k)%name == name) error stop "document: duplicate label"
+        end do
+        if (state%NLAB == size(state%label)) then
+            allocate (tmp(2*size(state%label)))
+            do k = 1, state%NLAB
+                call move_alloc(state%label(k)%name, tmp(k)%name)
+                call move_alloc(state%label(k)%text, tmp(k)%text)
+            end do
+            call move_alloc(tmp, state%label)
+        end if
         state%NLAB = state%NLAB + 1
-        state%LAB_NAME(state%NLAB) = name
-        state%LAB_TEXT(state%NLAB) = text
+        state%label(state%NLAB)%name = name
+        state%label(state%NLAB)%text = text
     end subroutine add_label
 
     integer function find_label(state, name)
@@ -1336,7 +1570,7 @@ contains
         integer :: k
         find_label = 0
         do k = 1, state%NLAB
-            if (trim(state%LAB_NAME(k)) == name) then
+            if (state%label(k)%name == name) then
                 find_label = k
                 return
             end if

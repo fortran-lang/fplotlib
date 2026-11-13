@@ -26,6 +26,7 @@ module fplotlib
     use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
     use fplotlib_scene, only: frame_t, paged_document_t
     use fplotlib_document, only: document_asset_t, export_document
+    use fplotlib_report, only: report_t
     implicit none
     private
 
@@ -71,6 +72,11 @@ module fplotlib
     public :: typeset
     public :: frame_t, paged_document_t, layout_context_t, layout_markdown, layout_fragment
     public :: render_frame, save_document
+    public :: markdown, include_figure, include_table, new_report, save, render_report, document_asset_t
+
+    ! Only this convenience facade selects an implicit report. The builder
+    ! and layout engines receive their state explicitly.
+    type(report_t) :: current_report
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -224,6 +230,14 @@ module fplotlib
     interface typeset
         module procedure typeset_text, typeset_lines
     end interface typeset
+
+    interface markdown
+        module procedure markdown_text, markdown_lines
+    end interface markdown
+
+    interface include_table
+        module procedure include_table_text, include_table_real, include_table_integer
+    end interface include_table
 
     interface subplots
         module procedure subplots_grid, subplots_row, subplots_one
@@ -6185,6 +6199,61 @@ contains
     ! name-2.svg, ... The figures are not touched.
     ! ------------------------------------------------------------------
 
+    subroutine new_report()
+        call current_report%clear()
+    end subroutine new_report
+
+    subroutine markdown_text(text)
+        character(len=*), intent(in) :: text
+        call current_report%markdown(text)
+    end subroutine markdown_text
+
+    subroutine markdown_lines(lines)
+        character(len=*), intent(in) :: lines(:)
+        call current_report%markdown(lines)
+    end subroutine markdown_lines
+
+    subroutine include_figure(caption, label, width)
+        character(len=*), intent(in), optional :: caption, label
+        real(dp), intent(in), optional :: width
+        type(frame_t) :: captured
+        call render_frame(captured, bbox_inches="tight", pad_inches=0.1_dp)
+        call current_report%include_frame(captured, caption, label, width)
+    end subroutine include_figure
+
+    subroutine include_table_text(values, columns, caption, label)
+        character(len=*), intent(in) :: values(:, :)
+        character(len=*), intent(in), optional :: columns(:), caption, label
+        call current_report%include_table(values, columns, caption, label)
+    end subroutine include_table_text
+
+    subroutine include_table_real(values, columns, caption, label)
+        real(dp), intent(in) :: values(:, :)
+        character(len=*), intent(in), optional :: columns(:), caption, label
+        call current_report%include_table(values, columns, caption, label)
+    end subroutine include_table_real
+
+    subroutine include_table_integer(values, columns, caption, label)
+        integer, intent(in) :: values(:, :)
+        character(len=*), intent(in), optional :: columns(:), caption, label
+        call current_report%include_table(values, columns, caption, label)
+    end subroutine include_table_integer
+
+    subroutine render_report(format, assets, dpi)
+        character(len=*), intent(in) :: format
+        type(document_asset_t), allocatable, intent(out) :: assets(:)
+        real(dp), intent(in), optional :: dpi
+        call current_report%export(lower(trim(format)), assets, dpi)
+    end subroutine render_report
+
+    subroutine save(filename, dpi)
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        type(document_asset_t), allocatable :: assets(:)
+        call render_report(file_ext(filename), assets, dpi)
+        call write_assets(assets, filename)
+    end subroutine save
+
     subroutine typeset_text(text, filename, dpi)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
@@ -6214,19 +6283,25 @@ contains
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
         type(document_asset_t), allocatable :: assets(:)
-        integer :: p
         character(len=:), allocatable :: ext
         ext = file_ext(filename)
         select case (ext)
         case ("pdf", "svg", "png", "eps")
             call export_document(document, ext, assets, dpi)
-            do p = 1, size(assets)
-                call write_bytes(page_file(filename, p, size(assets)), assets(p)%bytes)
-            end do
+            call write_assets(assets, filename)
         case default
             call reject_ext(filename)
         end select
     end subroutine save_document
+
+    subroutine write_assets(assets, filename)
+        type(document_asset_t), intent(in) :: assets(:)
+        character(len=*), intent(in) :: filename
+        integer :: p
+        do p = 1, size(assets)
+            call write_bytes(page_file(filename, p, size(assets)), assets(p)%bytes)
+        end do
+    end subroutine write_assets
 
     ! The file page p of n goes into: the name itself for a single page,
     ! name-p.ext for each of several.
@@ -6257,19 +6332,19 @@ contains
         open (newunit=u, file=trim(filename), status="replace", action="write", &
               form="unformatted", access="stream", iostat=ios)
         if (ios /= 0) then
-            ! fallback formatted
-            open (newunit=u, file=trim(filename), status="replace", action="write", &
-                  form="formatted", iostat=ios)
-            if (ios /= 0) then
-                print *, "fplotlib: failed to open ", trim(filename)
-                return
-            end if
-            write (u, "(A)") data
-            close (u)
-            return
+            print *, "fplotlib: failed to open ", trim(filename), ", iostat=", ios
+            error stop "fplotlib: output file could not be opened"
         end if
-        if (len(data) > 0) write (u) data
-        close (u)
+        if (len(data) > 0) then
+            write (u, iostat=ios) data
+            if (ios /= 0) then
+                print *, "fplotlib: failed to write ", trim(filename), ", iostat=", ios
+                close (u)
+                error stop "fplotlib: output write failed"
+            end if
+        end if
+        close (u, iostat=ios)
+        if (ios /= 0) error stop "fplotlib: output close failed"
     end subroutine write_bytes
 
     ! ------------------------------------------------------------------
