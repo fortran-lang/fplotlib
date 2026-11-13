@@ -278,6 +278,56 @@ kerns, penalties, paragraphs, formulas, marks, and the page builder with
 its output routine. A program
 can also build a tree itself and give it to the class.
 
+Layout state is explicit (`layout_context_t`, or `typeset_context_t` for
+the primitive API). The result is an owned `paged_document_t`, not a view
+into that workspace. Text, equations and plots share the positioned
+`frame_t` representation in `fplotlib_scene`; `fplotlib_document` exports
+those frames without knowing how they were laid out.
+
+```fortran
+use fplotlib, only: dp, layout_context_t, paged_document_t, frame_t, &
+                    layout_markdown, layout_fragment, save_document
+
+type(layout_context_t) :: context
+type(paged_document_t) :: document
+type(frame_t) :: annotation
+
+call layout_markdown(context, "# Results"//achar(10)//achar(10)// &
+                     "The energy is $E=mc^2$.", document)
+! Reusing the workspace does not change the finished document.
+call layout_fragment(context, "A **label** with $x^2$.", 120.0_dp, annotation)
+call save_document(document, "report.pdf")
+call save_document(document, "report.svg")
+```
+
+`render_frame(frame)` captures the current plot without serializing an
+image. A frame's `add_frame(child, handle)` imports an owned copy;
+`place(handle, matrix, clip)` can reuse it at several positions. The six
+matrix entries are `[a,b,c,d,e,f]`, mapping a point to
+`(a*x+c*y+e, b*x+d*y+f)`. The optional rectangular clip is in the child's
+local coordinates. Frames retain a baseline separately from their layout
+size and ink bounds.
+
+For report composition, `doc_add_frame(tree, parent, frame)` inserts a
+graphics block into a parsed document, and `md_append(text, tree)` adds
+more Markdown after it. No new Markdown syntax is needed. The
+`plot_hpc_report.f90` gallery example embeds a vector plot whose annotation
+is itself a typeset paragraph and equation.
+
+The low-level modules do not depend on the plotting frontend. A host can
+call `export_document(document, format, assets, dpi)` from
+`fplotlib_document` to receive bytes in memory, or replay a frame directly
+to any `renderer_t`. PDF produces one asset; SVG, PNG and EPS produce one
+per page. Pages may have different sizes.
+
+The font provider remains the small compiled-in font set. Glyph runs now
+retain font identity, logical UTF-8 text and glyph-to-source byte ranges;
+math retains its TeX source, explicitly distinguished from ordinary text.
+PDF uses ordinary logical text as `ActualText`. This is not yet a tagged
+PDF or general external-font implementation.
+Independent layout contexts do not make the stateful pylab plotting API
+or lazy initialization elsewhere in the library universally thread-safe.
+
 The Markdown is Pandoc's: YAML front matter (`title`,
 `author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
 `align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
@@ -408,7 +458,9 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
-               fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
+               fplotlib_typeset.f90 context-owned paragraph and page layout
+               fplotlib_scene.f90  owned frames, pages and a recording renderer
+               fplotlib_document.f90 export pages to memory, independently of layout
                fplotlib_doctree.f90 a document as a tree of blocks and inlines
                fplotlib_markdown.f90 Markdown into that tree
                fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
