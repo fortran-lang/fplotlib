@@ -1571,7 +1571,10 @@ program test_plots
     call fp_check_apng("anim_sine_apng", "tests/out/anim_sine.png")
     print *, "wrote tests/out/anim_sine.png"
 
-    ! A document: Markdown set by TeX's rules over two pages, written in
+    ! Exercise lazy report initialization before the other procedural reports.
+    call report_check(nreport)
+
+    ! A document: Markdown set by TeX's rules over three pages, written in
     ! every format.
     call document_case()
 
@@ -1587,7 +1590,6 @@ program test_plots
     call typeset_core_check(ncore)
     call frame_backend_check(nframes)
     call grid_check(ngrid)
-    call report_check(nreport)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1643,14 +1645,17 @@ contains
             "", &
             "Section @sec:math ends on the page before this one."]
         integer :: k
-        call typeset(doc, "tests/out/document.png", dpi=100.0_dp)
+        call new_report()
+        call markdown(doc)
+        call save("tests/out/document.png", dpi=100.0_dp)
         do k = 1, 3
             call fp_check_png("document_p"//achar(48 + k), &
                               "tests/out/document-"//achar(48 + k)//".png")
         end do
-        call typeset(doc, "tests/out/document.svg")
-        call typeset(doc, "tests/out/document.pdf")
-        call typeset(doc, "tests/out/document.eps")
+        call save("tests/out/document.svg")
+        call save("tests/out/document.pdf")
+        call save("tests/out/document.eps")
+        call new_report()
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
 

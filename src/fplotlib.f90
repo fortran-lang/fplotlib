@@ -21,8 +21,6 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_doctree, only: doc_t
-    use fplotlib_markdown, only: md_parse
     use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
     use fplotlib_scene, only: frame_t, paged_document_t
     use fplotlib_document, only: document_asset_t, export_document
@@ -69,7 +67,6 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
-    public :: typeset
     public :: frame_t, paged_document_t, layout_context_t, layout_markdown, layout_fragment
     public :: render_frame, save_document
     public :: markdown, include_figure, include_table, new_report, save, render_report, document_asset_t
@@ -225,11 +222,6 @@ module fplotlib
     interface violinplot
         module procedure violinplot_one, violinplot_many
     end interface violinplot
-
-    ! A document: Markdown with TeX math, set by TeX's rules into pages.
-    interface typeset
-        module procedure typeset_text, typeset_lines
-    end interface typeset
 
     interface markdown
         module procedure markdown_text, markdown_lines
@@ -6191,12 +6183,9 @@ contains
     end subroutine savefig
 
     ! ------------------------------------------------------------------
-    ! Documents. typeset reads a Markdown document into a tree
-    ! (fplotlib_markdown, fplotlib_doctree), sets the tree as LaTeX's
-    ! article or book class does (fplotlib_docclass) into pages with TeX's
-    ! paragraph and page layout (fplotlib_typeset), and writes them: a PDF holds every page; an SVG, PNG or EPS file holds
-    ! one, so a document of several pages is written as name-1.svg,
-    ! name-2.svg, ... The figures are not touched.
+    ! Reports. Commands append to an implicit builder; export performs layout
+    ! when needed. PDF holds every page; SVG, PNG and EPS write one file per
+    ! page. The explicit document export path shares the same file writer.
     ! ------------------------------------------------------------------
 
     subroutine new_report()
@@ -6253,30 +6242,6 @@ contains
         call render_report(file_ext(filename), assets, dpi)
         call write_assets(assets, filename)
     end subroutine save
-
-    subroutine typeset_text(text, filename, dpi)
-        character(len=*), intent(in) :: text, filename
-        real(dp), intent(in), optional :: dpi
-        type(layout_context_t) :: context
-        type(paged_document_t) :: document
-        call layout_markdown(context, text, document)
-        call save_document(document, filename, dpi)
-    end subroutine typeset_text
-
-    ! The document as an array of lines, which is how a Fortran program
-    ! most easily spells one; trailing blanks are dropped, so a hard line
-    ! break is a backslash at the end of a line.
-    subroutine typeset_lines(lines, filename, dpi)
-        character(len=*), intent(in) :: lines(:), filename
-        real(dp), intent(in), optional :: dpi
-        character(len=:), allocatable :: text
-        integer :: k
-        text = ""
-        do k = 1, size(lines)
-            text = text//trim(lines(k))//new_line("a")
-        end do
-        call typeset_text(text, filename, dpi)
-    end subroutine typeset_lines
 
     subroutine save_document(document, filename, dpi)
         type(paged_document_t), intent(in) :: document

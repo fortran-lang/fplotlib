@@ -13,10 +13,10 @@
 ! enclose; the size names are LaTeX's, from ``.small`` to ``.Huge``.
 
 program plot_invitation
-    use fplotlib, only: typeset
+    use fplotlib, only: markdown, save
     implicit none
 
-    call typeset([character(len=100) :: &
+    call markdown([character(len=100) :: &
         "---", &
         "paper: 5in x 7in", &
         "margin: 0.55in", &
@@ -57,6 +57,6 @@ program plot_invitation
         "ada@example.org", &
         ":::", &
         "", &
-        "\vspace*{\fill}"], &
-        "invitation.svg")
+        "\vspace*{\fill}"])
+    call save("invitation.svg")
 end program plot_invitation

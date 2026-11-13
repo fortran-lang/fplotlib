@@ -13,10 +13,10 @@
 ! sets what it encloses flush right, as LaTeX's ``flushright`` does.
 
 program plot_letter
-    use fplotlib, only: typeset
+    use fplotlib, only: markdown, save
     implicit none
 
-    call typeset([character(len=100) :: &
+    call markdown([character(len=100) :: &
         "---", &
         "paper: letter", &
         "fontsize: 11pt", &
@@ -66,6 +66,6 @@ program plot_letter
         "", &
         "\vspace{1.2cm}", &
         "", &
-        "A. A. L."], &
-        "letter.svg")
+        "A. A. L."])
+    call save("letter.svg")
 end program plot_letter

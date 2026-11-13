@@ -12,10 +12,10 @@
 ! into sections.
 
 program plot_book_chapter
-    use fplotlib, only: typeset
+    use fplotlib, only: markdown, save
     implicit none
 
-    call typeset([character(len=100) :: &
+    call markdown([character(len=100) :: &
         "---", &
         "class: book", &
         "paper: a5", &
@@ -95,6 +95,6 @@ program plot_book_chapter
         "that has to be stretched or shrunk a great deal costs much, a break that leaves a", &
         "single line of a paragraph at the top or bottom of a page, a widow or an orphan, costs", &
         "a penalty. Unlike the lines of a paragraph, pages are chosen one at a time, since a", &
-        "page has to be output before the next can be begun."], &
-        "chapter.svg")
+        "page has to be output before the next can be begun."])
+    call save("chapter.svg")
 end program plot_book_chapter

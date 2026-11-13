@@ -312,14 +312,16 @@ pagination and drawing belong to the reusable core. A richer document
 language, macro system, package ecosystem or publishing framework belongs
 in a separate frontend, not in this convenience API.
 
-### Single-source Markdown
+### Whole-document Markdown
 
-`typeset` sets a whole document, written in Markdown with TeX mathematics
-(`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
-PNG or EPS file per page:
+A complete Markdown document uses the same API. Start a fresh report, append
+the source as a string or array of lines, and save it. Mathematics uses `$...$`
+inline and `$$...$$` for displays. PDF holds every page; SVG, PNG and EPS
+produce one file per page:
 
 ```fortran
-call typeset([character(len=80) :: &
+call new_report()
+call markdown([character(len=80) :: &
     "---", &
     "title: Notes", &
     "numbersections: true", &
@@ -328,7 +330,8 @@ call typeset([character(len=80) :: &
     "", &
     "The energy of a mass at rest is", &
     "$$ E = mc^2 $$ {#eq:einstein}", &
-    "and @eq:einstein is the best known formula of physics."], "notes.pdf")
+    "and @eq:einstein is the best known formula of physics."])
+call save("notes.pdf")
 ```
 
 The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the

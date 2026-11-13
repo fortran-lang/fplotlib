@@ -18,10 +18,10 @@
 ! wants ``\\`` in the literal.
 
 program plot_article
-    use fplotlib, only: typeset
+    use fplotlib, only: markdown, save
     implicit none
 
-    call typeset([character(len=100) :: &
+    call markdown([character(len=100) :: &
         "---", &
         "title: The Damped Harmonic Oscillator", &
         "author: A. N. Author", &
@@ -97,6 +97,6 @@ program plot_article
         "The damped oscillator reduces to a single equation with two parameters. Its", &
         "characteristic roots @eq:roots classify its motion, its matrix form connects it with", &
         "linear algebra, and its energy balance @eq:energy shows where the energy goes. The", &
-        "same analysis applies, almost word for word, to any linear system of the second order."], &
-        "article.svg")
+        "same analysis applies, almost word for word, to any linear system of the second order."])
+    call save("article.svg")
 end program plot_article

@@ -1,6 +1,6 @@
 """Compare fplotlib's documents with LaTeX's and Typst's.
 
-The literal typeset([...]) examples of docs/gallery/typesetting contain a
+The literal markdown([...]) examples of docs/gallery/typesetting contain a
 Markdown document in a Fortran program. This script takes that document out
 and sets it three ways, all with the same Lato and Lete Sans Math files,
 paper, margins and sizes:
@@ -47,13 +47,29 @@ PAPERS = {"a4": (595.2756, 841.8898), "a5": (419.5276, 595.2756),
           "us-letter": (612.0, 792.0), "legal": (612.0, 1008.0)}
 
 
+def literal_document(src):
+    """Match one complete literal document, not a composed report."""
+    calls = re.findall(r"^\s*call\s+(markdown|include_figure|include_table)\s*\(",
+                       src, re.M | re.I)
+    if [name.lower() for name in calls] != ["markdown"]:
+        return None
+    m = re.search(r"^\s*call\s+markdown\(\[character\(len=\d+\)\s*::\s*&\n(.*?)\]\s*\)\s*$",
+                  src, re.S | re.M | re.I)
+    if m is None:
+        return None
+    out = re.search(r'^\s*call\s+save\("([^"]+)"\)', src[m.end():], re.M | re.I)
+    if out is None:
+        return None
+    return m, out
+
+
 def fortran_document(path):
-    """The Markdown in the typeset([...]) call of a gallery program."""
-    src = path.read_text(encoding="utf-8")
-    m = re.search(r"call typeset\(\[character\(len=\d+\) :: &\n(.*?)\],\s*&?\s*\n?\s*\"([^\"]+)\"\)",
-                  src, re.S)
-    if not m:
-        raise SystemExit(f"{path}: no typeset([...]) call found")
+    """The Markdown and output filename of a literal gallery document."""
+    parsed = literal_document(path.read_text(encoding="utf-8"))
+    if parsed is None:
+        raise SystemExit(f"{path}: expected one literal markdown([...]) call followed by save(...), "
+                         "without included figures or tables")
+    m, out = parsed
     lines = []
     for line in m.group(1).split("\n"):
         line = line.strip()
@@ -62,7 +78,7 @@ def fortran_document(path):
         lit = re.match(r'"((?:[^"]|"")*)"', line)
         if lit:
             lines.append(lit.group(1).replace('""', '"'))
-    return "\n".join(lines) + "\n", m.group(2)
+    return "\n".join(lines) + "\n", out.group(1)
 
 
 def front_matter(md):
@@ -295,7 +311,7 @@ def main():
     else:
         examples = []
         for example in sorted(GALLERY.glob("plot_*.f90")):
-            if re.search(r"\bcall\s+typeset\s*\(\s*\[", example.read_text(encoding="utf-8"), re.I):
+            if literal_document(example.read_text(encoding="utf-8")) is not None:
                 examples.append(example)
             else:
                 print(f"skipping {example.name}: programmatic composition, not a literal Markdown document")
