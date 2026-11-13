@@ -26,7 +26,7 @@ module fplotlib_markdown
     implicit none
     private
 
-    public :: md_parse
+    public :: md_parse, md_append
 
     character, parameter :: BS = achar(92), NL = achar(10)
     character(len=2), parameter :: NBSP = achar(194)//achar(160)
@@ -50,6 +50,20 @@ contains
         call front_matter(doc, lines, n, first)
         if (first <= n) call blocks(doc, 1, lines(first:n), n - first + 1)
     end subroutine md_parse
+
+    ! Append ordinary blocks to an existing tree, e.g. after a supplied plot.
+    subroutine md_append(text, doc, parent)
+        character(len=*), intent(in) :: text
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in), optional :: parent
+        type(line_t), allocatable :: lines(:)
+        integer :: n, p
+        p = 1
+        if (present(parent)) p = parent
+        if (p < 1 .or. p > doc%n) error stop "md_append: invalid parent"
+        call split_lines(text, lines, n)
+        if (n > 0) call blocks(doc, p, lines, n)
+    end subroutine md_append
 
     ! The front matter: "key: value" lines between two lines of ---. A key
     ! may come more than once (author).

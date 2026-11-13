@@ -52,6 +52,8 @@ module fplotlib_backend_png
         procedure :: draw_markers => png_draw_markers
         procedure :: draw_glyphs => png_draw_glyphs
         procedure :: draw_image => png_draw_image
+        procedure :: begin_frame => png_begin_frame
+        procedure :: end_frame => png_end_frame
         procedure :: set_dpi => png_set_dpi
     end type png_renderer_t
 
@@ -75,6 +77,7 @@ contains
         integer :: rgb(3), wpx, hpx
         real(dp) :: alpha, s
 
+        if (self%cv%n_frame /= 0) error stop "png: unclosed frame at open_canvas"
         ! No background colour means no figure patch at all, which is how
         ! transparent=True reaches the backend. The vector formats express
         ! that by drawing nothing; a raster has to say it, as alpha zero.
@@ -96,6 +99,7 @@ contains
         wpx = max(1, nint(width*s))
         hpx = max(1, nint(height*s))
         call canvas_init(self%cv, wpx, hpx, s, rgb, alpha)
+        self%pb%curve_scale = self%cv%curve_scale
         self%is_open = .true.
     end subroutine png_open_canvas
 
@@ -103,7 +107,9 @@ contains
         class(png_renderer_t), intent(inout) :: self
         integer, allocatable :: rgba(:, :, :)
 
+        if (self%cv%n_frame /= 0) error stop "png: unclosed frame at close_canvas"
         if (.not. self%is_open) return
+        allocate (rgba(4, self%cv%w, self%cv%h))
         rgba = canvas_rgba(self%cv)
         if (self%keep_pixels) then
             call pack_rgb(self, rgba)
@@ -114,6 +120,29 @@ contains
         self%is_open = .false.
     end subroutine png_close_canvas
 
+    subroutine png_begin_frame(self, matrix, clip)
+        class(png_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        real(dp) :: m(6)
+
+        if (.not. self%is_open) error stop "png: begin_frame outside canvas"
+        ! Conjugate the point transform by the existing crop/scale map,
+        ! leaving all legacy path construction in origin-shifted pixels.
+        m = matrix
+        m(5) = (matrix(5) + (matrix(1) - 1.0_dp)*self%ox + matrix(3)*self%oy)*self%cv%scale
+        m(6) = (matrix(6) + matrix(2)*self%ox + (matrix(4) - 1.0_dp)*self%oy)*self%cv%scale
+        call canvas_begin_frame(self%cv, m, shifted_clip(self, clip))
+        self%pb%curve_scale = self%cv%curve_scale
+    end subroutine png_begin_frame
+
+    subroutine png_end_frame(self)
+        class(png_renderer_t), intent(inout) :: self
+
+        call canvas_end_frame(self%cv)
+        self%pb%curve_scale = self%cv%curve_scale
+    end subroutine png_end_frame
+
     ! GIF has no alpha to speak of, so the frame is flattened onto white
     ! here, which is what a viewer would do with it anyway.
     subroutine pack_rgb(self, rgba)
@@ -123,6 +152,7 @@ contains
 
         self%pw = self%cv%w
         self%ph = self%cv%h
+        if (allocated(self%rgb)) deallocate (self%rgb)
         allocate (character(len=3*self%pw*self%ph) :: self%rgb)
         k = 0
         do y = 1, self%ph
@@ -188,6 +218,7 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp) :: lw
 
+        if (.not. self%cv%identity_transform) return
         if (.not. pb_should_snap(self%pb)) return
         lw = 0.0_dp
         if (paint%stroked) lw = paint%line_width*self%cv%scale
@@ -300,7 +331,7 @@ contains
         integer :: i, n
 
         rp = r*self%cv%scale
-        n = max(12, min(256, ceiling(rp*3.0_dp)))
+        n = max(12, min(256, ceiling(rp*self%cv%curve_scale*3.0_dp)))
         call pb_reset(self%pb)
         do i = 1, n
             a = TWOPI*real(i - 1, dp)/real(n, dp)

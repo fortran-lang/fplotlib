@@ -22,12 +22,12 @@ module fplotlib_text
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC
+                               FACE_ITALIC, glyph_face
     implicit none
     private
 
     public :: text_face, text_layout, text_width
-    public :: run_add, run_shift, run_reset, code_points
+    public :: run_add, run_shift, run_reset, run_map, run_copy, code_points
 
 contains
 
@@ -55,11 +55,14 @@ contains
         integer, intent(in) :: face
         type(glyphrun_t), intent(inout) :: run
         real(dp), intent(out) :: xend
-        integer, allocatable :: cps(:)
-        integer :: n, k, gid, prev
+        integer, allocatable :: cps(:), first(:), last(:)
+        integer :: n, k, gid, prev, start, offset
         real(dp) :: pen
 
-        call code_points(s, cps, n)
+        call code_points(s, cps, n, first, last)
+        start = run%n + 1
+        if (.not. allocated(run%text)) run%text = ""
+        offset = len(run%text)
         pen = x0
         prev = 0
         do k = 1, n
@@ -70,6 +73,11 @@ contains
             pen = pen + glyph_adv(gid)*size
             prev = gid
         end do
+        run%text = run%text//s
+        if (n > 0) then
+            run%first(start:run%n) = offset + first(1:n)
+            run%last(start:run%n) = offset + last(1:n)
+        end if
         xend = pen
     end subroutine text_layout
 
@@ -97,22 +105,27 @@ contains
     ! The code points of s, with combining marks composed onto the letter
     ! before them where the repertoire has the result, and the characters
     ! that are spelled with two glyphs spelled out.
-    subroutine code_points(s, cps, n)
+    subroutine code_points(s, cps, n, first, last)
         character(len=*), intent(in) :: s
         integer, allocatable, intent(out) :: cps(:)
         integer, intent(out) :: n
-        integer :: i, code, nb, c
+        integer, allocatable, intent(out), optional :: first(:), last(:)
+        integer :: i, code, nb, c, start
 
         allocate (cps(2*len(s) + 1))
+        if (present(first)) allocate (first(2*len(s) + 1))
+        if (present(last)) allocate (last(2*len(s) + 1))
         n = 0
         i = 1
         do while (i <= len(s))
+            start = i
             call utf8_next(s, i, code, nb)
             i = i + nb
             if (n > 0 .and. code >= 768 .and. code <= 879) then
                 c = glyph_recompose(cps(n), code)
                 if (c > 0) then
                     cps(n) = c
+                    if (present(last)) last(n) = i - 1
                     cycle
                 end if
             end if
@@ -120,11 +133,15 @@ contains
                 ! Degree Celsius.
                 cps(n + 1) = 176
                 cps(n + 2) = iachar("C")
+                if (present(first)) first(n + 1:n + 2) = start
+                if (present(last)) last(n + 1:n + 2) = i - 1
                 n = n + 2
                 cycle
             end if
             n = n + 1
             cps(n) = code
+            if (present(first)) first(n) = start
+            if (present(last)) last(n) = i - 1
         end do
     end subroutine code_points
 
@@ -133,6 +150,8 @@ contains
     subroutine run_reset(run)
         type(glyphrun_t), intent(inout) :: run
         run%n = 0
+        run%text = ""
+        run%source_math = .false.
     end subroutine run_reset
 
     subroutine run_add(run, gid, x, y, fs)
@@ -144,12 +163,22 @@ contains
         integer :: cap
 
         if (.not. allocated(run%gid)) then
-            allocate (run%gid(16), run%x(16), run%y(16), run%size(16))
+            allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
+                      run%x(16), run%y(16), run%size(16))
         else if (run%n >= size(run%gid)) then
             cap = 2*size(run%gid)
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)
+            allocate (ti(cap))
+            ti(1:run%n) = run%font(1:run%n)
+            call move_alloc(ti, run%font)
+            allocate (ti(cap))
+            ti(1:run%n) = run%first(1:run%n)
+            call move_alloc(ti, run%first)
+            allocate (ti(cap))
+            ti(1:run%n) = run%last(1:run%n)
+            call move_alloc(ti, run%last)
             allocate (t(cap))
             t(1:run%n) = run%x(1:run%n)
             call move_alloc(t, run%x)
@@ -162,10 +191,55 @@ contains
         end if
         run%n = run%n + 1
         run%gid(run%n) = gid
+        run%font(run%n) = glyph_face(gid)
+        run%first(run%n) = 0
+        run%last(run%n) = 0
         run%x(run%n) = x
         run%y(run%n) = y
         run%size(run%n) = fs
     end subroutine run_add
+
+    ! A cluster may contain several glyphs and several Unicode characters.
+    subroutine run_map(run, first_glyph, last_glyph, text, math)
+        type(glyphrun_t), intent(inout) :: run
+        integer, intent(in) :: first_glyph, last_glyph
+        character(len=*), intent(in) :: text
+        logical, intent(in), optional :: math
+        integer :: offset
+        if (.not. allocated(run%text)) run%text = ""
+        offset = len(run%text)
+        run%text = run%text//text
+        if (present(math)) run%source_math = run%source_math .or. math
+        if (first_glyph > last_glyph) return
+        if (first_glyph < 1 .or. last_glyph > run%n) error stop "run_map: invalid glyph range"
+        run%first(first_glyph:last_glyph) = offset + 1
+        run%last(first_glyph:last_glyph) = len(run%text)
+    end subroutine run_map
+
+    subroutine run_copy(source, dest)
+        type(glyphrun_t), intent(in) :: source
+        type(glyphrun_t), intent(out) :: dest
+        integer :: n
+        n = source%n
+        dest%n = n
+        dest%source_math = source%source_math
+        allocate (dest%gid(n), dest%font(n), dest%first(n), dest%last(n), &
+                  dest%x(n), dest%y(n), dest%size(n))
+        if (n > 0) then
+            dest%gid = source%gid(1:n)
+            dest%x = source%x(1:n)
+            dest%y = source%y(1:n)
+            dest%size = source%size(1:n)
+            dest%font = 0
+            dest%first = 0
+            dest%last = 0
+            if (allocated(source%font)) dest%font = source%font(1:n)
+            if (allocated(source%first)) dest%first = source%first(1:n)
+            if (allocated(source%last)) dest%last = source%last(1:n)
+        end if
+        dest%text = ""
+        if (allocated(source%text)) dest%text = source%text
+    end subroutine run_copy
 
     ! Move glyphs k0 to the end of the run by (dx, dy).
     subroutine run_shift(run, k0, dx, dy)

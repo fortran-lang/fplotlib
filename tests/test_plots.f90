@@ -3,8 +3,10 @@ program test_plots
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
     use test_typeset, only: para_ref_check
+    use test_typeset_core, only: typeset_core_check
+    use test_frame_backends, only: frame_backend_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, npara
+    integer :: fig1, nmath, ndelim, nface, npara, ncore, nframes
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1580,6 +1582,8 @@ program test_plots
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
+    call typeset_core_check(ncore)
+    call frame_backend_check(nframes)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1588,6 +1592,8 @@ program test_plots
     if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
+    if (ncore > 0) error stop "typesetting core failed"
+    if (nframes > 0) error stop "frame backends failed"
 
 contains
 

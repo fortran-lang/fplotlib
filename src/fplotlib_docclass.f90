@@ -25,11 +25,15 @@ module fplotlib_docclass
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight, &
                                face_capheight
     use fplotlib_doctree
+    use fplotlib_markdown, only: md_parse
+    use fplotlib_scene, only: frame_t, paged_document_t
     use fplotlib_typeset
     implicit none
     private
 
-    public :: doc_typeset
+    public :: layout_context_t
+
+    public :: doc_typeset, layout_markdown, layout_fragment
 
     character, parameter :: BS = achar(92), NL = achar(10)
     character(len=2), parameter :: NBSP = achar(194)//achar(160)
@@ -59,36 +63,42 @@ module fplotlib_docclass
     end type ctx_t
 
     ! The document's settings.
-    real(dp) :: BASE = 10.0_dp, LEAD = 1.2_dp
-    real(dp) :: PARINDENT = 15.0_dp
-    type(ts_glue_t) :: PARSKIP_G
-    integer :: DOC_ALIGN = ALIGN_JUSTIFY
-    logical :: NUMBER_SECTIONS = .false., BOOK = .false., NUMBER_EQS = .false.
-    ! The title block's inlines: nodes of the front matter, 0 for none.
-    integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
-    integer :: NAUTHOR = 0, AUTHORS(16)
-    integer :: TEXT_COL = 0, PAGE_COL = 16777215
     integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
 
-    ! Counters and cross references.
-    integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
-    integer :: NLAB = 0
-    character(len=64) :: LAB_NAME(512)
-    character(len=24) :: LAB_TEXT(512)
+    type :: layout_context_t
+        private
+        type(typeset_context_t) :: engine
+        integer :: graphics_base = 0
+        real(dp) :: BASE = 10.0_dp, LEAD = 1.2_dp
+        real(dp) :: PARINDENT = 15.0_dp
+        type(ts_glue_t) :: PARSKIP_G
+        integer :: DOC_ALIGN = ALIGN_JUSTIFY
+        logical :: NUMBER_SECTIONS = .false., BOOK = .false., NUMBER_EQS = .false.
+        ! The title block's inlines: nodes of the front matter, 0 for none.
+        integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
+        integer :: NAUTHOR = 0, AUTHORS(16)
+        integer :: TEXT_COL = 0, PAGE_COL = 16777215
 
-    ! The next paragraph is not indented (after a heading, a display, or
-    ! \noindent), and the label the next paragraph of a list item starts
-    ! with.
-    logical :: NOINDENT = .false.
-    character(len=:), allocatable :: PENDING_LABEL
-    real(dp) :: LABEL_SEP = 5.0_dp
+        ! Counters and cross references.
+        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
+        integer :: NLAB = 0
+        character(len=64) :: LAB_NAME(512)
+        character(len=24) :: LAB_TEXT(512)
 
-    ! Inline text being set: the word so far, and a space before it in the
-    ! type the space was in.
-    character(len=:), allocatable :: W
-    logical :: SPACE = .false.
-    integer :: SP_FACE = FACE_REGULAR
-    real(dp) :: SP_SIZE = 10.0_dp
+        ! The next paragraph is not indented (after a heading, a display, or
+        ! \noindent), and the label the next paragraph of a list item starts
+        ! with.
+        logical :: NOINDENT = .false.
+        character(len=:), allocatable :: PENDING_LABEL
+        real(dp) :: LABEL_SEP = 5.0_dp
+
+        ! Inline text being set: the word so far, and a space before it in the
+        ! type the space was in.
+        character(len=:), allocatable :: W
+        logical :: SPACE = .false.
+        integer :: SP_FACE = FACE_REGULAR
+        real(dp) :: SP_SIZE = 10.0_dp
+    end type layout_context_t
 
 contains
 
@@ -97,58 +107,103 @@ contains
     ! ------------------------------------------------------------------
 
     ! Set doc into fplotlib_typeset's pages.
-    subroutine doc_typeset(doc)
+    subroutine doc_typeset(state, doc, document)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
+        type(paged_document_t), intent(out) :: document
         type(ctx_t) :: ctx
 
-        call ts_reset()
-        call defaults()
-        call settings(doc)
-        call ts_set_font(BASE, LEAD*BASE)
-        call ts_set_parskip(PARSKIP_G)
-        call ts_set_colors(TEXT_COL, PAGE_COL)
-        call labels(doc, 1)
-        SEC = 0
-        CHAPTER = 0
-        EQNO = 0
-        ctx%size = BASE
-        ctx%color = TEXT_COL
-        ctx%align = DOC_ALIGN
-        call title_block(doc, ctx)
-        call set_blocks(doc, 1, ctx)
-        call ts_paginate()
+        call ts_reset(state%engine)
+        call defaults(state)
+        if (doc%ngraphics > 0) call ts_import_frame(state%engine, doc%graphics, state%graphics_base)
+        call settings(state, doc)
+        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE)
+        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        call ts_set_colors(state%engine, state%TEXT_COL, state%PAGE_COL)
+        call labels(state, doc, 1)
+        state%SEC = 0
+        state%CHAPTER = 0
+        state%EQNO = 0
+        ctx%size = state%BASE
+        ctx%color = state%TEXT_COL
+        ctx%align = state%DOC_ALIGN
+        call title_block(state, doc, ctx)
+        call set_blocks(state, doc, 1, ctx)
+        call ts_finish(state%engine, document)
     end subroutine doc_typeset
 
-    subroutine defaults()
-        BASE = 10.0_dp
-        LEAD = 1.2_dp
-        PARINDENT = -1.0_dp
-        PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
-        DOC_ALIGN = ALIGN_JUSTIFY
-        NUMBER_SECTIONS = .false.
-        NUMBER_EQS = .false.
-        BOOK = .false.
-        TITLE = 0
-        SUBTITLE = 0
-        NAUTHOR = 0
-        DATE = 0
-        ABSTRACT = 0
-        TEXT_COL = 0
-        PAGE_COL = 16777215
-        NLAB = 0
-        SEC = 0
-        CHAPTER = 0
-        EQNO = 0
-        NOINDENT = .false.
-        PENDING_LABEL = ""
-        W = ""
-        SPACE = .false.
-        call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
+    subroutine layout_markdown(state, text, document)
+        type(layout_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        type(paged_document_t), intent(out) :: document
+        type(doc_t) :: tree
+        call md_parse(text, tree)
+        call doc_typeset(state, tree, document)
+    end subroutine layout_markdown
+
+    ! A width-constrained fragment for an annotation or another layout engine.
+    ! It uses the same block/inline layout without title or page furniture.
+    subroutine layout_fragment(state, text, width, frame, font_size)
+        type(layout_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width
+        type(frame_t), intent(out) :: frame
+        real(dp), intent(in), optional :: font_size
+        type(doc_t) :: tree
+        type(ctx_t) :: ctx
+        if (width <= 0.0_dp) error stop "layout_fragment: width must be positive"
+        call md_parse(text, tree)
+        call ts_reset(state%engine)
+        call defaults(state)
+        if (present(font_size)) state%BASE = font_size
+        if (state%BASE <= 0.0_dp) error stop "layout_fragment: font size must be positive"
+        call ts_set_page(state%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
+        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE)
+        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        state%PARINDENT = 0.0_dp
+        ctx%size = state%BASE
+        ctx%indent = .false.
+        call labels(state, tree, 1)
+        state%SEC = 0
+        state%CHAPTER = 0
+        state%EQNO = 0
+        call set_blocks(state, tree, 1, ctx)
+        call ts_finish_frame(state%engine, frame)
+    end subroutine layout_fragment
+
+    subroutine defaults(state)
+        type(layout_context_t), intent(inout) :: state
+        state%BASE = 10.0_dp
+        state%LEAD = 1.2_dp
+        state%PARINDENT = -1.0_dp
+        state%PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
+        state%DOC_ALIGN = ALIGN_JUSTIFY
+        state%NUMBER_SECTIONS = .false.
+        state%NUMBER_EQS = .false.
+        state%BOOK = .false.
+        state%TITLE = 0
+        state%SUBTITLE = 0
+        state%NAUTHOR = 0
+        state%DATE = 0
+        state%ABSTRACT = 0
+        state%TEXT_COL = 0
+        state%PAGE_COL = 16777215
+        state%NLAB = 0
+        state%SEC = 0
+        state%CHAPTER = 0
+        state%EQNO = 0
+        state%NOINDENT = .false.
+        state%graphics_base = 0
+        state%PENDING_LABEL = ""
+        state%W = ""
+        state%SPACE = .false.
+        call ts_set_page(state%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
     ! The settings of the front matter, in its order (a length in ems is
     ! in the font size given before it).
-    subroutine settings(doc)
+    subroutine settings(state, doc)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer :: i
         character(len=:), allocatable :: key, val
@@ -169,72 +224,73 @@ contains
             val = doc%meta(i)%value
             select case (key)
             case ("title")
-                TITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
+                state%TITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
             case ("subtitle")
-                SUBTITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
+                state%SUBTITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
             case ("author")
-                if (len(val) > 0 .and. NAUTHOR < size(AUTHORS)) then
-                    NAUTHOR = NAUTHOR + 1
-                    AUTHORS(NAUTHOR) = doc%meta(i)%node
+                if (len(val) > 0 .and. state%NAUTHOR < size(state%AUTHORS)) then
+                    state%NAUTHOR = state%NAUTHOR + 1
+                    state%AUTHORS(state%NAUTHOR) = doc%meta(i)%node
                 end if
             case ("date")
-                DATE = merge(doc%meta(i)%node, 0, len(val) > 0)
+                state%DATE = merge(doc%meta(i)%node, 0, len(val) > 0)
             case ("abstract")
-                ABSTRACT = merge(doc%meta(i)%node, 0, len(val) > 0)
+                state%ABSTRACT = merge(doc%meta(i)%node, 0, len(val) > 0)
             case ("fontsize")
-                BASE = length(val, 10.0_dp)
+                state%BASE = length(val, 10.0_dp)
             case ("linestretch", "leading")
-                LEAD = 1.2_dp*number(val, 1.0_dp)
+                state%LEAD = 1.2_dp*number(val, 1.0_dp)
             case ("paper", "papersize")
-                call paper_size(lower(val), pw, ph)
+                call paper_size(state, lower(val), pw, ph)
             case ("margin")
-                m = length(val, BASE)
+                m = length(val, state%BASE)
             case ("margin-left")
-                ml = length(val, BASE)
+                ml = length(val, state%BASE)
             case ("margin-right")
-                mr = length(val, BASE)
+                mr = length(val, state%BASE)
             case ("margin-top")
-                mt = length(val, BASE)
+                mt = length(val, state%BASE)
             case ("margin-bottom")
-                mb = length(val, BASE)
+                mb = length(val, state%BASE)
             case ("indent", "parindent")
                 if (lower(val) == "false" .or. lower(val) == "no") then
-                    PARINDENT = 0.0_dp
+                    state%PARINDENT = 0.0_dp
                 else if (lower(val) /= "true" .and. lower(val) /= "yes") then
-                    PARINDENT = length(val, BASE)
+                    state%PARINDENT = length(val, state%BASE)
                 end if
             case ("parskip")
-                PARSKIP_G = ts_glue_t(length(val, BASE), 0.2_dp*length(val, BASE), &
+                state%PARSKIP_G = ts_glue_t(length(val, state%BASE), 0.2_dp*length(val, state%BASE), &
                                       0.0_dp, 0, 0)
-                if (PARINDENT < 0.0_dp) PARINDENT = 0.0_dp
+                if (state%PARINDENT < 0.0_dp) state%PARINDENT = 0.0_dp
             case ("align")
-                DOC_ALIGN = align_of(lower(val), ALIGN_JUSTIFY)
+                state%DOC_ALIGN = align_of(lower(val), ALIGN_JUSTIFY)
             case ("numbersections", "number-sections")
-                NUMBER_SECTIONS = truth(val)
+                state%NUMBER_SECTIONS = truth(val)
             case ("numberequations", "number-equations")
-                NUMBER_EQS = truth(val)
+                state%NUMBER_EQS = truth(val)
             case ("pagenumbers", "page-numbers")
                 numbers = truth(val)
             case ("class", "documentclass")
-                BOOK = lower(val) == "book"
-                heads = BOOK
+                state%BOOK = lower(val) == "book"
+                heads = state%BOOK
             case ("color", "fontcolor")
-                TEXT_COL = color_of(val, 0)
+                state%TEXT_COL = color_of(val, 0)
             case ("pagecolor", "background")
-                PAGE_COL = color_of(val, 16777215)
+                state%PAGE_COL = color_of(val, 16777215)
             end select
         end do
-        if (PARINDENT < 0.0_dp) PARINDENT = 1.5_dp*BASE
+        if (state%PARINDENT < 0.0_dp) state%PARINDENT = 1.5_dp*state%BASE
         ! LaTeX's geometry is set here by margins; without them, one inch.
         if (m < 0.0_dp) m = 72.0_dp
         if (ml < 0.0_dp) ml = m
         if (mr < 0.0_dp) mr = m
         if (mt < 0.0_dp) mt = m
         if (mb < 0.0_dp) mb = m
-        call ts_set_page(pw, ph, ml, mr, mt, mb, numbers, heads, BOOK)
+        call ts_set_page(state%engine, pw, ph, ml, mr, mt, mb, numbers, heads, state%BOOK)
     end subroutine settings
 
-    subroutine paper_size(v, w, h)
+    subroutine paper_size(state, v, w, h)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: v
         real(dp), intent(inout) :: w, h
         integer :: x
@@ -261,73 +317,74 @@ contains
             ! "W x H", lengths.
             x = index(v, "x")
             if (x > 0) then
-                w = length(trim(v(1:x - 1)), BASE)
-                h = length(trim(v(x + 1:)), BASE)
+                w = length(trim(v(1:x - 1)), state%BASE)
+                h = length(trim(v(x + 1:)), state%BASE)
             end if
         end select
     end subroutine paper_size
 
     ! LaTeX's \maketitle and abstract, for the article class.
-    subroutine title_block(doc, ctx)
+    subroutine title_block(state, doc, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(ctx_t), intent(in) :: ctx
         type(style_t) :: st
         integer :: i
-        if (TITLE == 0) return
+        if (state%TITLE == 0) return
         st = base_style(ctx)
-        call ts_vkeep(ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        st%size = 1.728_dp*BASE
-        call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*BASE/10.0_dp, &
+        call ts_vkeep(state%engine, ts_glue_t(2.0_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        st%size = 1.728_dp*state%BASE
+        call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*state%BASE/10.0_dp, &
                           skip=.false.)
-        call set_inlines(doc, TITLE, st)
-        call ts_end_par()
-        if (SUBTITLE > 0) then
-            st%size = 1.2_dp*BASE
-            call ts_vskip(ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-            call set_inlines(doc, SUBTITLE, st)
-            call ts_end_par()
+        call set_inlines(state, doc, state%TITLE, st)
+        call ts_end_par(state%engine)
+        if (state%SUBTITLE > 0) then
+            st%size = 1.2_dp*state%BASE
+            call ts_vskip(state%engine, ts_glue_t(0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
+            call set_inlines(state, doc, state%SUBTITLE, st)
+            call ts_end_par(state%engine)
         end if
-        st%size = 1.2_dp*BASE
-        if (NAUTHOR > 0) then
-            call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            do i = 1, NAUTHOR
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                  leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-                call set_inlines(doc, AUTHORS(i), st)
-                call ts_end_par()
+        st%size = 1.2_dp*state%BASE
+        if (state%NAUTHOR > 0) then
+            call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            do i = 1, state%NAUTHOR
+                call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                  leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
+                call set_inlines(state, doc, state%AUTHORS(i), st)
+                call ts_end_par(state%engine)
             end do
         end if
-        if (DATE > 0) then
-            call ts_vskip(ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-            call set_inlines(doc, DATE, st)
-            call ts_end_par()
+        if (state%DATE > 0) then
+            call ts_vskip(state%engine, ts_glue_t(state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
+            call set_inlines(state, doc, state%DATE, st)
+            call ts_end_par(state%engine)
         end if
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-        if (ABSTRACT > 0) then
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        if (state%ABSTRACT > 0) then
             ! \small, a centred bold heading, and a quotation.
             st = base_style(ctx)
-            st%size = 0.9_dp*BASE
+            st%size = 0.9_dp*state%BASE
             st%bold = .true.
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=11.0_dp*BASE/10.0_dp, skip=.false.)
-            call set_words("Abstract", st)
-            call ts_end_par()
+            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                              leading=11.0_dp*state%BASE/10.0_dp, skip=.false.)
+            call set_words(state, "Abstract", st)
+            call ts_end_par(state%engine)
             st%bold = .false.
-            call ts_vskip(ts_glue_t(-0.5_dp*st%size + 0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*BASE, &
-                              right=2.5_dp*BASE, size=st%size, leading=11.0_dp*BASE/10.0_dp)
-            call set_inlines(doc, ABSTRACT, st)
-            call ts_end_par()
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vskip(state%engine, ts_glue_t(-0.5_dp*st%size + 0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_begin_par(state%engine, ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*state%BASE, &
+                              right=2.5_dp*state%BASE, size=st%size, leading=11.0_dp*state%BASE/10.0_dp)
+            call set_inlines(state, doc, state%ABSTRACT, st)
+            call ts_end_par(state%engine)
+            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
         end if
-        NOINDENT = .false.
+        state%NOINDENT = .false.
     end subroutine title_block
 
     ! ------------------------------------------------------------------
@@ -335,7 +392,8 @@ contains
     ! ------------------------------------------------------------------
 
     ! The blocks that are the children of node parent.
-    recursive subroutine set_blocks(doc, parent, ctx)
+    recursive subroutine set_blocks(state, doc, parent, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
         type(ctx_t), intent(in) :: ctx
@@ -346,59 +404,64 @@ contains
         do while (c > 0)
             select case (doc%nodes(c)%kind)
             case (DOC_PARA)
-                call paragraph(doc, c, ctx)
+                call paragraph(state, doc, c, ctx)
             case (DOC_HEADING)
-                call heading(doc, c, ctx)
+                call heading(state, doc, c, ctx)
             case (DOC_CODE)
-                call code_block(doc%nodes(c)%text, ctx)
+                call code_block(state, doc%nodes(c)%text, ctx)
             case (DOC_DIV)
                 ! A div that aligns its text is a LaTeX environment
                 ! (center, flushright, flushleft), a list with the space of
                 ! one around it; one that only changes the type is a group.
-                sub = div_ctx(doc%nodes(c)%attr, ctx, aligns)
-                if (aligns > 0) call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call set_blocks(doc, c, sub)
-                call ts_end_par()
-                if (aligns > 0) call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                sub = div_ctx(state, doc%nodes(c)%attr, ctx, aligns)
+                if (aligns > 0) call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call set_blocks(state, doc, c, sub)
+                call ts_end_par(state%engine)
+                if (aligns > 0) call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
             case (DOC_QUOTE)
-                call quote_block(doc, c, ctx)
+                call quote_block(state, doc, c, ctx)
             case (DOC_LIST)
-                call list_block(doc, c, ctx)
+                call list_block(state, doc, c, ctx)
             case (DOC_RULE)
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
-                call ts_end_par()
-                call ts_rule(0.5_dp*(ts_hsize() - ctx%left - ctx%right), 0.5_dp, ctx%color)
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
+                call ts_end_par(state%engine)
+                call ts_rule(state%engine, 0.5_dp*(ts_hsize(state%engine) - ctx%left - ctx%right), 0.5_dp, ctx%color)
+                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
             case (DOC_RAW)
-                call raw_block(doc%nodes(c)%text, ctx)
+                call raw_block(state, doc%nodes(c)%text, ctx)
+            case (DOC_FRAME)
+                if (state%graphics_base == 0) error stop "document: missing frame resources"
+                call ts_place_frame(state%engine, state%graphics_base + doc%nodes(c)%num - 1, &
+                                    left=ctx%left, right=ctx%right, align=ctx%align)
             end select
             c = doc%nodes(c)%next
         end do
     end subroutine set_blocks
 
     ! A paragraph of inline text in the context's settings.
-    subroutine paragraph(doc, k, ctx)
+    subroutine paragraph(state, doc, k, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         type(ctx_t), intent(in) :: ctx
         real(dp) :: ind
         integer :: c
         ind = 0.0_dp
-        if (ctx%indent .and. .not. NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = PARINDENT
+        if (ctx%indent .and. .not. state%NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = state%PARINDENT
         c = doc%nodes(k)%first
         if (c > 0) then
             if (doc%nodes(c)%kind == IN_RAW .and. doc%nodes(c)%text == "noindent") ind = 0.0_dp
         end if
-        NOINDENT = .false.
-        call ts_begin_par(ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
-                          leading=LEAD*ctx%size)
-        if (len(PENDING_LABEL) > 0) then
-            call ts_label(PENDING_LABEL, label_face(ctx), ctx%size, LABEL_SEP, ctx%color)
-            PENDING_LABEL = ""
+        state%NOINDENT = .false.
+        call ts_begin_par(state%engine, ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
+                          leading=state%LEAD*ctx%size)
+        if (len(state%PENDING_LABEL) > 0) then
+            call ts_label(state%engine, state%PENDING_LABEL, label_face(ctx), ctx%size, state%LABEL_SEP, ctx%color)
+            state%PENDING_LABEL = ""
         end if
-        call set_inlines(doc, k, base_style(ctx))
-        call ts_end_par()
+        call set_inlines(state, doc, k, base_style(ctx))
+        call ts_end_par(state%engine)
     end subroutine paragraph
 
     integer function label_face(ctx)
@@ -409,7 +472,8 @@ contains
 
     ! Headings: LaTeX's \section, \subsection and \subsubsection (and,
     ! for a book, \chapter for #).
-    subroutine heading(doc, node, ctx)
+    subroutine heading(state, doc, node, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
         type(ctx_t), intent(in) :: ctx
@@ -420,37 +484,37 @@ contains
         integer :: lv
 
         text = doc_plain(doc, node)
-        ex = face_xheight(FACE_REGULAR)*BASE
-        call heading_number(doc%nodes(node)%num, lv, num)
-        if (BOOK .and. lv == 0) then
-            call chapter_heading(doc, node, text, ctx)
+        ex = face_xheight(FACE_REGULAR)*state%BASE
+        call heading_number(state, doc%nodes(node)%num, lv, num)
+        if (state%BOOK .and. lv == 0) then
+            call chapter_heading(state, doc, node, text, ctx)
             return
         end if
-        if (.not. NUMBER_SECTIONS .or. lv > 3) num = ""
+        if (.not. state%NUMBER_SECTIONS .or. lv > 3) num = ""
         select case (lv)
         case (1)
-            size = 1.44_dp*BASE
-            lead = 18.0_dp*BASE/10.0_dp
+            size = 1.44_dp*state%BASE
+            lead = 18.0_dp*state%BASE/10.0_dp
             before = ts_glue_t(3.5_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(2.3_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case (2)
-            size = 1.2_dp*BASE
-            lead = 14.0_dp*BASE/10.0_dp
+            size = 1.2_dp*state%BASE
+            lead = 14.0_dp*state%BASE/10.0_dp
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case default
-            size = BASE
-            lead = LEAD*BASE
+            size = state%BASE
+            lead = state%LEAD*state%BASE
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
-        call ts_addpenalty(-300)
-        call ts_addvspace(before)
-        if (BOOK .and. lv == 1) then
+        call ts_addpenalty(state%engine, -300)
+        call ts_addvspace(state%engine, before)
+        if (state%BOOK .and. lv == 1) then
             if (len(num) > 0) then
-                call ts_mark(upper(num//".  "//text), .false., section=.true.)
+                call ts_mark(state%engine, upper(num//".  "//text), .false., section=.true.)
             else
-                call ts_mark(upper(text), .false., section=.true.)
+                call ts_mark(state%engine, upper(text), .false., section=.true.)
             end if
         end if
         st = base_style(ctx)
@@ -458,63 +522,65 @@ contains
         st%size = size
         hang = 0.0_dp
         if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
-        call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
+        call ts_begin_par(state%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
                           leading=lead, hang=hang, nobreak=.true.)
         if (len(num) > 0) then
-            call ts_word(num, FACE_BOLD, size, ctx%color)
-            call ts_kern(size)
+            call ts_word(state%engine, num, FACE_BOLD, size, ctx%color)
+            call ts_kern(state%engine, size)
         end if
-        call set_inlines(doc, node, st)
-        call ts_end_par()
-        call ts_penalty(10000)
-        call ts_vskip(after)
-        call ts_nobreak_next()
-        NOINDENT = .true.
+        call set_inlines(state, doc, node, st)
+        call ts_end_par(state%engine)
+        call ts_penalty(state%engine, 10000)
+        call ts_vskip(state%engine, after)
+        call ts_nobreak_next(state%engine)
+        state%NOINDENT = .true.
     end subroutine heading
 
     ! LaTeX's \chapter in the book class: a new page, "Chapter n" and the
     ! title below it in large bold, and the chapter as the running head.
-    subroutine chapter_heading(doc, node, text, ctx)
+    subroutine chapter_heading(state, doc, node, text, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
         character(len=*), intent(in) :: text
         type(ctx_t), intent(in) :: ctx
         type(style_t) :: st
-        call ts_page_break()
+        call ts_page_break(state%engine)
         ! The running heads are the book class's: in capitals,
         ! "CHAPTER 1. TITLE" and "1.2. SECTION".
-        if (NUMBER_SECTIONS) then
-            call ts_mark(upper("Chapter "//itoa(CHAPTER)//".  "//text), .true.)
+        if (state%NUMBER_SECTIONS) then
+            call ts_mark(state%engine, upper("Chapter "//itoa(state%CHAPTER)//".  "//text), .true.)
         else
-            call ts_mark(upper(text), .true.)
+            call ts_mark(state%engine, upper(text), .true.)
         end if
-        call ts_vkeep(ts_glue_t(50.0_dp*BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_vkeep(state%engine, ts_glue_t(50.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
         st = base_style(ctx)
         st%bold = .true.
-        if (NUMBER_SECTIONS) then
-            st%size = 2.074_dp*BASE
-            call ts_begin_par(ALIGN_LEFT, 0.0_dp, size=st%size, leading=25.0_dp*BASE/10.0_dp, &
+        if (state%NUMBER_SECTIONS) then
+            st%size = 2.074_dp*state%BASE
+            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=25.0_dp*state%BASE/10.0_dp, &
                               skip=.false., nobreak=.true.)
-            call set_words("Chapter "//itoa(CHAPTER), st)
-            call ts_end_par()
-            call ts_penalty(10000)
-            call ts_vskip(ts_glue_t(20.0_dp*BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+            call set_words(state, "Chapter "//itoa(state%CHAPTER), st)
+            call ts_end_par(state%engine)
+            call ts_penalty(state%engine, 10000)
+            call ts_vskip(state%engine, ts_glue_t(20.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
         end if
-        st%size = 2.488_dp*BASE
-        call ts_begin_par(ALIGN_LEFT, 0.0_dp, size=st%size, leading=30.0_dp*BASE/10.0_dp, &
+        st%size = 2.488_dp*state%BASE
+        call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=30.0_dp*state%BASE/10.0_dp, &
                           skip=.false., nobreak=.true.)
-        call set_inlines(doc, node, st)
-        call ts_end_par()
-        call ts_penalty(10000)
-        call ts_vskip(ts_glue_t(40.0_dp*BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_nobreak_next()
-        NOINDENT = .true.
+        call set_inlines(state, doc, node, st)
+        call ts_end_par(state%engine)
+        call ts_penalty(state%engine, 10000)
+        call ts_vskip(state%engine, ts_glue_t(40.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_nobreak_next(state%engine)
+        state%NOINDENT = .true.
     end subroutine chapter_heading
 
     ! A list: LaTeX's itemize or enumerate, with its spacing at the depth
     ! it is at. A tight list (no blank lines between its items) is set as
     ! Pandoc's \tightlist sets it, without \itemsep and \parsep.
-    recursive subroutine list_block(doc, list, ctx)
+    recursive subroutine list_block(state, doc, list, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: list
         type(ctx_t), intent(in) :: ctx
@@ -523,29 +589,29 @@ contains
         type(ts_glue_t) :: topsep, partopsep, itemsep, parsep
         real(dp) :: lm, f
 
-        f = BASE/10.0_dp
+        f = state%BASE/10.0_dp
         lev = min(ctx%depth + 1, 4)
         select case (lev)
         case (1)
             topsep = ts_glue_t(8.0_dp*f, 2.0_dp*f, 4.0_dp*f, 0, 0)
             parsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.5_dp*BASE
+            lm = 2.5_dp*state%BASE
         case (2)
             topsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.2_dp*BASE
+            lm = 2.2_dp*state%BASE
         case (3)
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.87_dp*BASE
+            lm = 1.87_dp*state%BASE
         case default
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.7_dp*BASE
+            lm = 1.7_dp*state%BASE
         end select
         partopsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
 
@@ -567,13 +633,13 @@ contains
         end if
         ! After a blank line, the list starts a paragraph, and \partopsep
         ! comes too.
-        if (doc%nodes(list)%spaced .and. .not. ts_in_par()) then
-            call ts_addpenalty(-51)
-            call ts_addvspace(add_glue(topsep, partopsep))
+        if (doc%nodes(list)%spaced .and. .not. ts_in_par(state%engine)) then
+            call ts_addpenalty(state%engine, -51)
+            call ts_addvspace(state%engine, add_glue(topsep, partopsep))
         else
-            call ts_end_par()
-            call ts_addpenalty(-51)
-            call ts_addvspace(topsep)
+            call ts_end_par(state%engine)
+            call ts_addpenalty(state%engine, -51)
+            call ts_addvspace(state%engine, topsep)
         end if
 
         num = doc%nodes(list)%num
@@ -582,71 +648,73 @@ contains
         do while (it > 0)
             nitem = nitem + 1
             if (nitem > 1) then
-                call ts_addpenalty(-51)
-                call ts_addvspace(itemsep)
+                call ts_addpenalty(state%engine, -51)
+                call ts_addvspace(state%engine, itemsep)
             end if
-            PENDING_LABEL = list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num)
-            LABEL_SEP = 0.5_dp*BASE
-            call ts_set_parskip(parsep)
-            call set_blocks(doc, it, sub)
-            if (len(PENDING_LABEL) > 0) then
+            state%PENDING_LABEL = list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num)
+            state%LABEL_SEP = 0.5_dp*state%BASE
+            call ts_set_parskip(state%engine, parsep)
+            call set_blocks(state, doc, it, sub)
+            if (len(state%PENDING_LABEL) > 0) then
                 ! An item with no paragraph of its own still has its label.
-                call ts_begin_par(sub%align, 0.0_dp, left=sub%left, right=sub%right, &
+                call ts_begin_par(state%engine, sub%align, 0.0_dp, left=sub%left, right=sub%right, &
                                   size=sub%size)
-                call ts_label(PENDING_LABEL, FACE_REGULAR, sub%size, LABEL_SEP, sub%color)
-                call ts_strut(0.7_dp*sub%size, 0.3_dp*sub%size)
-                call ts_end_par()
-                PENDING_LABEL = ""
+                call ts_label(state%engine, state%PENDING_LABEL, FACE_REGULAR, sub%size, state%LABEL_SEP, sub%color)
+                call ts_strut(state%engine, 0.7_dp*sub%size, 0.3_dp*sub%size)
+                call ts_end_par(state%engine)
+                state%PENDING_LABEL = ""
             end if
             num = num + 1
             it = doc%nodes(it)%next
         end do
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
+        call ts_end_par(state%engine)
+        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
+        call ts_addpenalty(state%engine, -51)
         if (ctx%depth == 0) then
-            call ts_addvspace(add_glue(topsep, partopsep))
+            call ts_addvspace(state%engine, add_glue(topsep, partopsep))
         else
-            call ts_addvspace(topsep)
+            call ts_addvspace(state%engine, topsep)
         end if
     end subroutine list_block
 
     ! A block quote: LaTeX's quote environment, a list with no label and
     ! equal margins.
-    recursive subroutine quote_block(doc, node, ctx)
+    recursive subroutine quote_block(state, doc, node, ctx)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
         type(ctx_t), intent(in) :: ctx
         type(ctx_t) :: sub
         sub = ctx
         sub%depth = ctx%depth + 1
-        sub%left = ctx%left + 2.5_dp*BASE
-        sub%right = ctx%right + 2.5_dp*BASE
+        sub%left = ctx%left + 2.5_dp*state%BASE
+        sub%right = ctx%right + 2.5_dp*state%BASE
         sub%indent = .false.
-        call ts_end_par()
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(parsep_of(sub%depth))
-        call set_blocks(doc, node, sub)
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_end_par(state%engine)
+        call ts_addpenalty(state%engine, -51)
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(state%engine, parsep_of(state, sub%depth))
+        call set_blocks(state, doc, node, sub)
+        call ts_end_par(state%engine)
+        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
+        call ts_addpenalty(state%engine, -51)
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine quote_block
 
     ! Code: each line (each ending with a newline) as it is, unbroken, its
     ! spaces kept.
-    subroutine code_block(text, ctx)
+    subroutine code_block(state, text, ctx)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         type(ctx_t), intent(in) :: ctx
         integer :: a, b, i, j
         real(dp) :: sp
         character(len=:), allocatable :: s
-        call ts_end_par()
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(ts_glue_t())
+        call ts_end_par(state%engine)
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(state%engine, ts_glue_t())
         sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size)
         a = 1
         do while (a <= len(text))
@@ -654,13 +722,13 @@ contains
             if (b == 0) b = len(text) - a + 2
             s = text(a:a + b - 2)
             a = a + b
-            call ts_begin_par(ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*BASE, &
-                              right=ctx%right, size=0.9_dp*ctx%size, leading=LEAD*ctx%size)
-            call ts_strut(0.7_dp*ctx%size, 0.3_dp*ctx%size)
+            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*state%BASE, &
+                              right=ctx%right, size=0.9_dp*ctx%size, leading=state%LEAD*ctx%size)
+            call ts_strut(state%engine, 0.7_dp*ctx%size, 0.3_dp*ctx%size)
             i = 1
             do while (i <= len(s))
                 if (s(i:i) == " ") then
-                    call ts_kern(sp)
+                    call ts_kern(state%engine, sp, text=" ")
                     i = i + 1
                     cycle
                 end if
@@ -669,47 +737,48 @@ contains
                     if (s(j:j) == " ") exit
                     j = j + 1
                 end do
-                call ts_word(s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
+                call ts_word(state%engine, s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
                 i = j
             end do
-            call ts_end_par()
+            call ts_end_par(state%engine)
         end do
-        call ts_set_parskip(PARSKIP_G)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
     ! A TeX command on a line by itself: \newpage, \pagebreak,
     ! \clearpage, \vfill, \bigskip, \medskip, \smallskip, \vspace{...} and
     ! \vspace*{...}.
-    subroutine raw_block(t, ctx)
+    subroutine raw_block(state, t, ctx)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: t
         type(ctx_t), intent(in) :: ctx
         character(len=:), allocatable :: arg
         integer :: a, b
         real(dp) :: f
-        f = BASE/10.0_dp
-        call ts_end_par()
+        f = state%BASE/10.0_dp
+        call ts_end_par(state%engine)
         if (starts(t, BS//"newpage") .or. starts(t, BS//"pagebreak") .or. &
             starts(t, BS//"clearpage")) then
-            call ts_page_break()
-            NOINDENT = .false.
+            call ts_page_break(state%engine)
+            state%NOINDENT = .false.
         else if (starts(t, BS//"vfill")) then
-            call ts_vfil()
+            call ts_vfil(state%engine)
         else if (starts(t, BS//"bigskip")) then
-            call ts_vskip(ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0))
         else if (starts(t, BS//"medskip")) then
-            call ts_vskip(ts_glue_t(6.0_dp*f, 2.0_dp*f, 2.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(6.0_dp*f, 2.0_dp*f, 2.0_dp*f, 0, 0))
         else if (starts(t, BS//"smallskip")) then
-            call ts_vskip(ts_glue_t(3.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(3.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0))
         else if (starts(t, BS//"vspace")) then
             a = index(t, "{")
             b = index(t, "}", back=.true.)
             if (a > 0 .and. b > a) then
                 arg = trim(adjustl(t(a + 1:b - 1)))
                 if (index(t(1:a), "*") > 0) then
-                    call ts_vkeep(skip_of(arg, ctx%size))
+                    call ts_vkeep(state%engine, skip_of(arg, ctx%size))
                 else
-                    call ts_vskip(skip_of(arg, ctx%size))
+                    call ts_vskip(state%engine, skip_of(arg, ctx%size))
                 end if
             end if
         end if
@@ -717,24 +786,26 @@ contains
 
     ! The settings of a div with attributes a; aligns is 1 when it sets an
     ! alignment.
-    function div_ctx(a, ctx, aligns) result(sub)
+    function div_ctx(state, a, ctx, aligns) result(sub)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: a
         type(ctx_t), intent(in) :: ctx
         integer, intent(out) :: aligns
         type(ctx_t) :: sub
         sub = ctx
         sub%align = -1
-        call apply_attrs(a, sub%align, sub%size, sub%color, sub%bold, sub%italic, ctx%size)
+        call apply_attrs(state, a, sub%align, sub%size, sub%color, sub%bold, sub%italic, ctx%size)
         aligns = merge(1, 0, sub%align >= 0)
         if (sub%align < 0) sub%align = ctx%align
         if (sub%align /= ALIGN_JUSTIFY) sub%indent = .false.
     end function div_ctx
 
-    function parsep_of(depth) result(g)
+    function parsep_of(state, depth) result(g)
+        type(layout_context_t), intent(inout) :: state
         integer, intent(in) :: depth
         type(ts_glue_t) :: g
         real(dp) :: f
-        f = BASE/10.0_dp
+        f = state%BASE/10.0_dp
         select case (depth)
         case (1)
             g = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
@@ -790,7 +861,8 @@ contains
     ! Attributes of a div or a span: classes (.center, .right, .left,
     ! .justify, .bold, .italic, .upright, and LaTeX's size names .small to .Huge)
     ! and key=value pairs (size, color).
-    subroutine apply_attrs(a, align, size, color, bold, italic, base_size)
+    subroutine apply_attrs(state, a, align, size, color, bold, italic, base_size)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: a
         integer, intent(inout) :: align, color
         real(dp), intent(inout) :: size
@@ -837,25 +909,25 @@ contains
                 case ("upright")
                     italic = .false.
                 case ("tiny")
-                    size = 0.5_dp*BASE
+                    size = 0.5_dp*state%BASE
                 case ("scriptsize")
-                    size = 0.7_dp*BASE
+                    size = 0.7_dp*state%BASE
                 case ("footnotesize")
-                    size = 0.8_dp*BASE
+                    size = 0.8_dp*state%BASE
                 case ("small")
-                    size = 0.9_dp*BASE
+                    size = 0.9_dp*state%BASE
                 case ("normalsize")
-                    size = BASE
+                    size = state%BASE
                 case ("large")
-                    size = 1.2_dp*BASE
+                    size = 1.2_dp*state%BASE
                 case ("Large")
-                    size = 1.44_dp*BASE
+                    size = 1.44_dp*state%BASE
                 case ("LARGE")
-                    size = 1.728_dp*BASE
+                    size = 1.728_dp*state%BASE
                 case ("huge")
-                    size = 2.074_dp*BASE
+                    size = 2.074_dp*state%BASE
                 case ("Huge")
-                    size = 2.488_dp*BASE
+                    size = 2.488_dp*state%BASE
                 end select
             else
                 e = index(w, "=")
@@ -899,18 +971,20 @@ contains
     end function face_of
 
     ! Set the inlines of node k, in style st, into the current paragraph.
-    subroutine set_inlines(doc, k, st)
+    subroutine set_inlines(state, doc, k, st)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         type(style_t), intent(in) :: st
-        W = ""
-        SPACE = .false.
-        call walk(doc, k, st)
-        call flush(st)
+        state%W = ""
+        state%SPACE = .false.
+        call walk(state, doc, k, st)
+        call flush(state, st)
     end subroutine set_inlines
 
     ! Words in style st, a space between each two.
-    subroutine set_words(s, st)
+    subroutine set_words(state, s, st)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st
         integer :: i, j
@@ -922,15 +996,16 @@ contains
             else
                 j = i + j - 1
             end if
-            if (i > 1) call ts_space(face_of(st), st%size)
-            call ts_word(s(i:j - 1), face_of(st), st%size, st%color)
+            if (i > 1) call ts_space(state%engine, face_of(st), st%size)
+            call ts_word(state%engine, s(i:j - 1), face_of(st), st%size, st%color)
             i = j + 1
         end do
     end subroutine set_words
 
     ! The children of node parent, in style st. A word goes out when
     ! something else than text comes, after the space before it.
-    recursive subroutine walk(doc, parent, st)
+    recursive subroutine walk(state, doc, parent, st)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
         type(style_t), intent(in) :: st
@@ -943,20 +1018,20 @@ contains
             associate (nd => doc%nodes(c))
                 select case (nd%kind)
                 case (IN_STR)
-                    call add_text(nd%text, st)
+                    call add_text(state, nd%text, st)
                 case (IN_SPACE)
-                    call flush(st)
-                    if (.not. SPACE) then
-                        SP_FACE = face_of(st)
-                        SP_SIZE = st%size
+                    call flush(state, st)
+                    if (.not. state%SPACE) then
+                        state%SP_FACE = face_of(st)
+                        state%SP_SIZE = st%size
                     end if
-                    SPACE = .true.
+                    state%SPACE = .true.
                 case (IN_BREAK)
-                    call flush(st)
-                    call ts_hard_break()
-                    SPACE = .false.
+                    call flush(state, st)
+                    call ts_hard_break(state%engine)
+                    state%SPACE = .false.
                 case (IN_EMPH, IN_STRONG, IN_SPAN, IN_LINK)
-                    call flush(st)
+                    call flush(state, st)
                     sx = st
                     select case (nd%kind)
                     case (IN_EMPH)
@@ -965,45 +1040,45 @@ contains
                         sx%bold = .true.
                     case (IN_SPAN)
                         al = ALIGN_JUSTIFY
-                        call apply_attrs(nd%attr, al, sx%size, sx%color, sx%bold, sx%italic, &
+                        call apply_attrs(state, nd%attr, al, sx%size, sx%color, sx%bold, sx%italic, &
                                          st%size)
                     case (IN_LINK)
                         sx%color = LINK_COL
                     end select
-                    call walk(doc, c, sx)
-                    call flush(sx)
+                    call walk(state, doc, c, sx)
+                    call flush(state, sx)
                 case (IN_CODE)
-                    call flush(st)
-                    call flush_space()
-                    call set_code(nd%text, st%size)
+                    call flush(state, st)
+                    call flush_space(state)
+                    call set_code(state, nd%text, st%size)
                 case (IN_MATH)
-                    call flush(st)
+                    call flush(state, st)
                     if (nd%display) then
-                        tag = display_tag(doc, c)
-                        call ts_math(strip_math_labels(nd%text), st%size, st%color, &
+                        tag = display_tag(state, doc, c)
+                        call ts_math(state%engine, strip_math_labels(nd%text), st%size, st%color, &
                                      display=.true., tag=tag)
-                        SPACE = .false.
+                        state%SPACE = .false.
                     else
-                        call flush_space()
-                        call ts_math(nd%text, st%size, st%color)
+                        call flush_space(state)
+                        call ts_math(state%engine, nd%text, st%size, st%color)
                     end if
                 case (IN_RAW)
                     select case (nd%text)
                     case ("hfill")
-                        call flush(st)
-                        call ts_hfil()
-                        SPACE = .false.
+                        call flush(state, st)
+                        call ts_hfil(state%engine)
+                        state%SPACE = .false.
                     case ("quad", "qquad")
-                        call flush(st)
-                        call ts_kern(merge(1.0_dp, 2.0_dp, nd%text == "quad")*st%size)
-                        SPACE = .false.
+                        call flush(state, st)
+                        call ts_kern(state%engine, merge(1.0_dp, 2.0_dp, nd%text == "quad")*st%size)
+                        state%SPACE = .false.
                     case ("TeX", "LaTeX")
-                        call flush(st)
-                        call flush_space()
-                        call tex_logo(st, nd%text == "LaTeX")
+                        call flush(state, st)
+                        call flush_space(state)
+                        call tex_logo(state, st, nd%text == "LaTeX")
                     end select
                 case (IN_REF)
-                    W = W//ref_text(nd%id, nd%num)
+                    state%W = state%W//ref_text(state, nd%id, nd%num)
                 end select
             end associate
             c = doc%nodes(c)%next
@@ -1011,7 +1086,8 @@ contains
     end subroutine walk
 
     ! Text onto the word; a no-break space is glue that does not break.
-    subroutine add_text(s, st)
+    subroutine add_text(state, s, st)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st
         integer :: i, j
@@ -1019,38 +1095,41 @@ contains
         do
             j = index(s(i:), NBSP)
             if (j == 0) exit
-            W = W//s(i:i + j - 2)
-            call flush(st)
-            call ts_nbsp(face_of(st), st%size)
-            SPACE = .false.
+            state%W = state%W//s(i:i + j - 2)
+            call flush(state, st)
+            call ts_nbsp(state%engine, face_of(st), st%size)
+            state%SPACE = .false.
             i = i + j + 1
         end do
-        W = W//s(i:)
+        state%W = state%W//s(i:)
     end subroutine add_text
 
     ! The word so far goes out, after a space if one came before it.
-    subroutine flush(st)
+    subroutine flush(state, st)
+        type(layout_context_t), intent(inout) :: state
         type(style_t), intent(in) :: st
-        if (len(W) == 0) return
-        call flush_space()
-        call ts_word(W, face_of(st), st%size, st%color)
-        W = ""
+        if (len(state%W) == 0) return
+        call flush_space(state)
+        call ts_word(state%engine, state%W, face_of(st), st%size, st%color)
+        state%W = ""
     end subroutine flush
 
-    subroutine flush_space()
-        if (SPACE) call ts_space(SP_FACE, SP_SIZE)
-        SPACE = .false.
+    subroutine flush_space(state)
+        type(layout_context_t), intent(inout) :: state
+        if (state%SPACE) call ts_space(state%engine, state%SP_FACE, state%SP_SIZE)
+        state%SPACE = .false.
     end subroutine flush_space
 
     ! Code, as it is: its words upright, its spaces glue.
-    subroutine set_code(t, size)
+    subroutine set_code(state, t, size)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: t
         real(dp), intent(in) :: size
         integer :: i, j
         i = 1
         do while (i <= len(t))
             if (t(i:i) == " ") then
-                call ts_space(FACE_REGULAR, size)
+                call ts_space(state%engine, FACE_REGULAR, size)
                 i = i + 1
                 cycle
             end if
@@ -1059,13 +1138,14 @@ contains
                 if (t(j:j) == " ") exit
                 j = j + 1
             end do
-            call ts_word(t(i:j - 1), FACE_REGULAR, size, CODE_COL)
+            call ts_word(state%engine, t(i:j - 1), FACE_REGULAR, size, CODE_COL)
             i = j
         end do
     end subroutine set_code
 
     ! The TeX and LaTeX logos, as plain TeX and LaTeX draw them.
-    subroutine tex_logo(st, la)
+    subroutine tex_logo(state, st, la)
+        type(layout_context_t), intent(inout) :: state
         type(style_t), intent(in) :: st
         logical, intent(in) :: la
         real(dp) :: em, ex
@@ -1075,17 +1155,17 @@ contains
         ex = face_xheight(FACE_REGULAR)*st%size
         if (la) then
             ! The A at the script size, its top at the T's.
-            call ts_word("L", f, st%size, st%color)
-            call ts_kern(-0.36_dp*em)
-            call ts_word("A", f, 0.7_dp*st%size, st%color, &
+            call ts_word(state%engine, "L", f, st%size, st%color)
+            call ts_kern(state%engine, -0.36_dp*em)
+            call ts_word(state%engine, "A", f, 0.7_dp*st%size, st%color, &
                          raise=0.3_dp*face_capheight(FACE_REGULAR)*st%size)
-            call ts_kern(-0.15_dp*em)
+            call ts_kern(state%engine, -0.15_dp*em)
         end if
-        call ts_word("T", f, st%size, st%color)
-        call ts_kern(-0.1667_dp*em)
-        call ts_word("E", f, st%size, st%color, raise=-0.5_dp*ex)
-        call ts_kern(-0.125_dp*em)
-        call ts_word("X", f, st%size, st%color)
+        call ts_word(state%engine, "T", f, st%size, st%color)
+        call ts_kern(state%engine, -0.1667_dp*em)
+        call ts_word(state%engine, "E", f, st%size, st%color, raise=-0.5_dp*ex)
+        call ts_kern(state%engine, -0.125_dp*em)
+        call ts_word(state%engine, "X", f, st%size, st%color)
     end subroutine tex_logo
 
     ! The formula without \label{...}, \tag{...}, \notag and \nonumber,
@@ -1122,31 +1202,32 @@ contains
     ! The number of the next heading of the level: lv is its depth among
     ! sections (0 for a chapter of a book), num its number, 1.2.3 (empty
     ! below \subsubsection's level).
-    subroutine heading_number(level, lv, num)
+    subroutine heading_number(state, level, lv, num)
+        type(layout_context_t), intent(inout) :: state
         integer, intent(in) :: level
         integer, intent(out) :: lv
         character(len=:), allocatable, intent(out) :: num
         integer :: k
         lv = level
-        if (BOOK) lv = level - 1
+        if (state%BOOK) lv = level - 1
         num = ""
         if (lv == 0) then
-            CHAPTER = CHAPTER + 1
-            SEC = 0
-            EQNO = 0
-            num = itoa(CHAPTER)
+            state%CHAPTER = state%CHAPTER + 1
+            state%SEC = 0
+            state%EQNO = 0
+            num = itoa(state%CHAPTER)
             return
         end if
         if (lv > 4) return
-        SEC(lv) = SEC(lv) + 1
-        SEC(lv + 1:) = 0
-        if (BOOK) then
-            num = itoa(CHAPTER)
+        state%SEC(lv) = state%SEC(lv) + 1
+        state%SEC(lv + 1:) = 0
+        if (state%BOOK) then
+            num = itoa(state%CHAPTER)
         else
-            num = itoa(SEC(1))
+            num = itoa(state%SEC(1))
         end if
-        do k = merge(1, 2, BOOK), lv
-            num = num//"."//itoa(SEC(k))
+        do k = merge(1, 2, state%BOOK), lv
+            num = num//"."//itoa(state%SEC(k))
         end do
     end subroutine heading_number
 
@@ -1154,7 +1235,8 @@ contains
     ! numbered: in a document with numberequations, or with an {#id} after
     ! it or \label{name} in it, but not with \notag or \nonumber. Within a
     ! book, formulas are numbered by chapter.
-    function display_tag(doc, k) result(tag)
+    function display_tag(state, doc, k) result(tag)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         character(len=:), allocatable :: tag
@@ -1163,7 +1245,7 @@ contains
         logical :: numbered
         src = doc%nodes(k)%text
         tag = ""
-        numbered = NUMBER_EQS .or. doc%nodes(k)%num == 1
+        numbered = state%NUMBER_EQS .or. doc%nodes(k)%num == 1
         if (index(src, BS//"label{") > 0) numbered = .true.
         if (index(src, BS//"notag") > 0 .or. index(src, BS//"nonumber") > 0) numbered = .false.
         a = index(src, BS//"tag{")
@@ -1173,11 +1255,11 @@ contains
             return
         end if
         if (numbered) then
-            EQNO = EQNO + 1
-            if (BOOK) then
-                tag = itoa(CHAPTER)//"."//itoa(EQNO)
+            state%EQNO = state%EQNO + 1
+            if (state%BOOK) then
+                tag = itoa(state%CHAPTER)//"."//itoa(state%EQNO)
             else
-                tag = itoa(EQNO)
+                tag = itoa(state%EQNO)
             end if
         end if
     end function display_tag
@@ -1185,7 +1267,8 @@ contains
     ! The labels of the headings and displays under node parent, with
     ! their numbers, found before anything is set, so that a reference may
     ! come before what it refers to.
-    recursive subroutine labels(doc, parent)
+    recursive subroutine labels(state, doc, parent)
+        type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
         character(len=:), allocatable :: num, name, src
@@ -1194,12 +1277,12 @@ contains
         do while (c > 0)
             select case (doc%nodes(c)%kind)
             case (DOC_HEADING)
-                call heading_number(doc%nodes(c)%num, lv, num)
+                call heading_number(state, doc%nodes(c)%num, lv, num)
                 if (len(doc%nodes(c)%id) > 0 .and. len(num) > 0) &
-                    call add_label(doc%nodes(c)%id, num)
+                    call add_label(state, doc%nodes(c)%id, num)
             case (IN_MATH)
                 if (doc%nodes(c)%display) then
-                    num = display_tag(doc, c)
+                    num = display_tag(state, doc, c)
                     name = doc%nodes(c)%id
                     src = doc%nodes(c)%text
                     a = index(src, BS//"label{")
@@ -1207,10 +1290,10 @@ contains
                         b = index(src(a:), "}")
                         if (b > 0) name = src(a + 7:a + b - 2)
                     end if
-                    if (len(name) > 0 .and. len(num) > 0) call add_label(name, num)
+                    if (len(name) > 0 .and. len(num) > 0) call add_label(state, name, num)
                 end if
             case default
-                call labels(doc, c)
+                call labels(state, doc, c)
             end select
             c = doc%nodes(c)%next
         end do
@@ -1218,12 +1301,13 @@ contains
 
     ! How a reference to name is written: its number, in parentheses for
     ! \eqref and @eq:name; ?? for an unknown \ref, @name as it is.
-    function ref_text(name, form) result(s)
+    function ref_text(state, name, form) result(s)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: name
         integer, intent(in) :: form
         character(len=:), allocatable :: s
         integer :: k
-        k = find_label(name)
+        k = find_label(state, name)
         if (k == 0) then
             if (form == REF_AT) then
                 s = "@"//name
@@ -1231,26 +1315,28 @@ contains
                 s = "??"
             end if
         else if (form == REF_EQ .or. (form == REF_AT .and. starts(name, "eq:"))) then
-            s = "("//trim(LAB_TEXT(k))//")"
+            s = "("//trim(state%LAB_TEXT(k))//")"
         else
-            s = trim(LAB_TEXT(k))
+            s = trim(state%LAB_TEXT(k))
         end if
     end function ref_text
 
-    subroutine add_label(name, text)
+    subroutine add_label(state, name, text)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: name, text
-        if (NLAB >= size(LAB_NAME)) return
-        NLAB = NLAB + 1
-        LAB_NAME(NLAB) = name
-        LAB_TEXT(NLAB) = text
+        if (state%NLAB >= size(state%LAB_NAME)) return
+        state%NLAB = state%NLAB + 1
+        state%LAB_NAME(state%NLAB) = name
+        state%LAB_TEXT(state%NLAB) = text
     end subroutine add_label
 
-    integer function find_label(name)
+    integer function find_label(state, name)
+        type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: name
         integer :: k
         find_label = 0
-        do k = 1, NLAB
-            if (trim(LAB_NAME(k)) == name) then
+        do k = 1, state%NLAB
+            if (trim(state%LAB_NAME(k)) == name) then
                 find_label = k
                 return
             end if
@@ -1399,11 +1485,12 @@ contains
     end function length
 
     ! LaTeX's glue scaled from its 10pt values to the body size.
-    function scale(g) result(r)
+    function scale(state, g) result(r)
+        type(layout_context_t), intent(inout) :: state
         type(ts_glue_t), intent(in) :: g
         type(ts_glue_t) :: r
         real(dp) :: f
-        f = BASE/10.0_dp
+        f = state%BASE/10.0_dp
         r = ts_glue_t(g%w*f, g%st*f, g%sh*f, g%sto, g%sho)
     end function scale
 

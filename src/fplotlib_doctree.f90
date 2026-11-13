@@ -9,13 +9,15 @@
 ! Nodes live in one array; a node's children are a list from first to
 ! last through next. Node 1 is the root, the document's blocks.
 module fplotlib_doctree
+    use fplotlib_style, only: dp
+    use fplotlib_scene, only: frame_t
     implicit none
     private
 
     public :: doc_t, doc_node_t, doc_meta_t
-    public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain
+    public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame
     public :: DOC_ROOT, DOC_PARA, DOC_HEADING, DOC_LIST, DOC_ITEM, DOC_QUOTE, DOC_CODE, &
-              DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES
+              DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES, DOC_FRAME
     public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, &
               IN_SPAN, IN_RAW, IN_REF
     public :: REF_PLAIN, REF_EQ, REF_AT
@@ -32,6 +34,7 @@ module fplotlib_doctree
     integer, parameter :: DOC_DIV = 9      ! attr; blocks
     integer, parameter :: DOC_RAW = 10     ! a TeX command, text (\newpage, \vspace{1cm})
     integer, parameter :: DOC_INLINES = 11 ! inlines not in a paragraph (a meta value)
+    integer, parameter :: DOC_FRAME = 12   ! supplied graphics; num is its handle
     ! Inlines.
     integer, parameter :: IN_STR = 20      ! text without spaces
     integer, parameter :: IN_SPACE = 21    ! a space between words
@@ -76,6 +79,8 @@ module fplotlib_doctree
         integer :: n = 0
         type(doc_meta_t), allocatable :: meta(:)
         integer :: nmeta = 0
+        type(frame_t) :: graphics
+        integer :: ngraphics = 0
     end type doc_t
 
 contains
@@ -86,6 +91,7 @@ contains
         doc%n = 1
         doc%nodes(1)%kind = DOC_ROOT
         doc%nmeta = 0
+        call doc%graphics%init(0.0_dp, 0.0_dp)
     end subroutine doc_init
 
     ! A new node of the kind, the last child of parent; its index.
@@ -122,6 +128,17 @@ contains
         k = doc_add(doc, parent, kind)
         doc%nodes(k)%text = text
     end function doc_add_text
+
+    integer function doc_add_frame(doc, parent, frame) result(k)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent
+        type(frame_t), intent(in) :: frame
+        integer :: handle
+        call doc%graphics%add_frame(frame, handle)
+        k = doc_add(doc, parent, DOC_FRAME)
+        doc%nodes(k)%num = handle
+        doc%ngraphics = doc%ngraphics + 1
+    end function doc_add_frame
 
     ! A key of the front matter, its value, and the value as inlines (a
     ! DOC_INLINES node, not in the document, or 0).

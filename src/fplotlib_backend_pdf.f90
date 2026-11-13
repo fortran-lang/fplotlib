@@ -21,7 +21,7 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
-    use fplotlib_style, only: dp
+    use fplotlib_style, only: dp, utf8_next
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num
@@ -33,9 +33,6 @@ module fplotlib_backend_pdf
     private
 
     public :: pdf_renderer_t
-
-    integer, parameter :: MAX_ALPHA = 64
-    integer, parameter :: MAX_IMG = 16
 
     ! An image already compressed and ready to become an XObject. The samples
     ! are kept as the deflated stream rather than as pixels because that is
@@ -51,6 +48,7 @@ module fplotlib_backend_pdf
     ! A finished page's content stream.
     type :: pdf_page_t
         character(len=:), allocatable :: content
+        real(dp) :: w = 0.0_dp, h = 0.0_dp
     end type pdf_page_t
 
     type, extends(renderer_t) :: pdf_renderer_t
@@ -69,12 +67,10 @@ module fplotlib_backend_pdf
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
         ! Distinct alpha pairs, each of which becomes an /ExtGState.
         integer :: n_alpha = 0
-        real(dp) :: alpha_fill(MAX_ALPHA) = 1.0_dp
-        real(dp) :: alpha_stroke(MAX_ALPHA) = 1.0_dp
-        logical :: clip_open = .false.
-        type(clip_t) :: cur_clip
+        real(dp), allocatable :: alpha_fill(:), alpha_stroke(:)
         integer :: n_img = 0
-        type(pdf_image_t) :: img(MAX_IMG)
+        type(pdf_image_t), allocatable :: img(:)
+        integer :: n_frame = 0
         ! The glyphs the page has drawn, and the fonts they went into.
         type(t3set_t) :: t3
     contains
@@ -87,6 +83,8 @@ module fplotlib_backend_pdf
         procedure :: draw_markers => pdf_draw_markers
         procedure :: draw_glyphs => pdf_draw_glyphs
         procedure :: draw_image => pdf_draw_image
+        procedure :: begin_frame => pdf_begin_frame
+        procedure :: end_frame => pdf_end_frame
         procedure :: new_page => pdf_new_page
     end type pdf_renderer_t
 
@@ -149,14 +147,24 @@ contains
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: fa, sa
         integer :: id, i
-        id = 0
+        real(dp), allocatable :: f(:), s(:)
+
         do i = 1, self%n_alpha
             if (self%alpha_fill(i) == fa .and. self%alpha_stroke(i) == sa) then
                 id = i
                 return
             end if
         end do
-        if (self%n_alpha >= MAX_ALPHA) return
+        if (.not. allocated(self%alpha_fill)) then
+            allocate (self%alpha_fill(16), self%alpha_stroke(16))
+        end if
+        if (self%n_alpha == size(self%alpha_fill)) then
+            allocate (f(2*self%n_alpha), s(2*self%n_alpha))
+            f(1:self%n_alpha) = self%alpha_fill(1:self%n_alpha)
+            s(1:self%n_alpha) = self%alpha_stroke(1:self%n_alpha)
+            call move_alloc(f, self%alpha_fill)
+            call move_alloc(s, self%alpha_stroke)
+        end if
         self%n_alpha = self%n_alpha + 1
         self%alpha_fill(self%n_alpha) = fa
         self%alpha_stroke(self%n_alpha) = sa
@@ -181,7 +189,7 @@ contains
         end if
         if (p%fill_alpha < 1.0_dp .or. p%stroke_alpha < 1.0_dp) then
             g = alpha_state(self, p%fill_alpha, p%stroke_alpha)
-            if (g > 0) call put(self, "/GS"//int_str(g)//" gs"//new_line("a"))
+            call put(self, "/GS"//int_str(g)//" gs"//new_line("a"))
         end if
         if (p%filled) call put_rgb(self, p%fill_rgb, .false.)
         if (p%stroked) then
@@ -238,6 +246,10 @@ contains
         real(dp), intent(in), optional :: bg_alpha
         real(dp), intent(in), optional :: x0, y0
 
+        if (self%n_frame /= 0) error stop "pdf: unclosed frame at open_canvas"
+        self%width = width
+        self%height = height
+        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
@@ -247,6 +259,9 @@ contains
         self%n_alpha = 0
         self%n_img = 0
         self%npages = 0
+        if (allocated(self%pages)) deallocate (self%pages)
+        if (allocated(self%img)) deallocate (self%img)
+        if (allocated(self%out)) deallocate (self%out)
         call t3_reset(self%t3)
         self%has_bg = present(bg_rgb)
         if (present(bg_rgb)) self%bg = bg_rgb
@@ -273,11 +288,17 @@ contains
         end if
     end subroutine start_page
 
-    ! Finish the page drawn so far and start another of the same size: a
-    ! document of several pages in one file.
-    subroutine pdf_new_page(self)
+    ! Omitted page settings inherit the preceding page, including its
+    ! background. Alpha zero requests a transparent background.
+    subroutine pdf_new_page(self, width, height, bg_rgb, bg_alpha)
         class(pdf_renderer_t), intent(inout) :: self
+        real(dp), intent(in), optional :: width, height
+        integer, intent(in), optional :: bg_rgb(3)
+        real(dp), intent(in), optional :: bg_alpha
         type(pdf_page_t), allocatable :: t(:)
+
+        if (.not. self%is_open) error stop "pdf: new_page outside canvas"
+        if (self%n_frame /= 0) error stop "pdf: unclosed frame at new_page"
         if (.not. allocated(self%pages)) allocate (self%pages(4))
         if (self%npages >= size(self%pages)) then
             allocate (t(2*size(self%pages)))
@@ -286,8 +307,49 @@ contains
         end if
         self%npages = self%npages + 1
         self%pages(self%npages)%content = builder_get(self%c)
+        self%pages(self%npages)%w = self%w
+        self%pages(self%npages)%h = self%h
+        if (present(width)) self%w = width
+        if (present(height)) self%h = height
+        self%width = self%w
+        self%height = self%h
+        if (present(bg_rgb)) then
+            self%has_bg = .true.
+            self%bg = bg_rgb
+        end if
+        if (present(bg_alpha)) self%bga = bg_alpha
         call start_page(self)
     end subroutine pdf_new_page
+
+    subroutine pdf_begin_frame(self, matrix, clip)
+        class(pdf_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        if (.not. self%is_open) error stop "pdf: begin_frame outside canvas"
+        call put(self, "q"//new_line("a"))
+        do i = 1, 6
+            call put_num(self, matrix(i))
+        end do
+        call put(self, "cm"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "re W n"//new_line("a"))
+        end if
+        self%n_frame = self%n_frame + 1
+    end subroutine pdf_begin_frame
+
+    subroutine pdf_end_frame(self)
+        class(pdf_renderer_t), intent(inout) :: self
+
+        if (self%n_frame == 0) error stop "pdf: unmatched end_frame"
+        call put(self, "Q"//new_line("a"))
+        self%n_frame = self%n_frame - 1
+    end subroutine pdf_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(pdf_renderer_t), intent(inout) :: self
@@ -393,7 +455,7 @@ contains
         type(paint_t) :: pp
         real(dp) :: ca, sa, rad, cur_size, cur_y, expect, adj
         integer :: i, font, code, cur_font
-        logical :: open
+        logical :: open, actual_text
         character(len=1) :: eol
 
         if (run%n == 0) return
@@ -402,6 +464,9 @@ contains
         pp%stroked = .false.
         pp%filled = .true.
         call begin_paint(self, pp)
+        actual_text = .false.
+        if (allocated(run%text)) actual_text = len(run%text) > 0 .and. .not. run%source_math
+        if (actual_text) call put_actual_text(self, run%text)
         call put(self, "BT"//eol)
         ! The page flip would leave text mirrored, so the text matrix flips
         ! back; the rotation is folded into the same matrix.
@@ -453,8 +518,33 @@ contains
         end do
         if (open) call put(self, ">] TJ"//eol)
         call put(self, "ET"//eol)
+        if (actual_text) call put(self, "EMC"//eol)
         call put(self, "Q"//eol)
     end subroutine pdf_draw_glyphs
+
+    subroutine put_actual_text(self, text)
+        class(pdf_renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: text
+        integer :: i, code, nb, hi, lo
+
+        call put(self, "/Span << /ActualText <FEFF")
+        i = 1
+        do while (i <= len(text))
+            call utf8_next(text, i, code, nb)
+            if (code > 1114111 .or. (code >= 55296 .and. code <= 57343)) code = 65533
+            if (code < 65536) then
+                call put(self, hex2(code/256)//hex2(mod(code, 256)))
+            else
+                code = code - 65536
+                hi = 55296 + code/1024
+                lo = 56320 + mod(code, 1024)
+                call put(self, hex2(hi/256)//hex2(mod(hi, 256)) &
+                         //hex2(lo/256)//hex2(mod(lo, 256)))
+            end if
+            i = i + nb
+        end do
+        call put(self, "> >> BDC"//new_line("a"))
+    end subroutine put_actual_text
 
     pure elemental function hex2(v) result(s)
         integer, intent(in) :: v
@@ -475,10 +565,17 @@ contains
         integer, intent(in) :: rgba(4, nx, ny)
         type(paint_t), intent(in) :: paint
         integer, allocatable :: rgb(:), a(:)
+        type(pdf_image_t), allocatable :: images(:)
         integer :: i, j, k, id
         logical :: opaque
 
-        if (nx < 1 .or. ny < 1 .or. self%n_img >= MAX_IMG) return
+        if (nx < 1 .or. ny < 1) return
+        if (.not. allocated(self%img)) allocate (self%img(16))
+        if (self%n_img == size(self%img)) then
+            allocate (images(2*self%n_img))
+            images(1:self%n_img) = self%img(1:self%n_img)
+            call move_alloc(images, self%img)
+        end if
 
         allocate (rgb(3*nx*ny), a(nx*ny))
         k = 0
@@ -522,11 +619,12 @@ contains
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=:), allocatable :: content, res, gs, xo, ft, kids
-        integer, allocatable :: off(:), font_obj(:)
+        integer, allocatable :: off(:), font_obj(:), img_obj(:), mask_obj(:)
         integer :: nobj, i, pos, xref_pos, np, k
-        integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
+        real(dp) :: page_w, page_h
         character(len=1) :: eol
 
+        if (self%n_frame /= 0) error stop "pdf: unclosed frame at close_canvas"
         eol = new_line("a")
         content = builder_get(self%c)
         ! Page k is object 2k + 1 and its content 2k + 2; the last page is
@@ -545,7 +643,7 @@ contains
         ! to Unicode, and one stream per glyph. The images follow, one
         ! object each and a second for a soft mask where one is needed.
         nobj = 2 + 2*np
-        allocate (font_obj(self%t3%nfont))
+        allocate (font_obj(self%t3%nfont), img_obj(self%n_img), mask_obj(self%n_img))
         ft = ""
         do i = 1, self%t3%nfont
             font_obj(i) = nobj + 1
@@ -593,10 +691,16 @@ contains
                   //int_str(np)//" >>"//eol//"endobj"//eol)
 
         do k = 1, np
+            page_w = self%w
+            page_h = self%h
+            if (k < np) then
+                page_w = self%pages(k)%w
+                page_h = self%pages(k)%h
+            end if
             off(2*k + 1) = pos
             call emit(f, pos, int_str(2*k + 1)//" 0 obj"//eol &
                       //"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " &
-                      //num_str(self%w)//" "//num_str(self%h)//"] /Contents " &
+                      //num_str(page_w)//" "//num_str(page_h)//"] /Contents " &
                       //int_str(2*k + 2)//" 0 R /Resources "//res//" >>"//eol//"endobj"//eol)
             off(2*k + 2) = pos
             if (k < np) then
@@ -656,6 +760,7 @@ contains
         call emit(f, pos, "startxref"//eol//int_str(xref_pos)//eol//"%%EOF"//eol)
 
         self%out = builder_get(f)
+        self%is_open = .false.
     end subroutine pdf_close_canvas
 
     ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
