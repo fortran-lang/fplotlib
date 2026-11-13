@@ -20,6 +20,7 @@ fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_grid
 fplotlib_hyph
 fplotlib_hyph_data
 fplotlib_markdown
@@ -29,6 +30,7 @@ fplotlib_png
 fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
+fplotlib_report
 fplotlib_scale
 fplotlib_scene
 fplotlib_state

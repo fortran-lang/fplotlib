@@ -237,6 +237,83 @@ call suptitle("figure title")
 
 ## Documents
 
+The report API is procedural, just like plotting. With `time`, `displacement`
+and a two-column `results` array computed by your program:
+
+```fortran
+call markdown("# Simulation results")
+call markdown("The computed energy is $E=mc^2$.")
+
+call plot(time, displacement)
+call xlabel("Time")
+call ylabel("Displacement")
+call include_figure(caption="Computed trajectory", label="fig:trajectory")
+call include_table(results, columns=["Time", "Norm"], label="tab:results")
+
+call save("report.pdf")
+```
+
+No report object, layout context, TeX installation or intermediate image file
+is needed. The first document operation initializes the current report.
+`figure()` and `table()` retain their plotting meanings; `include_figure()`
+and `include_table()` add content to the report. `savefig()` saves the current
+plot, while `save()` saves the report.
+
+### Immediate-mode philosophy
+
+**Immediate describes the API, not the implementation.** Application code
+describes content in program order instead of maintaining and synchronizing a
+layout tree. This is the same API/implementation distinction made in
+[Dear ImGui's explanation of the IMGUI paradigm](https://github.com/ocornut/imgui/wiki/About-the-IMGUI-paradigm).
+It does not require rendering every operation immediately or rebuilding
+everything on every export.
+
+- `markdown` immediately parses and appends complete Markdown blocks. Separate
+  calls append blocks, rather than fragments of a single paragraph. It accepts
+  a string or an array of lines; front matter goes at the beginning.
+- `plot`, `xlabel` and the other plotting calls update the current figure.
+- `include_figure` immediately captures an owned vector snapshot. It does not
+  clear the plot. Later plotting, style changes or `clf()` cannot change an
+  already included figure. Captions support Markdown/math; optional `width`
+  is in points, constrained to the available report width.
+- `include_table` copies its data immediately. Arrays are `(rows, columns)`,
+  with optional `columns`, `caption` and `label`. Real (`dp`), default-integer
+  and character arrays are accepted. Numeric cells use `G0.6` or `I0`;
+  preformatted character cells give full control over precision and units.
+  Cells are plain text, not Markdown. Columns are measured and wrapped,
+  page breaks occur between rows, and supplied headers repeat on continuation
+  pages. Row/column spans and splitting a single oversized row are not supported.
+- `save` lays out the retained document if it changed, then exports it. Saving
+  is non-destructive; repeated exports reuse the finished layout. Appending
+  more content invalidates that cache. References such as `@fig:trajectory`
+  and `@tab:results` are resolved during layout, so they may precede their targets.
+- `new_report()` explicitly starts a fresh description, without changing the
+  current figure. A long-lived notebook or web host can call it before
+  rerunning report-construction code instead of appending another copy.
+
+The convenience layer owns an implicit current report. Underneath, the
+`fplotlib_report` builder and the layout algorithms receive explicit,
+caller-owned state; they never reach into that default report or current
+figure. The retained content, resources, layout workspace and finished pages
+are separate. The implementation currently caches a complete layout; finer
+incremental layout or preview diffing can be added without changing these
+command semantics.
+
+`render_report(format, assets, dpi)` returns bytes in memory for notebooks or
+web hosts. It has the same non-destructive behavior as `save`. Callers needing
+several reports can use `fplotlib_report:report_t` directly: its `markdown`,
+`include_frame`, `include_table` and `export` methods are the same implementation
+used by the procedural facade. The explicit `include_frame` accepts a supplied
+frame instead of consulting global plotting state.
+
+The end-user frontend is intentionally small: Markdown, equations, basic
+figures/tables, captions and references. Generic measurement, packing,
+pagination and drawing belong to the reusable core. A richer document
+language, macro system, package ecosystem or publishing framework belongs
+in a separate frontend, not in this convenience API.
+
+### Single-source Markdown
+
 `typeset` sets a whole document, written in Markdown with TeX mathematics
 (`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
 PNG or EPS file per page:
@@ -311,8 +388,10 @@ size and ink bounds.
 For report composition, `doc_add_frame(tree, parent, frame)` inserts a
 graphics block into a parsed document, and `md_append(text, tree)` adds
 more Markdown after it. No new Markdown syntax is needed. The
-`plot_hpc_report.f90` gallery example embeds a vector plot whose annotation
-is itself a typeset paragraph and equation.
+`plot_hpc_report.f90` gallery example combines Markdown, a vector plot and
+a numerical table through the procedural report API. The
+`plot_frame_composition.f90` advanced example demonstrates explicit contexts
+and a plot annotation that is itself a typeset paragraph and equation.
 
 The low-level modules do not depend on the plotting frontend. A host can
 call `export_document(document, format, assets, dpi)` from
@@ -468,6 +547,8 @@ src/           library modules
                fplotlib_typeset.f90 context-owned paragraph and page layout
                fplotlib_scene.f90  owned frames, pages and a recording renderer
                fplotlib_document.f90 export pages to memory, independently of layout
+               fplotlib_grid.f90   column sizing and composition of cell frames
+               fplotlib_report.f90 retained report builder with deferred layout
                fplotlib_doctree.f90 a document as a tree of blocks and inlines
                fplotlib_markdown.f90 Markdown into that tree
                fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
