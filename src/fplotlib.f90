@@ -23,8 +23,9 @@ module fplotlib
     use fplotlib_draw
     use fplotlib_doctree, only: doc_t
     use fplotlib_markdown, only: md_parse
-    use fplotlib_docclass, only: doc_typeset
-    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
+    use fplotlib_scene, only: frame_t, paged_document_t
+    use fplotlib_document, only: document_asset_t, export_document
     implicit none
     private
 
@@ -68,6 +69,8 @@ module fplotlib
     public :: axes, subplots, sca
     public :: style_use, rc
     public :: typeset
+    public :: frame_t, paged_document_t, layout_context_t, layout_markdown, layout_fragment
+    public :: render_frame, save_document
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -6185,10 +6188,10 @@ contains
     subroutine typeset_text(text, filename, dpi)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
-        type(doc_t) :: doc
-        call md_parse(text, doc)
-        call doc_typeset(doc)
-        call write_pages(filename, dpi)
+        type(layout_context_t) :: context
+        type(paged_document_t) :: document
+        call layout_markdown(context, text, document)
+        call save_document(document, filename, dpi)
     end subroutine typeset_text
 
     ! The document as an array of lines, which is how a Fortran program
@@ -6206,64 +6209,24 @@ contains
         call typeset_text(text, filename, dpi)
     end subroutine typeset_lines
 
-    subroutine write_pages(filename, dpi)
+    subroutine save_document(document, filename, dpi)
+        type(paged_document_t), intent(in) :: document
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
-        type(pdf_renderer_t) :: pdf
-        real(dp) :: w, h, res
-        integer :: p, n, col, bg(3)
+        type(document_asset_t), allocatable :: assets(:)
+        integer :: p
         character(len=:), allocatable :: ext
-
-        call ts_page_size(w, h, col)
-        bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
-        n = ts_page_count()
-        res = 150.0_dp
-        if (present(dpi)) res = dpi
         ext = file_ext(filename)
         select case (ext)
-        case ("pdf")
-            call pdf%open_canvas(w, h, bg_rgb=bg)
-            do p = 1, n
-                if (p > 1) call pdf%new_page()
-                call ts_page_draw(pdf, p)
-            end do
-            call pdf%close_canvas()
-            call write_bytes(filename, pdf%bytes())
-        case ("svg", "png", "eps")
-            do p = 1, n
-                call write_page(page_file(filename, p, n), ext, p, w, h, bg, res)
+        case ("pdf", "svg", "png", "eps")
+            call export_document(document, ext, assets, dpi)
+            do p = 1, size(assets)
+                call write_bytes(page_file(filename, p, size(assets)), assets(p)%bytes)
             end do
         case default
             call reject_ext(filename)
         end select
-    end subroutine write_pages
-
-    subroutine write_page(filename, ext, p, w, h, bg, res)
-        character(len=*), intent(in) :: filename, ext
-        integer, intent(in) :: p, bg(3)
-        real(dp), intent(in) :: w, h, res
-        type(svg_renderer_t) :: svg
-        type(png_renderer_t) :: png
-        type(eps_renderer_t) :: eps
-        select case (ext)
-        case ("svg")
-            call svg%open_canvas(w, h, bg_rgb=bg)
-            call ts_page_draw(svg, p)
-            call svg%close_canvas()
-            call write_bytes(filename, svg%bytes())
-        case ("png")
-            call png%set_dpi(res)
-            call png%open_canvas(w, h, bg_rgb=bg)
-            call ts_page_draw(png, p)
-            call png%close_canvas()
-            call write_bytes(filename, png%bytes())
-        case ("eps")
-            call eps%open_canvas(w, h, bg_rgb=bg)
-            call ts_page_draw(eps, p)
-            call eps%close_canvas()
-            call write_bytes(filename, eps%bytes())
-        end select
-    end subroutine write_page
+    end subroutine save_document
 
     ! The file page p of n goes into: the name itself for a single page,
     ! name-p.ext for each of several.
@@ -6272,14 +6235,19 @@ contains
         integer, intent(in) :: p, n
         character(len=:), allocatable :: f
         character(len=16) :: num
-        integer :: dot
+        integer :: dot, slash
         if (n <= 1) then
             f = filename
             return
         end if
         write (num, "(I0)") p
         dot = index(filename, ".", back=.true.)
-        f = filename(1:dot - 1)//"-"//trim(num)//filename(dot:)
+        slash = max(index(filename, "/", back=.true.), index(filename, achar(92), back=.true.))
+        if (dot <= slash + 1) then
+            f = trim(filename)//"-"//trim(num)//".svg"
+        else
+            f = filename(1:dot - 1)//"-"//trim(num)//filename(dot:)
+        end if
     end function page_file
 
     subroutine write_bytes(filename, data)

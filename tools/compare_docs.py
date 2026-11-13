@@ -1,7 +1,7 @@
 """Compare fplotlib's documents with LaTeX's and Typst's.
 
-Each gallery example of docs/gallery/typesetting is a Markdown document
-in a Fortran program. This script takes the document out of the program
+The literal typeset([...]) examples of docs/gallery/typesetting contain a
+Markdown document in a Fortran program. This script takes that document out
 and sets it three ways, all with the same Lato and Lete Sans Math files,
 paper, margins and sizes:
 
@@ -288,9 +288,17 @@ def main():
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
     ap.add_argument("--out", default="compare_docs", help="where the PNGs go")
     ap.add_argument("--dpi", type=int, default=80)
-    ap.add_argument("examples", nargs="*", help="gallery programs (default: all)")
+    ap.add_argument("examples", nargs="*", help="gallery programs (default: literal Markdown examples)")
     args = ap.parse_args()
-    examples = [Path(e).resolve() for e in args.examples] or sorted(GALLERY.glob("plot_*.f90"))
+    if args.examples:
+        examples = [Path(e).resolve() for e in args.examples]
+    else:
+        examples = []
+        for example in sorted(GALLERY.glob("plot_*.f90")):
+            if re.search(r"\bcall\s+typeset\s*\(\s*\[", example.read_text(encoding="utf-8"), re.I):
+                examples.append(example)
+            else:
+                print(f"skipping {example.name}: programmatic composition, not a literal Markdown document")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:

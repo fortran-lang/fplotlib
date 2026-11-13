@@ -60,6 +60,9 @@
 ! backend's own code, or it does not, in which case it belongs to whoever
 ! calls the API rather than to the API.
 !
+! begin_frame/end_frame scope an affine transform and a local clip. Unlike
+! named groups, these change the picture and cannot be ignored.
+!
 ! begin_group and end_group are different again: they are concrete and default
 ! to doing nothing, because doing nothing is the correct implementation for a
 ! format without a document tree, not a lazy one. See the note on groups.
@@ -159,8 +162,12 @@ module fplotlib_render
     type :: glyphrun_t
         integer :: n = 0
         integer, allocatable :: gid(:)
+        integer, allocatable :: font(:), first(:), last(:)
         real(dp), allocatable :: x(:), y(:), size(:)
         character(len=:), allocatable :: text
+        ! first:last are inclusive UTF-8 byte ranges, zero when unmapped.
+        ! Math source is TeX, not a Unicode replacement for the painted formula.
+        logical :: source_math = .false.
     end type glyphrun_t
 
     type, abstract :: renderer_t
@@ -186,6 +193,8 @@ module fplotlib_render
         ! for any format without a document tree.
         procedure :: begin_group
         procedure :: end_group
+        procedure :: begin_frame
+        procedure :: end_frame
     end type renderer_t
 
     abstract interface
@@ -293,6 +302,20 @@ module fplotlib_render
     end interface
 
 contains
+
+    ! x' = matrix(1)*x + matrix(3)*y + matrix(5), likewise y with 2,4,6.
+    ! clip is in the new local coordinates. Backends restore both on exit.
+    subroutine begin_frame(self, matrix, clip)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        if (clip%on .or. any(matrix /= [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp])) &
+            error stop "renderer: transformed frames are not supported"
+    end subroutine begin_frame
+
+    subroutine end_frame(self)
+        class(renderer_t), intent(inout) :: self
+    end subroutine end_frame
 
     ! ------------------------------------------------------------------
     ! Structure.

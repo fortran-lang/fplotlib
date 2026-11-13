@@ -23,6 +23,8 @@ module fplotlib_backend_svg
 
     public :: svg_renderer_t
 
+    integer, parameter :: SCOPE_GROUP = 0, SCOPE_FRAME = 1, SCOPE_CLIPPED_FRAME = 2
+
     type, extends(renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
         ! Serial numbers for the ids that <use> and clip-path refer to.
@@ -34,6 +36,8 @@ module fplotlib_backend_svg
         type(clip_t) :: cur_clip
         integer :: cur_clip_id = 0
         logical :: in_clip = .false.
+        integer :: n_scope = 0
+        integer, allocatable :: scopes(:)
         ! The glyphs already defined in a <defs>, each of which every later
         ! string that uses it refers back to.
         logical, allocatable :: glyph_defined(:)
@@ -49,6 +53,8 @@ module fplotlib_backend_svg
         procedure :: draw_image => svg_draw_image
         procedure :: begin_group => svg_begin_group
         procedure :: end_group => svg_end_group
+        procedure :: begin_frame => svg_begin_frame
+        procedure :: end_frame => svg_end_frame
     end type svg_renderer_t
 
 contains
@@ -188,29 +194,36 @@ contains
         end if
 
         if (c%on) then
-            self%n_clip = self%n_clip + 1
-            self%cur_clip_id = self%n_clip
-            call put(self, '<defs><clipPath id="clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, '"><rect x="')
-            call put_num(self, c%x)
-            call put(self, '" y="')
-            call put_num(self, c%y)
-            call put(self, '" width="')
-            call put_num(self, c%w)
-            call put(self, '" height="')
-            call put_num(self, c%h)
-            call put(self, '"/></clipPath></defs>')
-            call put_eol(self)
-            call put(self, '<g clip-path="url(#clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, ')">')
-            call put_eol(self)
+            call open_clip_group(self, c)
             self%in_clip = .true.
         end if
 
         self%cur_clip = c
     end subroutine sync_clip
+
+    subroutine open_clip_group(self, c)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t), intent(in) :: c
+
+        self%n_clip = self%n_clip + 1
+        self%cur_clip_id = self%n_clip
+        call put(self, '<defs><clipPath id="clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, '"><rect x="')
+        call put_num(self, c%x)
+        call put(self, '" y="')
+        call put_num(self, c%y)
+        call put(self, '" width="')
+        call put_num(self, c%w)
+        call put(self, '" height="')
+        call put_num(self, c%h)
+        call put(self, '"/></clipPath></defs>')
+        call put_eol(self)
+        call put(self, '<g clip-path="url(#clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, ')">')
+        call put_eol(self)
+    end subroutine open_clip_group
 
     subroutine svg_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
         class(svg_renderer_t), intent(inout) :: self
@@ -220,6 +233,15 @@ contains
         real(dp), intent(in), optional :: x0, y0
         real(dp) :: ox, oy
 
+        if (self%n_scope /= 0) error stop "svg: unclosed scope at open_canvas"
+        self%width = width
+        self%height = height
+        self%is_open = .true.
+        self%n_marker = 0
+        self%n_clip = 0
+        self%cur_clip_id = 0
+        self%cur_clip = clip_t()
+        self%in_clip = .false.
         ox = 0.0_dp
         oy = 0.0_dp
         if (present(x0)) ox = x0
@@ -274,9 +296,12 @@ contains
     subroutine svg_close_canvas(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
+        if (self%n_scope /= 0) error stop "svg: unclosed scope at close_canvas"
         call sync_clip(self, none)
         call put(self, "</svg>")
         call put_eol(self)
+        self%is_open = .false.
     end subroutine svg_close_canvas
 
     function svg_bytes(self) result(s)
@@ -595,6 +620,10 @@ contains
     subroutine svg_begin_group(self, name)
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+        type(clip_t) :: none
+
+        call push_scope(self, SCOPE_GROUP)
+        call sync_clip(self, none)
         call put(self, '<g id="')
         call put(self, name)
         call put(self, '">')
@@ -604,10 +633,65 @@ contains
     subroutine svg_end_group(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
+        if (self%n_scope == 0) error stop "svg: unmatched end_group"
+        if (self%scopes(self%n_scope) /= SCOPE_GROUP) error stop "svg: end_group inside frame"
         ! A clip must not outlive the group that contains it.
         call sync_clip(self, none)
         call put(self, "</g>")
         call put_eol(self)
+        self%n_scope = self%n_scope - 1
     end subroutine svg_end_group
+
+    subroutine push_scope(self, scope)
+        class(svg_renderer_t), intent(inout) :: self
+        integer, intent(in) :: scope
+        integer, allocatable :: grown(:)
+
+        if (.not. self%is_open) error stop "svg: scope outside canvas"
+        if (.not. allocated(self%scopes)) allocate (self%scopes(8))
+        if (self%n_scope == size(self%scopes)) then
+            allocate (grown(2*self%n_scope))
+            grown(1:self%n_scope) = self%scopes(1:self%n_scope)
+            call move_alloc(grown, self%scopes)
+        end if
+        self%n_scope = self%n_scope + 1
+        self%scopes(self%n_scope) = scope
+    end subroutine push_scope
+
+    subroutine svg_begin_frame(self, matrix, clip)
+        class(svg_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(clip_t) :: none
+        integer :: i
+
+        call push_scope(self, merge(SCOPE_CLIPPED_FRAME, SCOPE_FRAME, clip%on))
+        call sync_clip(self, none)
+        call put(self, '<g transform="matrix(')
+        do i = 1, 6
+            if (i > 1) call put(self, " ")
+            call put_num(self, matrix(i))
+        end do
+        call put(self, ')">')
+        call put_eol(self)
+        if (clip%on) call open_clip_group(self, clip)
+    end subroutine svg_begin_frame
+
+    subroutine svg_end_frame(self)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t) :: none
+
+        if (self%n_scope == 0) error stop "svg: unmatched end_frame"
+        if (self%scopes(self%n_scope) == SCOPE_GROUP) error stop "svg: end_frame inside group"
+        call sync_clip(self, none)
+        if (self%scopes(self%n_scope) == SCOPE_CLIPPED_FRAME) then
+            call put(self, "</g>")
+            call put_eol(self)
+        end if
+        call put(self, "</g>")
+        call put_eol(self)
+        self%n_scope = self%n_scope - 1
+    end subroutine svg_end_frame
 
 end module fplotlib_backend_svg

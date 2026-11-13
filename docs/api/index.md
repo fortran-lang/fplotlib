@@ -14,6 +14,7 @@ fplotlib_colors
 fplotlib_contour
 fplotlib_dates
 fplotlib_docclass
+fplotlib_document
 fplotlib_doctree
 fplotlib_draw
 fplotlib_gif
@@ -29,6 +30,7 @@ fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
 fplotlib_scale
+fplotlib_scene
 fplotlib_state
 fplotlib_style
 fplotlib_svg

@@ -11,7 +11,7 @@
 ! justified line, the glyphs after it by up to about 0.065 bp.
 module test_typeset
     use fplotlib_style, only: dp, utf8_next
-    use fplotlib_typeset, only: ts_reset, ts_set_page, ts_set_font, ts_begin_par, &
+    use fplotlib_typeset, only: typeset_context_t, ts_reset, ts_set_page, ts_set_font, ts_begin_par, &
                                 ts_end_par, ts_word, ts_space, ts_line_count, &
                                 ts_line_info, ALIGN_JUSTIFY
     use fplotlib_glyphs, only: glyph_char, FACE_REGULAR
@@ -88,12 +88,13 @@ contains
         real(dp) :: rx(1024), worst
         integer :: i, j, l, n, nr, cp, nb, k
         logical :: bad
+        type(typeset_context_t) :: state
         character(len=64) :: what
 
-        call ts_reset()
-        call ts_set_page(width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
-        call ts_set_font(SIZE)
-        call ts_begin_par(ALIGN_JUSTIFY, indent)
+        call ts_reset(state)
+        call ts_set_page(state, width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
+        call ts_set_font(state, SIZE)
+        call ts_begin_par(state, ALIGN_JUSTIFY, indent)
         i = 1
         do while (i <= len(text))
             j = index(text(i:), " ")
@@ -102,21 +103,21 @@ contains
             else
                 j = i + j - 1
             end if
-            if (j > i) call ts_word(text(i:j - 1), FACE_REGULAR, SIZE)
-            if (j <= len(text)) call ts_space(FACE_REGULAR, SIZE)
+            if (j > i) call ts_word(state, text(i:j - 1), FACE_REGULAR, SIZE)
+            if (j <= len(text)) call ts_space(state, FACE_REGULAR, SIZE)
             i = j + 1
         end do
-        call ts_end_par()
+        call ts_end_par(state)
 
         bad = .false.
         worst = 0.0_dp
         what = ""
-        if (ts_line_count() /= nl) then
+        if (ts_line_count(state) /= nl) then
             bad = .true.
-            write (what, "(a,i0,a,i0)") "lines ", ts_line_count(), " vs ", nl
+            write (what, "(a,i0,a,i0)") "lines ", ts_line_count(state), " vs ", nl
         else
             do l = 1, nl
-                call ts_line_info(l, gids, xs, n)
+                call ts_line_info(state, l, gids, xs, n)
                 nr = 0
                 read (lx(l), *, iostat=k) (rx(j), j=1, count_words(lx(l)))
                 nr = count_words(lx(l))
