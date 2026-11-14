@@ -42,8 +42,9 @@ module fplotlib_mathtext
     use fplotlib_render_checks
     use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
-    use fplotlib_render, only: glyphrun_t
-    use fplotlib_text, only: text_layout, run_add
+    use fplotlib_render, only: glyphrun_t, paint_t
+    use fplotlib_scene, only: frame_t, recording_renderer_t
+    use fplotlib_text, only: text_layout, run_add, run_map
     use fplotlib_mathsym, only: sym_lookup, sym_class, CL_ORD, CL_OP, CL_BIN, &
                                 CL_REL, CL_OPEN, CL_CLOSE, CL_PUNCT, CL_INNER
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_bbox, glyph_italic, &
@@ -90,7 +91,7 @@ module fplotlib_mathtext
     private
 
     public :: math_is, math_width, math_layout, math_formula, mrules_t
-    public :: math_context_t
+    public :: math_context_t, math_frame
 
     ! Rules, in the same frame as the glyphs of a run: (x, y) is the top
     ! left corner, y down, w and h the width and height.
@@ -290,7 +291,7 @@ contains
         real(dp), intent(out) :: width
         integer, intent(in), optional :: face
         type(mbox_t) :: box
-        integer :: i, j, head, k, tf
+        integer :: i, j, head, k, tf, first_glyph
         real(dp) :: pen, xnew
 
         type(status_t), intent(out) :: status
@@ -301,6 +302,7 @@ contains
         do while (i <= len(s))
             if (s(i:i) == "$") then
                 j = dollar(s, i + 1)
+                first_glyph = run%n + 1
                 if (j > i + 1) then
                     call reset_arenas(state)
                     head = parse_list(state, s(i + 1:j - 1), ALPH_MATH)
@@ -319,6 +321,10 @@ contains
                     end do
                     pen = pen + box%w
                 end if
+                ! Math maps to source TeX, including its dollar delimiters,
+                ! not semantic Unicode for unconditional PDF ActualText.
+                call run_map(run, first_glyph, run%n, s(i:min(j, len(s))), math=.true., status=status)
+                if (.not. status%ok()) return
                 i = j + 1
             else
                 j = i
@@ -385,7 +391,7 @@ contains
         type(mrules_t), intent(inout) :: rules
         real(dp), intent(out) :: w, h, d
         type(mbox_t) :: box
-        integer :: head, k, st
+        integer :: head, k, st, first_glyph
 
         type(status_t), intent(out) :: status
         st = ST_T
@@ -394,6 +400,7 @@ contains
         head = parse_list(state, s, ALPH_MATH)
         call mlist_box(state, head, st, .false., size, box, status=status)
         if (.not. status%ok()) return
+        first_glyph = run%n + 1
         do k = box%i0, box%i1
             if (state%it_kind(k) == 1) then
                 call run_add(run, state%it_gid(k), state%it_x(k), -state%it_y(k), state%it_s(k), status=status)
@@ -403,10 +410,51 @@ contains
                               state%it_w(k), state%it_h(k))
             end if
         end do
+        ! This span is the formula's source TeX, not per-atom semantic
+        ! Unicode. A PDF backend may choose not to use it as ActualText.
+        call run_map(run, first_glyph, run%n, s, math=.true., status=status)
+        if (.not. status%ok()) return
         w = box%w
         h = box%h
         d = box%d
     end subroutine math_formula_impl
+
+    ! An owned frame of one formula, without dollar signs. Its baseline
+    ! is measured from the top; the default paint is filled black.
+    subroutine math_frame(s, size, display, frame, paint, context, status)
+        character(len=*), intent(in) :: s
+        real(dp), intent(in) :: size
+        logical, intent(in) :: display
+        type(frame_t), intent(out) :: frame
+        type(paint_t), intent(in), optional :: paint
+        type(math_context_t), intent(inout), optional :: context
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        type(recording_renderer_t) :: recorder
+        type(paint_t) :: ink
+        real(dp) :: w, h, d
+        integer :: k
+
+        type(status_t), intent(out) :: status
+        ink%filled = .true.
+        if (present(paint)) ink = paint
+        call math_formula(s, size, display, run, rules, w, h, d, context=context, status=status)
+        if (.not. status%ok()) return
+        call recorder%open_canvas(w, h + d, status=status)
+        if (.not. status%ok()) return
+        call recorder%draw_glyphs(0.0_dp, h, run, ink, 0.0_dp, status=status)
+        if (.not. status%ok()) return
+        do k = 1, rules%n
+            call recorder%draw_rect(rules%x(k), h + rules%y(k), rules%w(k), rules%h(k), ink, status=status)
+            if (.not. status%ok()) return
+        end do
+        call recorder%close_canvas(status=status)
+        if (.not. status%ok()) return
+        call recorder%take(frame, status=status)
+        if (.not. status%ok()) return
+        call frame%set_baseline(h, status=status)
+        if (.not. status%ok()) return
+    end subroutine math_frame
 
     ! The dollar sign that closes a formula opened before i, skipping
     ! the ones written \$; len(s) + 1 when there is none.

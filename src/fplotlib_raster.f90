@@ -34,9 +34,12 @@ module fplotlib_raster
 
     public :: canvas_t, pathbuf_t
     public :: canvas_init, canvas_rgba, canvas_free
+    public :: canvas_begin_frame, canvas_end_frame
     public :: pb_reset, pb_move, pb_line, pb_cubic, pb_close, pb_poly
     public :: pb_should_snap, pb_snap
     public :: fill_path_buf, stroke_path_buf, blit_image
+
+    real(dp), parameter :: IDENTITY(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
 
     ! A path flattened to polylines: every curve is already line segments, so
     ! the rasterizer never sees a Bezier.
@@ -45,13 +48,27 @@ module fplotlib_raster
         integer, allocatable :: sub_beg(:), sub_len(:)
         logical, allocatable :: sub_closed(:)
         integer :: n = 0, ns = 0
+        real(dp) :: curve_scale = 1.0_dp
     end type pathbuf_t
+
+    type :: raster_frame_t
+        real(dp) :: matrix(6) = IDENTITY
+        logical :: clipped = .false.
+        real(dp) :: clip_x(4) = 0.0_dp, clip_y(4) = 0.0_dp
+    end type raster_frame_t
 
     type :: canvas_t
         integer :: w = 0, h = 0
         real(dp) :: scale = 1.0_dp      ! pixels per point
         real(dp), allocatable :: px(:, :, :)   ! (4, w, h), premultiplied
         real(dp), allocatable :: acc(:, :)     ! (0:w, h) area deltas
+        ! Geometry and stroke outlines stay in local pixels until filling.
+        ! Ancestor clips are frozen in device pixels when their frames open.
+        real(dp) :: matrix(6) = IDENTITY
+        logical :: identity_transform = .true.
+        real(dp) :: curve_scale = 1.0_dp
+        integer :: n_frame = 0, n_clip = 0
+        type(raster_frame_t), allocatable :: frames(:)
     end type canvas_t
 
 contains
@@ -85,9 +102,101 @@ contains
         type(canvas_t), intent(inout) :: cv
 
         type(status_t), intent(out) :: status
+        if (cv%n_frame /= 0) then
+            call status%set(ERROR_STATE, "raster: unclosed frame at canvas_free")
+            return
+        end if
         if (allocated(cv%px)) deallocate (cv%px)
         if (allocated(cv%acc)) deallocate (cv%acc)
+        if (allocated(cv%frames)) deallocate (cv%frames)
     end subroutine canvas_free
+
+    ! The matrix acts on local pixels; clip coordinates, like paint clips,
+    ! are points in the same local, origin-shifted coordinate system.
+    subroutine canvas_begin_frame(cv, matrix, clip, status)
+        type(canvas_t), intent(inout) :: cv
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(raster_frame_t), allocatable :: grown(:)
+        real(dp) :: p(6), m(6), qx(4), qy(4)
+
+        type(status_t), intent(out) :: status
+        if (.not. allocated(cv%px)) then
+            call status%set(ERROR_STATE, "raster: begin_frame outside canvas")
+            return
+        end if
+        if (.not. allocated(cv%frames)) allocate (cv%frames(8))
+        if (cv%n_frame == size(cv%frames)) then
+            allocate (grown(2*cv%n_frame))
+            grown(1:cv%n_frame) = cv%frames(1:cv%n_frame)
+            call move_alloc(grown, cv%frames)
+        end if
+        p = cv%matrix
+        m(1) = p(1)*matrix(1) + p(3)*matrix(2)
+        m(2) = p(2)*matrix(1) + p(4)*matrix(2)
+        m(3) = p(1)*matrix(3) + p(3)*matrix(4)
+        m(4) = p(2)*matrix(3) + p(4)*matrix(4)
+        m(5) = p(1)*matrix(5) + p(3)*matrix(6) + p(5)
+        m(6) = p(2)*matrix(5) + p(4)*matrix(6) + p(6)
+        call set_transform(cv, m)
+        cv%n_frame = cv%n_frame + 1
+        cv%frames(cv%n_frame)%matrix = m
+        cv%frames(cv%n_frame)%clipped = clip%on
+        if (clip%on) then
+            call transformed_rect(cv, clip, qx, qy)
+            cv%frames(cv%n_frame)%clip_x = qx
+            cv%frames(cv%n_frame)%clip_y = qy
+            cv%n_clip = cv%n_clip + 1
+        end if
+    end subroutine canvas_begin_frame
+
+    subroutine canvas_end_frame(cv, status)
+        type(canvas_t), intent(inout) :: cv
+        real(dp) :: matrix(6)
+
+        type(status_t), intent(out) :: status
+        if (cv%n_frame == 0) then
+            call status%set(ERROR_STATE, "raster: unmatched end_frame")
+            return
+        end if
+        if (cv%frames(cv%n_frame)%clipped) cv%n_clip = cv%n_clip - 1
+        cv%n_frame = cv%n_frame - 1
+        matrix = IDENTITY
+        if (cv%n_frame > 0) matrix = cv%frames(cv%n_frame)%matrix
+        call set_transform(cv, matrix)
+    end subroutine canvas_end_frame
+
+    subroutine set_transform(cv, matrix)
+        type(canvas_t), intent(inout) :: cv
+        real(dp), intent(in) :: matrix(6)
+        real(dp) :: u, v, dot
+
+        cv%matrix = matrix
+        cv%identity_transform = all(matrix == IDENTITY)
+        ! The largest singular value controls subdivision only, never pen
+        ! width: the entire local outline receives the full affine map.
+        u = matrix(1)**2 + matrix(2)**2
+        v = matrix(3)**2 + matrix(4)**2
+        dot = matrix(1)*matrix(3) + matrix(2)*matrix(4)
+        cv%curve_scale = max(1.0_dp, sqrt(0.5_dp*(u + v + hypot(u - v, 2.0_dp*dot))))
+    end subroutine set_transform
+
+    subroutine transformed_rect(cv, clip, x, y)
+        type(canvas_t), intent(in) :: cv
+        type(clip_t), intent(in) :: clip
+        real(dp), intent(out) :: x(4), y(4)
+        real(dp) :: lx(4), ly(4)
+
+        if (clip%w <= 0.0_dp .or. clip%h <= 0.0_dp) then
+            x = 0.0_dp
+            y = 0.0_dp
+            return
+        end if
+        lx = [clip%x, clip%x + clip%w, clip%x + clip%w, clip%x]*cv%scale
+        ly = [clip%y, clip%y, clip%y + clip%h, clip%y + clip%h]*cv%scale
+        x = cv%matrix(1)*lx + cv%matrix(3)*ly + cv%matrix(5)
+        y = cv%matrix(2)*lx + cv%matrix(4)*ly + cv%matrix(6)
+    end subroutine transformed_rect
 
     ! Undo the premultiplication on the way out, because PNG stores straight
     ! alpha. Fully transparent pixels have no colour to recover and are left
@@ -211,7 +320,7 @@ contains
         x0 = pb%x(pb%n)
         y0 = pb%y(pb%n)
         d = hypot(x1 - x0, y1 - y0) + hypot(x2 - x1, y2 - y1) + hypot(x3 - x2, y3 - y2)
-        n = max(3, min(128, ceiling(d*0.6_dp)))
+        n = max(3, min(128, ceiling(d*pb%curve_scale*0.6_dp)))
         do i = 1, n
             t = real(i, dp)/real(n, dp)
             mt = 1.0_dp - t
@@ -401,23 +510,34 @@ contains
         type(clip_t), intent(in) :: clip
         integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b
         real(dp) :: run, cov, sa, sr, sg, sb_, ia
+        logical :: scoped
 
         if (pb%ns == 0 .or. alpha <= 0.0_dp) return
 
+        scoped = .not. cv%identity_transform .or. cv%n_clip > 0
         y0b = cv%h + 1
         y1b = 0
-        do s = 1, pb%ns
-            b = pb%sub_beg(s)
-            n = pb%sub_len(s)
-            if (n < 2) cycle
-            do i = b, b + n - 2
-                call acc_edge(cv, pb%x(i), pb%y(i), pb%x(i + 1), pb%y(i + 1), y0b, y1b)
+        if (scoped) then
+            call acc_transformed_path(cv, pb, clip, y0b, y1b)
+        else
+            do s = 1, pb%ns
+                b = pb%sub_beg(s)
+                n = pb%sub_len(s)
+                if (n < 2) cycle
+                do i = b, b + n - 2
+                    call acc_edge(cv, pb%x(i), pb%y(i), pb%x(i + 1), pb%y(i + 1), y0b, y1b)
+                end do
+                call acc_edge(cv, pb%x(b + n - 1), pb%y(b + n - 1), pb%x(b), pb%y(b), y0b, y1b)
             end do
-            call acc_edge(cv, pb%x(b + n - 1), pb%y(b + n - 1), pb%x(b), pb%y(b), y0b, y1b)
-        end do
+        end if
         if (y1b < y0b) return
 
-        call clip_box(cv, clip, cx0, cx1, cy0, cy1)
+        if (scoped) then
+            cx0 = 1; cx1 = cv%w
+            cy0 = 1; cy1 = cv%h
+        else
+            call clip_box(cv, clip, cx0, cx1, cy0, cy1)
+        end if
         sr = real(rgb(1), dp)/255.0_dp
         sg = real(rgb(2), dp)/255.0_dp
         sb_ = real(rgb(3), dp)/255.0_dp
@@ -440,6 +560,90 @@ contains
             cv%acc(cv%w, y) = 0.0_dp
         end do
     end subroutine fill_path_buf
+
+    subroutine acc_transformed_path(cv, pb, clip, y0b, y1b)
+        type(canvas_t), intent(inout) :: cv
+        type(pathbuf_t), intent(in) :: pb
+        type(clip_t), intent(in) :: clip
+        integer, intent(inout) :: y0b, y1b
+        real(dp), allocatable :: x(:), y(:)
+        real(dp) :: qx(4), qy(4)
+        integer :: s, b, n, i, j
+
+        if (cv%matrix(1)*cv%matrix(4) - cv%matrix(2)*cv%matrix(3) == 0.0_dp) return
+        if (clip%on) call transformed_rect(cv, clip, qx, qy)
+        do s = 1, pb%ns
+            b = pb%sub_beg(s)
+            n = pb%sub_len(s)
+            if (n < 3) cycle
+            allocate (x(n), y(n))
+            x = cv%matrix(1)*pb%x(b:b + n - 1) + cv%matrix(3)*pb%y(b:b + n - 1) + cv%matrix(5)
+            y = cv%matrix(2)*pb%x(b:b + n - 1) + cv%matrix(4)*pb%y(b:b + n - 1) + cv%matrix(6)
+            do j = 1, cv%n_frame
+                if (.not. cv%frames(j)%clipped) cycle
+                call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
+                if (n < 3) exit
+            end do
+            if (clip%on) call clip_polygon(x, y, n, qx, qy)
+            if (n >= 3) then
+                do i = 1, n - 1
+                    call acc_edge(cv, x(i), y(i), x(i + 1), y(i + 1), y0b, y1b)
+                end do
+                call acc_edge(cv, x(n), y(n), x(1), y(1), y0b, y1b)
+            end if
+            deallocate (x, y)
+        end do
+    end subroutine acc_transformed_path
+
+    ! Clip each contour against convex frame rectangles before accumulating
+    ! coverage. This intersects geometry, rather than multiplying unrelated
+    ! antialias masks, and preserves holes and reflected winding.
+    subroutine clip_polygon(x, y, n, qx, qy)
+        real(dp), allocatable, intent(inout) :: x(:), y(:)
+        integer, intent(inout) :: n
+        real(dp), intent(in) :: qx(4), qy(4)
+        real(dp), allocatable :: tx(:), ty(:)
+        real(dp) :: orientation, dx, dy, sx, sy, ex, ey, ds, de, t
+        integer :: edge, next, i, nn
+
+        if (n < 3) return
+        orientation = (qx(2) - qx(1))*(qy(4) - qy(1)) - (qy(2) - qy(1))*(qx(4) - qx(1))
+        if (orientation == 0.0_dp) then
+            n = 0
+            return
+        end if
+        orientation = sign(1.0_dp, orientation)
+        do edge = 1, 4
+            next = mod(edge, 4) + 1
+            dx = qx(next) - qx(edge)
+            dy = qy(next) - qy(edge)
+            allocate (tx(2*n), ty(2*n))
+            nn = 0
+            sx = x(n); sy = y(n)
+            ds = orientation*(dx*(sy - qy(edge)) - dy*(sx - qx(edge)))
+            do i = 1, n
+                ex = x(i); ey = y(i)
+                de = orientation*(dx*(ey - qy(edge)) - dy*(ex - qx(edge)))
+                if ((ds >= 0.0_dp) .neqv. (de >= 0.0_dp)) then
+                    t = ds/(ds - de)
+                    nn = nn + 1
+                    tx(nn) = sx + t*(ex - sx)
+                    ty(nn) = sy + t*(ey - sy)
+                end if
+                if (de >= 0.0_dp) then
+                    nn = nn + 1
+                    tx(nn) = ex
+                    ty(nn) = ey
+                end if
+                sx = ex; sy = ey
+                ds = de
+            end do
+            call move_alloc(tx, x)
+            call move_alloc(ty, y)
+            n = nn
+            if (n < 3) return
+        end do
+    end subroutine clip_polygon
 
     subroutine clip_box(cv, clip, x0, x1, y0, y1)
         type(canvas_t), intent(in) :: cv
@@ -478,6 +682,7 @@ contains
         hw = 0.5_dp*paint%line_width*cv%scale
         if (hw <= 0.0_dp) return
         call pb_reset(out)
+        out%curve_scale = cv%curve_scale
 
         do s = 1, pb%ns
             b = pb%sub_beg(s)
@@ -684,7 +889,7 @@ contains
         real(dp), parameter :: TWOPI = 6.283185307179586_dp
         integer :: i, n
 
-        n = max(8, min(64, ceiling(r*4.0_dp)))
+        n = max(8, min(64, ceiling(r*out%curve_scale*4.0_dp)))
         allocate (px(n), py(n))
         do i = 1, n
             px(i) = cx + r*cos(TWOPI*real(i - 1, dp)/real(n, dp))
@@ -707,6 +912,11 @@ contains
         integer :: px0, px1, py0, py1, ix, iy, sx, sy, cx0, cx1, cy0, cy1
         real(dp) :: sa, ia, u, v
 
+        if (nx < 1 .or. ny < 1 .or. w <= 0.0_dp .or. h <= 0.0_dp .or. alpha <= 0.0_dp) return
+        if (.not. cv%identity_transform .or. cv%n_clip > 0) then
+            call blit_affine_image(cv, x, y, w, h, rgba, nx, ny, alpha, clip)
+            return
+        end if
         call clip_box(cv, clip, cx0, cx1, cy0, cy1)
         px0 = max(cx0, nint(x*cv%scale) + 1)
         py0 = max(cy0, nint(y*cv%scale) + 1)
@@ -729,5 +939,75 @@ contains
             end do
         end do
     end subroutine blit_image
+
+    subroutine blit_affine_image(cv, x, y, w, h, rgba, nx, ny, alpha, clip)
+        type(canvas_t), intent(inout) :: cv
+        real(dp), intent(in) :: x, y, w, h, alpha
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(4, nx, ny)
+        type(clip_t), intent(in) :: clip
+        real(dp) :: qx(4), qy(4), m(6), det, dx, dy, lx, ly, u, v, sa, ia
+        integer :: ix, iy, sx, sy, px0, px1, py0, py1, j
+        logical :: visible
+
+        m = cv%matrix
+        det = m(1)*m(4) - m(2)*m(3)
+        if (det == 0.0_dp) return
+        call transformed_rect(cv, clip_t(.true., x, y, w, h), qx, qy)
+        px0 = floor(max(0.0_dp, min(real(cv%w, dp), minval(qx)))) + 1
+        px1 = ceiling(max(0.0_dp, min(real(cv%w, dp), maxval(qx))))
+        py0 = floor(max(0.0_dp, min(real(cv%h, dp), minval(qy)))) + 1
+        py1 = ceiling(max(0.0_dp, min(real(cv%h, dp), maxval(qy))))
+        do iy = py0, py1
+            do ix = px0, px1
+                dx = real(ix, dp) - 0.5_dp - m(5)
+                dy = real(iy, dp) - 0.5_dp - m(6)
+                lx = (m(4)*dx - m(3)*dy)/(det*cv%scale)
+                ly = (m(1)*dy - m(2)*dx)/(det*cv%scale)
+                u = (lx - x)/w
+                v = (ly - y)/h
+                if (u < 0.0_dp .or. u >= 1.0_dp .or. v < 0.0_dp .or. v >= 1.0_dp) cycle
+                if (clip%on) then
+                    if (lx < clip%x .or. lx >= clip%x + clip%w .or. &
+                        ly < clip%y .or. ly >= clip%y + clip%h) cycle
+                end if
+                visible = .true.
+                do j = 1, cv%n_frame
+                    if (.not. cv%frames(j)%clipped) cycle
+                    if (inside_quad(real(ix, dp) - 0.5_dp, real(iy, dp) - 0.5_dp, &
+                                    cv%frames(j)%clip_x, cv%frames(j)%clip_y)) cycle
+                    visible = .false.
+                    exit
+                end do
+                if (.not. visible) cycle
+                sx = min(nx, max(1, int(u*real(nx, dp)) + 1))
+                sy = min(ny, max(1, int(v*real(ny, dp)) + 1))
+                sa = alpha*real(rgba(4, sx, sy), dp)/255.0_dp
+                if (sa <= 0.0_dp) cycle
+                ia = 1.0_dp - sa
+                cv%px(1, ix, iy) = real(rgba(1, sx, sy), dp)/255.0_dp*sa + cv%px(1, ix, iy)*ia
+                cv%px(2, ix, iy) = real(rgba(2, sx, sy), dp)/255.0_dp*sa + cv%px(2, ix, iy)*ia
+                cv%px(3, ix, iy) = real(rgba(3, sx, sy), dp)/255.0_dp*sa + cv%px(3, ix, iy)*ia
+                cv%px(4, ix, iy) = sa + cv%px(4, ix, iy)*ia
+            end do
+        end do
+    end subroutine blit_affine_image
+
+    logical function inside_quad(x, y, qx, qy) result(inside)
+        real(dp), intent(in) :: x, y, qx(4), qy(4)
+        real(dp) :: orientation, cross
+        integer :: i, j
+
+        inside = .false.
+        orientation = (qx(2) - qx(1))*(qy(4) - qy(1)) - (qy(2) - qy(1))*(qx(4) - qx(1))
+        if (orientation == 0.0_dp) return
+        orientation = sign(1.0_dp, orientation)
+        do i = 1, 4
+            j = mod(i, 4) + 1
+            cross = (qx(j) - qx(i))*(y - qy(i)) - (qy(j) - qy(i))*(x - qx(i))
+            if (orientation*cross < 0.0_dp) return
+        end do
+        inside = .true.
+    end function inside_quad
 
 end module fplotlib_raster

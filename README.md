@@ -262,7 +262,20 @@ there is no hidden last-error state. The `fplotlib` procedures themselves,
 
 `fplotlib_render:renderer_t` is a drawing target, not a file writer; only
 `encoded_renderer_t`, which the SVG, PNG, PDF and EPS backends extend, adds
-`bytes`.
+`bytes`. A `recording_renderer_t` from `fplotlib_scene` records the drawing
+into an owned `frame_t` instead, with no file or format.
+`fplotlib_draw:render_frame(frame, status=...)` captures the current plot that
+way, and `fplotlib_mathtext:math_frame` a formula. A frame's
+`import_frame(child, handle, status)` imports an owned copy;
+`place(handle, matrix, clip, status)` can reuse it at several positions. The
+six matrix entries are `[a,b,c,d,e,f]`, mapping a point to
+`(a*x+c*y+e, b*x+d*y+f)`, and the optional rectangular clip is in the child's
+local coordinates. A `paged_document_t` holds pages of frames, which may have
+different sizes; `fplotlib_document` exports it to bytes in memory
+(`export_document`) or to files (`save_document`), one PDF or an SVG, PNG or
+EPS per page. Glyph runs keep their logical UTF-8 text and the source byte
+range of every glyph, and PDF text carries it as `ActualText`; a formula keeps
+its TeX source, which is not used as `ActualText`.
 
 The pixi tasks below are for developing fplotlib itself, with pinned compilers.
 
@@ -358,6 +371,7 @@ src/           library modules
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib.f90         the plotting API
                fplotlib_status.f90  the status_t of every call that can fail
+               fplotlib_scene.f90   owned frames, pages and a recording renderer
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
 ```

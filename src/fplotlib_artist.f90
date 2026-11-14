@@ -418,7 +418,6 @@ contains
             call append_math(b, x, y, s, f, brush(color), an, bl, ang, status=status)
             if (.not. status%ok()) return
         else
-            run%text = s
             call text_layout(s, f%size, text_face(f%weight, f%slant), 0.0_dp, &
                              0.0_dp, run, w, status=status)
             if (.not. status%ok()) return
@@ -520,7 +519,6 @@ contains
         type(status_t), intent(out) :: status
         call math_layout(s, f%size, run, rules, w, text_face(f%weight, f%slant), status=status)
         if (.not. status%ok()) return
-        run%text = s
         ! The text around the math takes the weight and slant asked for, and
         ! the math is set in its regular font whatever they are; the faces
         ! share their metrics, so the run is aligned by the regular one.

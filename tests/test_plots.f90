@@ -3,8 +3,10 @@ program test_plots
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
     use test_errors, only: error_check
+    use test_frame_backends, only: frame_backend_check
+    use test_frames, only: frames_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, nerror
+    integer :: fig1, nmath, ndelim, nface, nerror, nbackend, nframe
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1576,6 +1578,9 @@ program test_plots
     call face_check(nface)
     ! Recoverable errors below the facade; see test_errors.f90.
     call error_check(nerror)
+    ! Owned frames and pages; see test_frames.f90 and test_frame_backends.f90.
+    call frames_check(nframe)
+    call frame_backend_check(nbackend)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1584,6 +1589,8 @@ program test_plots
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
     if (nerror > 0) error stop "recoverable errors misbehave"
+    if (nframe > 0) error stop "owned frames failed"
+    if (nbackend > 0) error stop "frame backends failed"
 
 contains
 
