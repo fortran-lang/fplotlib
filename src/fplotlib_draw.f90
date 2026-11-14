@@ -25,6 +25,7 @@ module fplotlib_draw
     use fplotlib_dates
     use fplotlib_state
     use fplotlib_artist
+    use fplotlib_scene, only: frame_t, recording_renderer_t
     implicit none
     public
 
@@ -4598,6 +4599,16 @@ contains
 
         call b%close_canvas()
     end subroutine render_figure
+
+    subroutine render_frame(frame, facecolor, transparent, bbox_inches, pad_inches)
+        type(frame_t), intent(out) :: frame
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        type(recording_renderer_t) :: recorder
+        call render_figure(recorder, facecolor, transparent, bbox_inches, pad_inches)
+        call recorder%take(frame)
+    end subroutine render_frame
 
     function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches

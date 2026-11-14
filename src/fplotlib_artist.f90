@@ -406,7 +406,6 @@ contains
         if (math_is(s)) then
             call append_math(b, x, y, s, f, brush(color), an, bl, ang)
         else
-            run%text = s
             call text_layout(s, f%size, text_face(f%weight, f%slant), 0.0_dp, &
                              0.0_dp, run, w)
             call align_run(run, w, f, an, bl)
@@ -499,7 +498,6 @@ contains
         real(dp) :: w, x0, y0, ca, sa, rad, rx(4), ry(4)
 
         call math_layout(s, f%size, run, rules, w, text_face(f%weight, f%slant))
-        run%text = s
         ! The text around the math takes the weight and slant asked for, and
         ! the math is set in its regular font whatever they are; the faces
         ! share their metrics, so the run is aligned by the regular one.

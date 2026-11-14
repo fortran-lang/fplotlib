@@ -16,8 +16,8 @@ module fplotlib_render_checks
     implicit none
     private
     public :: check_open, check_canvas, check_paint, check_path, check_rect
-    public :: check_glyphs, check_image, check_clip, check_font, check_rgb
-    public :: check_finite, contract_error
+    public :: check_glyphs, check_image, check_clip, check_transform, check_font, check_rgb
+    public :: check_frame_size, check_finite, contract_error
 
 contains
 
@@ -42,6 +42,15 @@ contains
         real(dp), intent(in) :: values(:)
         if (.not. all(ieee_is_finite(values))) call contract_error("geometry: nonfinite coordinate")
     end subroutine check_finite
+
+    subroutine check_frame_size(width, height, baseline)
+        real(dp), intent(in) :: width, height
+        real(dp), intent(in), optional :: baseline
+        if (.not. all(ieee_is_finite([width, height])) .or. width < 0.0_dp .or. height < 0.0_dp) then
+            call contract_error("frame: size must be finite and nonnegative")
+        end if
+        if (present(baseline)) call check_finite([baseline])
+    end subroutine check_frame_size
 
     subroutine check_canvas(renderer, width, height, bg_rgb, bg_alpha, x0, y0)
         class(renderer_t), intent(in) :: renderer
@@ -75,6 +84,13 @@ contains
             clip%w < 0.0_dp .or. clip%h < 0.0_dp) &
             call contract_error("clip: expected finite coordinates and nonnegative size")
     end subroutine check_clip
+
+    subroutine check_transform(matrix, clip)
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        if (.not. all(ieee_is_finite(matrix))) call contract_error("frame: nonfinite transform")
+        call check_clip(clip)
+    end subroutine check_transform
 
     subroutine check_paint(paint)
         type(paint_t), intent(in) :: paint
@@ -179,6 +195,17 @@ contains
         if (.not. all(ieee_is_finite(run%x(1:n))) .or. .not. all(ieee_is_finite(run%y(1:n))) .or. &
             .not. all(ieee_is_finite(run%size(1:n))) .or. any(run%size(1:n) < 0.0_dp)) then
             call contract_error("glyph run: invalid position or font size")
+        end if
+        if (allocated(run%font)) then
+            if (size(run%font) < n) call contract_error("glyph run: truncated font array")
+        end if
+        if (allocated(run%first) .neqv. allocated(run%last)) then
+            call contract_error("glyph run: incomplete source mapping")
+        end if
+        if (allocated(run%first)) then
+            if (min(size(run%first), size(run%last)) < n) then
+                call contract_error("glyph run: truncated source mapping")
+            end if
         end if
     end subroutine check_glyphs
 
