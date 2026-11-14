@@ -116,7 +116,7 @@ contains
         call ts_set_page(state, 400.0_dp, 200.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
         call ts_set_font(state, 12.0_dp)
         call ts_begin_par(state, ALIGN_LEFT, 0.0_dp)
-        call ts_text(state, source, FACE_REGULAR, 12.0_dp, color=1193046)
+        call ts_text(state, source, FACE_REGULAR, 12.0_dp, color=[18, 52, 86])
         call ts_finish_frame(state, frame)
         call check(frame%source_text() == source, "plain UTF-8 retains whitespace and literal markup", nfail)
         call check(ts_line_count(state) == 2, "CRLF is one hard line break", nfail)

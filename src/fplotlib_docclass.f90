@@ -44,7 +44,7 @@ module fplotlib_docclass
     type :: style_t
         logical :: bold = .false., italic = .false.
         real(dp) :: size = 10.0_dp
-        integer :: color = 0
+        integer :: color(3) = 0
     end type style_t
 
     ! Where blocks are being set: their margins, alignment, size and
@@ -53,7 +53,7 @@ module fplotlib_docclass
         real(dp) :: left = 0.0_dp, right = 0.0_dp
         integer :: align = ALIGN_JUSTIFY
         real(dp) :: size = 10.0_dp
-        integer :: color = 0
+        integer :: color(3) = 0
         logical :: bold = .false., italic = .false.
         integer :: depth = 0
         ! How deep in bullet lists and in numbered lists, which LaTeX
@@ -69,7 +69,7 @@ module fplotlib_docclass
     end type label_t
 
     ! The document's settings.
-    integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
+    integer, parameter :: LINK_COL(3) = [26, 95, 180], CODE_COL(3) = [80, 80, 80]
 
     type :: layout_context_t
         private
@@ -83,7 +83,7 @@ module fplotlib_docclass
         ! The title block's inlines: nodes of the front matter, 0 for none.
         integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
         integer :: NAUTHOR = 0, AUTHORS(16)
-        integer :: TEXT_COL = 0, PAGE_COL = 16777215
+        integer :: TEXT_COL(3) = 0, PAGE_COL(3) = 255
 
         ! Counters and cross references.
         integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
@@ -192,7 +192,7 @@ contains
         state%DATE = 0
         state%ABSTRACT = 0
         state%TEXT_COL = 0
-        state%PAGE_COL = 16777215
+        state%PAGE_COL = 255
         state%NLAB = 0
         if (.not. allocated(state%label)) allocate (state%label(16))
         state%SEC = 0
@@ -280,9 +280,9 @@ contains
                 state%BOOK = lower(val) == "book"
                 heads = state%BOOK
             case ("color", "fontcolor")
-                state%TEXT_COL = color_of(val, 0)
+                state%TEXT_COL = color_of(val, [0, 0, 0])
             case ("pagecolor", "background")
-                state%PAGE_COL = color_of(val, 16777215)
+                state%PAGE_COL = color_of(val, [255, 255, 255])
             end select
         end do
         if (state%PARINDENT < 0.0_dp) state%PARINDENT = 1.5_dp*state%BASE
@@ -1083,7 +1083,7 @@ contains
     subroutine apply_attrs(state, a, align, size, color, bold, italic, base_size)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: a
-        integer, intent(inout) :: align, color
+        integer, intent(inout) :: align, color(3)
         real(dp), intent(inout) :: size
         logical, intent(inout) :: bold, italic
         real(dp), intent(in) :: base_size
@@ -1652,13 +1652,14 @@ contains
     end function align_of
 
     ! A colour: #rrggbb, #rgb, or one of matplotlib's names.
-    integer function color_of(v, dflt)
+    function color_of(v, dflt) result(rgb)
         character(len=*), intent(in) :: v
-        integer, intent(in) :: dflt
+        integer, intent(in) :: dflt(3)
+        integer :: rgb(3)
         character(len=7) :: h
         character(len=:), allocatable :: t
         integer :: ios, c
-        color_of = dflt
+        rgb = dflt
         t = trim(adjustl(v))
         if (len(t) == 0) return
         if (t(1:1) == "#" .and. len(t) == 4) then
@@ -1671,7 +1672,7 @@ contains
         end if
         if (len(t) /= 7) return
         read (t(2:7), "(Z6)", iostat=ios) c
-        if (ios == 0) color_of = c
+        if (ios == 0) rgb = [ishft(c, -16), iand(ishft(c, -8), 255), iand(c, 255)]
     end function color_of
 
     ! A number, for keys that take one.

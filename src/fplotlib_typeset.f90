@@ -218,12 +218,12 @@ contains
         state%PAGE_COLOR = 16777215
     end subroutine ts_reset
 
-    ! The colours of the text and of the page, as 0xRRGGBB.
+    ! Public colours use integer RGB components, as paint_t and grid rows do.
     subroutine ts_set_colors(state, text, page)
         type(typeset_context_t), intent(inout) :: state
-        integer, intent(in) :: text, page
-        state%TEXT_COLOR = text
-        state%PAGE_COLOR = page
+        integer, intent(in) :: text(3), page(3)
+        state%TEXT_COLOR = packed_color(text)
+        state%PAGE_COLOR = packed_color(page)
     end subroutine ts_set_colors
 
     pure real(dp) function ts_hsize(state)
@@ -295,10 +295,10 @@ contains
     subroutine ts_page_size(state, w, h, color)
         type(typeset_context_t), intent(inout) :: state
         real(dp), intent(out) :: w, h
-        integer, intent(out), optional :: color
+        integer, intent(out), optional :: color(3)
         w = state%PAPER_W
         h = state%PAPER_H
-        if (present(color)) color = state%PAGE_COLOR
+        if (present(color)) color = rgb_color(state%PAGE_COLOR)
     end subroutine ts_page_size
 
     ! The glue \parskip puts between paragraphs from here on.
@@ -369,14 +369,14 @@ contains
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
         real(dp), intent(in) :: size
-        integer, intent(in), optional :: color
+        integer, intent(in), optional :: color(3)
         real(dp), intent(in), optional :: raise
         integer, allocatable :: cps(:), first(:), last(:)
         integer :: n, k, k0, col, offset
         real(dp) :: up
         if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
         col = state%TEXT_COLOR
-        if (present(color)) col = color
+        if (present(color)) col = packed_color(color)
         up = 0.0_dp
         if (present(raise)) up = raise
         call code_points(s, cps, n, first, last)
@@ -407,7 +407,7 @@ contains
         character(len=*), intent(in) :: text
         integer, intent(in) :: face
         real(dp), intent(in) :: size
-        integer, intent(in), optional :: color
+        integer, intent(in), optional :: color(3)
         integer :: i, first, cp, nb, offset
 
         if (len(text) == 0) return
@@ -636,7 +636,7 @@ contains
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
-        integer, intent(in), optional :: color
+        integer, intent(in), optional :: color(3)
         logical, intent(in), optional :: display
         character(len=*), intent(in), optional :: tag
         type(glyphrun_t) :: run
@@ -644,7 +644,7 @@ contains
         real(dp) :: w, h, d
         integer :: col, i0, i1
         col = state%TEXT_COLOR
-        if (present(color)) col = color
+        if (present(color)) col = packed_color(color)
         if (present(display)) then
             if (display) then
                 if (present(tag)) then
@@ -675,14 +675,14 @@ contains
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
         real(dp), intent(in) :: size, sep
-        integer, intent(in), optional :: color
+        integer, intent(in), optional :: color(3)
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         integer, allocatable :: cps(:)
         integer :: n, k, g, gf, prev, pf, col, i0, i1
         real(dp) :: pen, w
         col = state%TEXT_COLOR
-        if (present(color)) col = color
+        if (present(color)) col = packed_color(color)
         call code_points(s, cps, n)
         pen = 0.0_dp
         prev = 0
@@ -2050,10 +2050,10 @@ contains
     subroutine ts_rule(state, width, thick, color)
         type(typeset_context_t), intent(inout) :: state
         real(dp), intent(in) :: width, thick
-        integer, intent(in), optional :: color
+        integer, intent(in), optional :: color(3)
         integer :: col, i0
         col = state%TEXT_COLOR
-        if (present(color)) col = color
+        if (present(color)) col = packed_color(color)
         if (state%IN_PAR) call ts_end_par(state)
         i0 = state%NIT + 1
         call it_rule(state, 0.5_dp*(state%HSIZE - width), 0.0_dp, width, thick, col)
@@ -2617,11 +2617,22 @@ contains
         white = .true.
     end function source_white
 
+    pure integer function packed_color(rgb) result(col)
+        integer, intent(in) :: rgb(3)
+        col = ishft(rgb(1), 16) + ishft(rgb(2), 8) + rgb(3)
+    end function packed_color
+
+    pure function rgb_color(col) result(rgb)
+        integer, intent(in) :: col
+        integer :: rgb(3)
+        rgb = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
+    end function rgb_color
+
     function color_paint(col) result(p)
         integer, intent(in) :: col
         type(paint_t) :: p
         p%filled = .true.
-        p%fill_rgb = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
+        p%fill_rgb = rgb_color(col)
     end function color_paint
 
     ! A string on the page, anchored at its start (0), middle (1) or end
