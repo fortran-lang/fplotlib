@@ -31,8 +31,7 @@ module fplotlib_report
         generic :: include_table => table_text, table_real, table_integer
         procedure :: export => report_export
         procedure :: save => report_save
-        procedure :: page_count => report_page_count
-        procedure :: page_frame => report_page_frame
+        procedure :: layout => report_layout
     end type report_t
 
 contains
@@ -244,7 +243,7 @@ contains
         if (.not. status%ok()) return
     end subroutine add_caption
 
-    subroutine layout(self, status)
+    subroutine ensure_layout(self, status)
         class(report_t), intent(inout) :: self
         type(status_t), intent(out) :: status
         call initialize(self, status=status)
@@ -253,7 +252,7 @@ contains
         call doc_typeset(self%workspace, self%content, self%pages, status=status)
         if (.not. status%ok()) return
         self%dirty = .false.
-    end subroutine layout
+    end subroutine ensure_layout
 
     subroutine report_export(self, format, assets, dpi, status)
         class(report_t), intent(inout) :: self
@@ -261,7 +260,7 @@ contains
         type(document_asset_t), allocatable, intent(out) :: assets(:)
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out) :: status
-        call layout(self, status=status)
+        call ensure_layout(self, status=status)
         if (.not. status%ok()) return
         call export_document(self%pages, format, assets, dpi, status=status)
         if (.not. status%ok()) return
@@ -272,31 +271,19 @@ contains
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out) :: status
-        call layout(self, status=status)
+        call ensure_layout(self, status=status)
         if (.not. status%ok()) return
         call save_document(self%pages, filename, dpi, status=status)
         if (.not. status%ok()) return
     end subroutine report_save
 
-    integer function report_page_count(self, status) result(n)
+    subroutine report_layout(self, document, status)
         class(report_t), intent(inout) :: self
+        type(paged_document_t), intent(out) :: document
         type(status_t), intent(out) :: status
-
-        n = 0
-        call layout(self, status=status)
+        call ensure_layout(self, status=status)
         if (.not. status%ok()) return
-        n = self%pages%page_count()
-    end function report_page_count
-
-    subroutine report_page_frame(self, page, frame, status)
-        class(report_t), intent(inout) :: self
-        integer, intent(in) :: page
-        type(frame_t), intent(out) :: frame
-        type(status_t), intent(out) :: status
-        call layout(self, status=status)
-        if (.not. status%ok()) return
-        call self%pages%page_frame(page, frame, status=status)
-        if (.not. status%ok()) return
-    end subroutine report_page_frame
+        document = self%pages
+    end subroutine report_layout
 
 end module fplotlib_report

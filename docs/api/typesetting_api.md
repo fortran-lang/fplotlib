@@ -44,14 +44,24 @@ report%include_frame(frame, [caption, label, width], status)
 report%include_table(values, [columns, caption, label], status)
 report%export(format, assets, [dpi], status)
 report%save(filename, [dpi], status)
-report%page_count(status) -> n
-report%page_frame(page, frame, status)
+report%layout(document, status)
 ```
 
 `include_frame` and `include_table` snapshot their inputs. Cells are plain text;
-captions are Markdown. `page_count` may perform layout and therefore can fail.
-The similarly named query on a finished `paged_document_t` does not perform
-layout and cannot fail.
+captions are Markdown. `layout` returns an owned `paged_document_t` snapshot,
+not a mutable view of the report's cache. It survives later appends, resets
+and workspace reuse. Query pages on that finished document:
+
+```fortran
+call report%layout(document, status)
+if (.not. status%ok()) return
+n = document%page_count()
+call document%page_frame(1, frame, status)
+```
+
+`document%page_count()` does not perform layout and cannot fail.
+The report's `save` and `export` shortcuts use its cache without making an
+extra document copy.
 
 ## Frontend tree and document-class policy
 

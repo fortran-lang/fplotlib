@@ -4,7 +4,7 @@ module test_report
     use fplotlib, only: dp, markdown, new_report, include_figure, include_table, save, render_report, &
                         figure, plot, title, clf, render_png
     use fplotlib_report, only: report_t
-    use fplotlib_scene, only: frame_t
+    use fplotlib_scene, only: frame_t, paged_document_t
     use fplotlib_document, only: document_asset_t
     implicit none
     private
@@ -90,6 +90,7 @@ contains
         integer, intent(inout) :: nfail
         type(report_t) :: a, b
         type(frame_t) :: page
+        type(paged_document_t) :: document
         type(document_asset_t), allocatable :: before(:), after(:)
         real(dp) :: numbers(1, 2)
         integer :: counts(1, 2), u, n
@@ -116,7 +117,9 @@ contains
         call a%export("svg", after, status=status)
         call require_ok(status)
         call check(before(1)%bytes == after(1)%bytes, "explicit reports do not share the default session", nfail)
-        call a%page_frame(1, page, status=status)
+        call a%layout(document, status)
+        call require_ok(status)
+        call document%page_frame(1, page, status=status)
         call require_ok(status)
         text = page%source_text(status=status)
         call require_ok(status)
@@ -144,10 +147,10 @@ contains
     subroutine failed_append(nfail)
         integer, intent(inout) :: nfail
         type(report_t) :: report
+        type(paged_document_t) :: document
         type(document_asset_t), allocatable :: before(:), after(:)
         type(status_t) :: status
         character, parameter :: NL = achar(10)
-        integer :: pages
         call report%markdown("Retained report.", status)
         call require_ok(status)
         call report%export("svg", before, status=status)
@@ -168,19 +171,20 @@ contains
         call require_ok(status)
         call report%markdown("See @later.", status)
         call require_ok(status)
-        pages = report%page_count(status)
+        call report%layout(document, status)
         call check(status%code == ERROR_LAYOUT, "unresolved forward reference is recoverable", nfail)
         call report%markdown("(later)="//NL//"# Later heading", status)
         call require_ok(status)
-        pages = report%page_count(status)
+        call report%layout(document, status)
         call require_ok(status)
-        call check(pages == 1, "adding a target recovers a report after layout failure", nfail)
+        call check(document%page_count() == 1, "adding a target recovers a report after layout failure", nfail)
     end subroutine failed_append
 
     subroutine table_pages(nfail)
         integer, intent(inout) :: nfail
         type(report_t) :: report
         type(frame_t) :: page
+        type(paged_document_t) :: document, replacement
         character(len=56) :: cells(60, 2)
         character(len=8) :: row
         character(len=:), allocatable :: text, all_text
@@ -197,12 +201,21 @@ contains
         call report%include_table(cells, columns=["Index      ", "Description"], caption="Rows across pages.", status=status)
         call require_ok(status)
         cells = "Overwritten"
-        pages = report%page_count(status=status)
+        call report%layout(document, status)
         call require_ok(status)
+        pages = document%page_count()
         call check(pages > 1, "long table paginates", nfail)
+        call report%clear(status)
+        call require_ok(status)
+        call report%markdown("Replacement report.", status)
+        call require_ok(status)
+        call report%layout(replacement, status)
+        call require_ok(status)
+        call check(replacement%page_count() == 1 .and. document%page_count() == pages, &
+                   "owned document snapshot survives report reset and workspace reuse", nfail)
         all_text = ""
         do p = 1, pages
-            call report%page_frame(p, page, status=status)
+            call document%page_frame(p, page, status=status)
             call require_ok(status)
             text = page%source_text(status=status)
             call require_ok(status)
