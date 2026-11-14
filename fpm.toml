@@ -23,3 +23,8 @@ main = "demo.f90"
 name = "test_plots"
 source-dir = "tests"
 main = "test_plots.f90"
+
+[[test]]
+name = "test_markdown"
+source-dir = "tests"
+main = "test_markdown.f90"

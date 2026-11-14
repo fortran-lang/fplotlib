@@ -113,7 +113,8 @@ contains
         call require_ok(status)
         call ts_reset(b, status=status)
         call require_ok(status)
-        call layout_markdown(nested, "An unrelated document with $$ E=mc^2 $$.", other, status=status)
+        call layout_markdown(nested, "An unrelated document."//achar(10)//achar(10)//"$$ E=mc^2 $$", &
+                             other, status=status)
         call require_ok(status)
         call export_document(actual, "svg", after, status=status)
         call require_ok(status)
@@ -403,8 +404,8 @@ contains
         integer :: handle, first, second
         character(len=:), allocatable :: text
 
-        call layout_markdown(context, "# First {#duplicate}"//achar(10)//achar(10)// &
-                             "# Second {#duplicate}", document, status)
+        call layout_markdown(context, "(duplicate)="//achar(10)//"# First"//achar(10)//achar(10)// &
+                             "(duplicate)="//achar(10)//"# Second", document, status)
         call check(status%code == ERROR_LAYOUT, "duplicate labels propagate through layout", nfail)
         call layout_markdown(context, "A fresh document.", document, status)
         call require_ok(status)

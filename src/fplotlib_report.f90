@@ -19,7 +19,6 @@ module fplotlib_report
         type(layout_context_t) :: workspace
         type(paged_document_t) :: pages
         logical :: initialized = .false., dirty = .true.
-        integer :: figures = 0
     contains
         procedure :: clear => report_clear
         procedure, private :: markdown_text => report_markdown_text
@@ -45,7 +44,6 @@ contains
         if (.not. status%ok()) return
         call self%pages%clear(status=status)
         if (.not. status%ok()) return
-        self%figures = 0
         self%initialized = .true.
         self%dirty = .true.
     end subroutine report_clear
@@ -63,12 +61,14 @@ contains
         class(report_t), intent(inout) :: self
         character(len=*), intent(in) :: text
         type(status_t), intent(out) :: status
+        type(doc_t) :: parsed
         call initialize(self, status=status)
         if (.not. status%ok()) return
         ! Front matter belongs at the beginning, not in every appended block.
         if (self%content%n == 1 .and. self%content%nmeta == 0) then
-            call md_parse(text, self%content, status=status)
+            call md_parse(text, parsed, status=status)
             if (.not. status%ok()) return
+            self%content = parsed
         else
             call md_append(text, self%content, status=status)
             if (.not. status%ok()) return
@@ -100,6 +100,8 @@ contains
         integer :: node, child
         real(dp) :: frame_width, frame_height
         type(status_t), intent(out) :: status
+        call validate_caption(caption, status)
+        if (.not. status%ok()) return
         call initialize(self, status=status)
         if (.not. status%ok()) return
         if (present(width)) then
@@ -114,15 +116,13 @@ contains
             call status%set(ERROR_ARGUMENT, "include_frame: empty graphics")
             return
         end if
-        self%figures = self%figures + 1
         node = doc_add(self%content, 1, DOC_FIGURE, status=status)
         if (.not. status%ok()) return
-        self%content%nodes(node)%number = integer_text(self%figures)
         if (present(label)) self%content%nodes(node)%id = label
         if (present(width)) self%content%nodes(node)%width = width
         child = doc_add_frame(self%content, node, frame, status=status)
         if (.not. status%ok()) return
-        call add_caption(self%content, node, "Figure", caption, status=status)
+        call add_caption(self%content, node, caption, status=status)
         if (.not. status%ok()) return
         self%dirty = .true.
     end subroutine report_include_frame
@@ -197,21 +197,41 @@ contains
         logical, intent(in) :: numeric
         integer :: node
         type(status_t), intent(out) :: status
+        call validate_caption(caption, status)
+        if (.not. status%ok()) return
         call initialize(self, status=status)
         if (.not. status%ok()) return
         node = doc_add_table(self%content, 1, cells, columns, numeric, status=status)
         if (.not. status%ok()) return
-        self%content%nodes(node)%number = integer_text(self%content%ntables)
         if (present(label)) self%content%nodes(node)%id = label
-        call add_caption(self%content, node, "Table", caption, status=status)
+        call add_caption(self%content, node, caption, status=status)
         if (.not. status%ok()) return
         self%dirty = .true.
     end subroutine append_table
 
-    subroutine add_caption(tree, parent, kind, caption, status)
+    subroutine validate_caption(caption, status)
+        character(len=*), intent(in), optional :: caption
+        type(status_t), intent(out) :: status
+        type(doc_t) :: parsed
+        integer :: i
+        if (.not. present(caption)) return
+        call md_parse(caption, parsed, status)
+        if (.not. status%ok()) return
+        if (parsed%nmeta > 0) then
+            call status%set(ERROR_ARGUMENT, "caption: document metadata is not allowed")
+            return
+        end if
+        do i = 1, parsed%n
+            if (parsed%nodes(i)%kind == DOC_PART .or. parsed%nodes(i)%break_before /= 0) then
+                call status%set(ERROR_ARGUMENT, "caption: document parts and page breaks are not allowed")
+                return
+            end if
+        end do
+    end subroutine validate_caption
+
+    subroutine add_caption(tree, parent, caption, status)
         type(doc_t), intent(inout) :: tree
         integer, intent(in) :: parent
-        character(len=*), intent(in) :: kind
         character(len=*), intent(in), optional :: caption
         integer :: node
         type(status_t), intent(out) :: status
@@ -219,7 +239,8 @@ contains
         if (len_trim(caption) == 0) return
         node = doc_add(tree, parent, DOC_DIV, status=status)
         if (.not. status%ok()) return
-        call md_append("**"//kind//" "//tree%nodes(parent)%number//".** "//caption, tree, node, status=status)
+        tree%nodes(node)%text = caption
+        call md_append(caption, tree, node, status=status)
         if (.not. status%ok()) return
     end subroutine add_caption
 
@@ -277,13 +298,5 @@ contains
         call self%pages%page_frame(page, frame, status=status)
         if (.not. status%ok()) return
     end subroutine report_page_frame
-
-    function integer_text(i) result(text)
-        integer, intent(in) :: i
-        character(len=:), allocatable :: text
-        character(len=32) :: buffer
-        write (buffer, "(i0)") i
-        text = trim(buffer)
-    end function integer_text
 
 end module fplotlib_report

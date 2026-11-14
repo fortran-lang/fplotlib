@@ -68,7 +68,7 @@ outputs = ["tests/refs/*"]
 
 [feature.matplotlib.tasks.test-outputs]
 cmd = "fpm test --compiler flang"
-inputs = ["fpm.toml", "src/*.f90", "tests/*.f90", "tests/fingerprints.txt"]
+inputs = ["fpm.toml", "src/*.f90", "tests/*.f90", "tests/fingerprints.txt", "tests/myst_refs.txt"]
 outputs = ["tests/out/*"]
 
 [feature.matplotlib.tasks.compare]

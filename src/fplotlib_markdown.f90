@@ -1,1196 +1,1021 @@
-! fplotlib_markdown -- read a document written in Markdown into a tree.
-!
-! The input is a small Pandoc-inspired Markdown subset, with TeX math: $...$ inline and
-! $$...$$ displayed. md_parse turns it into an fplotlib_doctree tree, which
-! a document class (fplotlib_docclass) then sets.
-! This is not a complete CommonMark, Pandoc or MyST implementation.
-!
-! Blocks: a YAML front matter between --- lines (its keys are the class's:
-! title, author, date, abstract, paper, fontsize, margin, ...); ATX headings
-! (# to ####) and setext ones, with an {#id}; paragraphs; bullet and
-! ordered lists, nested; block quotes; fenced code; thematic breaks;
-! Pandoc's fenced divs (::: {.center size=24pt color=navy}); and, on a
-! line of their own, the TeX commands \newpage, \pagebreak, \clearpage,
-! \vfill, \vspace{...}, \vspace*{...}, \bigskip, \medskip and \smallskip.
-!
-! Inline: *emphasis*, **strong**, `code`, [links](url), Pandoc's bracketed
-! spans ([text]{color=red size=1.2em .bold}), \textbf, \textit and \emph,
-! hard line breaks (a backslash or two spaces at the end of a line, or
-! <br>), "smart" quotes, -- and --- as dashes, ... as an ellipsis, a
-! backslash and a space as a no-break space, \hfill, \quad, \qquad, \TeX
-! and \LaTeX, and cross references: a displayed formula followed by
-! {#eq:name} or containing \label{name} is numbered, and @eq:name,
-! @sec:name, \eqref{name} and \ref{name} refer to a formula or a heading.
+! Native MyST subset: CommonMark structure, math, targets/references, document
+! parts and print templates. No raw TeX document commands or Pandoc attributes.
 module fplotlib_markdown
     use fplotlib_status
-    use fplotlib_style, only: utf8_next
     use fplotlib_doctree
+    use fplotlib_myst_metadata
+    use fplotlib_myst_inline
     implicit none
     private
-
     public :: md_parse, md_append
-
-    character, parameter :: BS = achar(92), NL = achar(10)
-    character(len=2), parameter :: NBSP = achar(194)//achar(160)
-
-    type :: line_t
-        character(len=:), allocatable :: s
-    end type line_t
+    character, parameter :: NL = achar(10), BS = achar(92)
 
 contains
 
-    ! Read text, a Markdown document, into doc.
     subroutine md_parse(text, doc, status)
         character(len=*), intent(in) :: text
         type(doc_t), intent(out) :: doc
-        type(line_t), allocatable :: lines(:)
-        integer :: n, first
-
         type(status_t), intent(out) :: status
-        call split_lines(text, lines, n)
-        call doc_init(doc, status=status)
+        type(md_line_t), allocatable :: lines(:), part_lines(:)
+        integer :: first, last, i, k, nm
+        character(len=:), allocatable :: key
+        call doc_init(doc, status)
         if (.not. status%ok()) return
+        call md_split_lines(text, lines)
         first = 1
-        call front_matter(doc, lines, n, first, status=status)
-        if (.not. status%ok()) return
-        if (first <= n) then
-            call blocks(doc, 1, lines(first:n), n - first + 1, status=status)
-            if (.not. status%ok()) return
+        if (size(lines) > 0) then
+            if (trim(lines(1)%text) == "---") then
+                last = 2
+                do while (last <= size(lines))
+                    if (trim(lines(last)%text) == "---" .or. trim(lines(last)%text) == "...") exit
+                    last = last + 1
+                end do
+                if (last <= size(lines)) then
+                    call read_frontmatter(lines(2:last - 1), doc, status)
+                    if (.not. status%ok()) return
+                    first = last + 1
+                end if
+            end if
         end if
+        nm = doc%nmeta
+        do i = 1, nm
+            if (doc%meta(i)%kind /= META_STRING) cycle
+            key = doc%meta(i)%key
+            if (key == "title" .or. key == "subtitle" .or. key == "date" .or. &
+                key == "authors" .or. starts(key, "authors.")) then
+                if (starts(key, "authors.")) then
+                    if (.not. author_name_key(key)) cycle
+                end if
+                k = doc_add(doc, 0, DOC_INLINES, status)
+                if (.not. status%ok()) return
+                call md_inlines(doc, k, doc%meta(i)%value, status)
+                if (.not. status%ok()) return
+                doc%meta(i)%node = k
+            else if (key == "abstract" .or. starts(key, "parts.")) then
+                k = doc_add(doc, 0, DOC_PART, status)
+                if (.not. status%ok()) return
+                doc%nodes(k)%part = key
+                if (starts(key, "parts.")) doc%nodes(k)%part = key(7:)
+                call md_split_lines(doc%meta(i)%value, part_lines)
+                call blocks(doc, k, part_lines, 1, size(part_lines), 0, status)
+                if (.not. status%ok()) return
+                doc%meta(i)%node = k
+            end if
+        end do
+        call blocks(doc, 1, lines, first, size(lines), 0, status)
     end subroutine md_parse
 
-    ! Append ordinary blocks to an existing tree, e.g. after a supplied plot.
+    ! Appending is transactional: a syntax error cannot leave an old report's
+    ! cached pages paired with partially appended content.
     subroutine md_append(text, doc, parent, status)
         character(len=*), intent(in) :: text
         type(doc_t), intent(inout) :: doc
         integer, intent(in), optional :: parent
-        type(line_t), allocatable :: lines(:)
-        integer :: n, p
         type(status_t), intent(out) :: status
+        type(md_line_t), allocatable :: lines(:)
+        integer :: p, old_n, old_tables, old_first, old_last, old_next, i
         p = 1
         if (present(parent)) p = parent
-        if (p < 1 .or. p > doc%n) then
+        if (p < 1 .or. p > doc%n .or. .not. allocated(doc%nodes)) then
             call status%set(ERROR_ARGUMENT, "md_append: invalid parent")
             return
         end if
-        call split_lines(text, lines, n)
-        if (n > 0) then
-            call blocks(doc, p, lines, n, status=status)
-            if (.not. status%ok()) return
-        end if
+        old_n = doc%n
+        call doc_validate(doc, status)
+        if (.not. status%ok()) return
+        old_tables = doc%ntables
+        old_first = doc%nodes(p)%first
+        old_last = doc%nodes(p)%last
+        old_next = 0
+        if (old_last > 0) old_next = doc%nodes(old_last)%next
+        call md_split_lines(text, lines)
+        call blocks(doc, p, lines, 1, size(lines), 0, status)
+        if (status%ok()) return
+        do i = old_n + 1, doc%n
+            doc%nodes(i) = doc_node_t()
+        end do
+        do i = old_tables + 1, doc%ntables
+            doc%tables(i) = doc_table_t()
+        end do
+        doc%n = old_n
+        doc%ntables = old_tables
+        doc%nodes(p)%first = old_first
+        doc%nodes(p)%last = old_last
+        if (old_last > 0) doc%nodes(old_last)%next = old_next
     end subroutine md_append
 
-    ! The front matter: "key: value" lines between two lines of ---. A key
-    ! may come more than once (author).
-    subroutine front_matter(doc, lines, n, first, status)
-        type(doc_t), intent(inout) :: doc
-        type(line_t), intent(in) :: lines(:)
-        integer, intent(in) :: n
-        integer, intent(inout) :: first
-        integer :: i, j, c, k
-        character(len=:), allocatable :: key, val
+    pure logical function starts(text, prefix)
+        character(len=*), intent(in) :: text, prefix
+        starts = .false.
+        if (len(text) >= len(prefix)) starts = text(1:len(prefix)) == prefix
+    end function starts
 
-        type(status_t), intent(out) :: status
-        if (n < 1) return
-        if (trim(lines(1)%s) /= "---") return
-        do i = 2, n
-            if (trim(lines(i)%s) == "---" .or. trim(lines(i)%s) == "...") exit
-            ! An indented line goes on the value before it.
-            if (len(lines(i)%s) > 0) then
-                if (lines(i)%s(1:1) == " ") cycle
-            end if
-            c = index(lines(i)%s, ":")
-            if (c == 0) cycle
-            key = lower(adjustl(trim(lines(i)%s(1:c - 1))))
-            val = unquote(adjustl(trim(lines(i)%s(c + 1:))))
-            ! A value goes on over the indented lines after it, as does a
-            ! block value (| or >).
-            if (val == "|" .or. val == ">") val = ""
-            do j = i + 1, n
-                if (len(lines(j)%s) == 0) exit
-                if (lines(j)%s(1:1) /= " ") exit
-                if (len(val) > 0) val = val//" "
-                val = val//trim(adjustl(lines(j)%s))
-            end do
-            k = doc_add(doc, 0, DOC_INLINES, status=status)
-            if (.not. status%ok()) return
-            call inlines(doc, k, val, status=status)
-            if (.not. status%ok()) return
-            call doc_add_meta(doc, key, val, k, status=status)
-            if (.not. status%ok()) return
-        end do
-        first = i + 1
-    end subroutine front_matter
+    pure logical function ends(text, suffix)
+        character(len=*), intent(in) :: text, suffix
+        ends = .false.
+        if (len(text) >= len(suffix)) ends = text(len(text) - len(suffix) + 1:) == suffix
+    end function ends
 
-    ! ------------------------------------------------------------------
-    ! Blocks.
-    ! ------------------------------------------------------------------
-
-    ! The blocks of lines L(1:n), as children of parent.
-    recursive subroutine blocks(doc, parent, L, n, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent
-        type(line_t), intent(in) :: L(:)
-        integer, intent(in) :: n
-        integer :: i, j, k, lev, depth, node
-        character(len=:), allocatable :: s, t, para, code
-        logical :: blank_before
-
-        type(status_t), intent(out) :: status
+    function left_trim(text) result(value)
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: value
+        integer :: i
         i = 1
-        blank_before = .true.
-        do while (i <= n)
-            s = L(i)%s
-            t = trim(adjustl(s))
-            if (len(t) == 0) then
-                i = i + 1
-                blank_before = .true.
-                cycle
-            end if
+        do while (i <= len(text))
+            if (text(i:i) /= " " .and. text(i:i) /= achar(9)) exit
+            i = i + 1
+        end do
+        value = text(i:)
+    end function left_trim
 
-            if (is_heading(t, lev)) then
-                call heading(doc, parent, heading_text(t, lev), lev, status=status)
-                if (.not. status%ok()) return
-                i = i + 1
-            else if (is_fence(t)) then
-                j = i + 1
-                do while (j <= n)
-                    if (is_fence(trim(adjustl(L(j)%s)))) exit
-                    j = j + 1
-                end do
-                ! Each line ends with a newline.
-                code = ""
-                do k = i + 1, min(j - 1, n)
-                    code = code//L(k)%s//NL
-                end do
-                node = doc_add_text(doc, parent, DOC_CODE, code, status=status)
-                if (.not. status%ok()) return
-                i = j + 1
-            else if (starts(t, ":::")) then
-                ! A fenced div runs to the matching :::, divs nesting.
-                depth = 0
-                do j = i, n
-                    if (.not. starts(trim(adjustl(L(j)%s)), ":::")) cycle
-                    if (div_opens(trim(adjustl(L(j)%s)))) then
-                        depth = depth + 1
-                    else
-                        depth = depth - 1
-                        if (depth == 0) exit
-                    end if
-                end do
-                node = doc_add(doc, parent, DOC_DIV, status=status)
-                if (.not. status%ok()) return
-                doc%nodes(node)%attr = div_attrs(t)
-                if (j - 1 > i) then
-                    call blocks(doc, node, L(i + 1:j - 1), j - 1 - i, status=status)
-                    if (.not. status%ok()) return
-                end if
-                i = j + 1
-            else if (t(1:1) == ">") then
-                j = i
-                do while (j <= n)
-                    if (len_trim(L(j)%s) == 0) exit
-                    j = j + 1
-                end do
-                call quote_block(doc, parent, L(i:j - 1), j - i, status=status)
-                if (.not. status%ok()) return
-                i = j
-            else if (is_item(s, k, lev)) then
-                call list_block(doc, parent, L, n, i, blank_before, status=status)
-                if (.not. status%ok()) return
-            else if (is_rule(t)) then
-                node = doc_add(doc, parent, DOC_RULE, status=status)
-                if (.not. status%ok()) return
-                i = i + 1
-            else if (is_raw_block(t)) then
-                node = doc_add_text(doc, parent, DOC_RAW, t, status=status)
-                if (.not. status%ok()) return
-                i = i + 1
+    function deindent(text, columns) result(value)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: columns
+        character(len=:), allocatable :: value
+        integer :: i, n
+        i = 1
+        n = 0
+        do while (i <= len(text) .and. n < columns)
+            if (text(i:i) == " ") then
+                n = n + 1
+            else if (text(i:i) == achar(9)) then
+                n = n + 4 - mod(n, 4)
             else
-                ! A paragraph: lines up to a blank one or a block that
-                ! interrupts it; a display may run over several lines.
-                para = ""
-                j = i
-                do while (j <= n)
-                    t = trim(adjustl(L(j)%s))
-                    if (len(t) == 0) exit
-                    if (j > i) then
-                        if (interrupts(L(j)%s)) exit
-                        ! A setext heading underlines one line.
-                        if (j == i + 1 .and. (is_underline(t, "=") .or. &
-                                              is_underline(t, "-"))) exit
-                    end if
-                    if (len(para) > 0) para = para//NL
-                    para = para//L(j)%s
-                    j = j + 1
-                end do
-                if (j == i + 1 .and. j <= n) then
-                    t = trim(adjustl(L(j)%s))
-                    if (len(t) > 0 .and. (is_underline(t, "=") .or. is_underline(t, "-"))) then
-                        if (is_underline(t, "=")) then
-                            call heading(doc, parent, trim(adjustl(para)), 1, status=status)
-                            if (.not. status%ok()) return
-                        else
-                            call heading(doc, parent, trim(adjustl(para)), 2, status=status)
-                            if (.not. status%ok()) return
-                        end if
-                        i = j + 1
-                        blank_before = .false.
-                        cycle
-                    end if
-                end if
-                call paragraph(doc, parent, para, status=status)
-                if (.not. status%ok()) return
-                i = j
+                exit
             end if
-            blank_before = .false.
+            i = i + 1
         end do
-    end subroutine blocks
+        value = repeat(" ", max(0, n - columns))//text(i:)
+    end function deindent
 
-    ! Whether a line starts a block that ends a paragraph before it.
-    logical function interrupts(s)
-        character(len=*), intent(in) :: s
-        character(len=:), allocatable :: t
-        integer :: k, lev
-        t = trim(adjustl(s))
-        interrupts = .false.
-        if (len(t) == 0) return
-        if (is_heading(t, lev) .or. is_fence(t) .or. starts(t, ":::") .or. &
-            t(1:1) == ">" .or. is_rule(t)) then
-            interrupts = .true.
-        else if (is_item(s, k, lev)) then
-            ! Only a bullet, or a list starting at 1, interrupts.
-            interrupts = lev == 0 .or. k == 1
-        else if (is_raw_block(t)) then
-            interrupts = .true.
-        end if
-    end function interrupts
-
-    ! A paragraph; \noindent at its start is kept as a raw inline.
-    subroutine paragraph(doc, parent, text, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent
+    logical function empty(text)
         character(len=*), intent(in) :: text
-        character(len=:), allocatable :: s
-        integer :: node, k
-        type(status_t), intent(out) :: status
-        s = trim(adjustl(text))
-        node = doc_add(doc, parent, DOC_PARA, status=status)
-        if (.not. status%ok()) return
-        if (starts(s, BS//"noindent")) then
-            k = doc_add_text(doc, node, IN_RAW, "noindent", status=status)
-            if (.not. status%ok()) return
-            s = trim(adjustl(s(10:)))
-        end if
-        call inlines(doc, node, s, status=status)
-        if (.not. status%ok()) return
-    end subroutine paragraph
+        empty = len_trim(left_trim(text)) == 0
+    end function empty
 
-    ! A heading: its text and its {#id}.
-    subroutine heading(doc, parent, text, level, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent, level
+    integer function heading_level(text) result(level)
         character(len=*), intent(in) :: text
-        integer :: node, a, b
-        type(status_t), intent(out) :: status
-        node = doc_add(doc, parent, DOC_HEADING, status=status)
-        if (.not. status%ok()) return
-        doc%nodes(node)%num = level
-        a = index(text, "{#")
-        if (a > 0) then
-            b = index(text(a:), "}")
-            if (b > 0) doc%nodes(node)%id = text(a + 2:a + b - 2)
+        integer :: i
+        level = 0
+        do i = 1, len(text)
+            if (text(i:i) /= "#") exit
+            level = level + 1
+        end do
+        if (level > 6) level = 0
+        if (level > 0 .and. level < len(text)) then
+            if (text(level + 1:level + 1) /= " " .and. text(level + 1:level + 1) /= achar(9)) level = 0
         end if
-        call inlines(doc, node, strip_attrs(text), status=status)
-        if (.not. status%ok()) return
-    end subroutine heading
+    end function heading_level
 
-    ! A list: its items, each from its marker to the next marker at the
-    ! same indentation, or the end of the list. A tight list has no blank
-    ! lines between its items; spaced is whether a blank line came before.
-    recursive subroutine list_block(doc, parent, L, n, i, blank_before, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent
-        type(line_t), intent(in) :: L(:)
-        integer, intent(in) :: n
-        integer, intent(inout) :: i
-        logical, intent(in) :: blank_before
-        type(line_t), allocatable :: item(:)
-        integer :: j, k, col, kind, ni, start_num, ind0, m, ln, k2, lev2, list, it
-        logical :: tight, blank
-        character(len=:), allocatable :: s
-
-        type(status_t), intent(out) :: status
-        if (.not. is_item(L(i)%s, start_num, kind)) return
-        ind0 = indent_of(L(i)%s)
-        tight = .true.
-        ! Is the list tight, and where does it end?
-        j = i + 1
-        blank = .false.
-        do while (j <= n)
-            if (len_trim(L(j)%s) == 0) then
-                blank = .true.
-                j = j + 1
-                cycle
-            end if
-            if (indent_of(L(j)%s) <= ind0 + 1 .and. is_item(L(j)%s, k2, lev2)) then
-                if (lev2 /= kind) exit
-                if (blank) tight = .false.
-                blank = .false.
-                j = j + 1
-                cycle
-            end if
-            if (indent_of(L(j)%s) > ind0) then
-                if (blank) then
-                    tight = .false.
-                    blank = .false.
-                end if
-                j = j + 1
-                cycle
-            end if
-            if (blank) exit
-            ! A lazy continuation of the item's paragraph.
-            if (interrupts(L(j)%s)) exit
-            j = j + 1
+    function heading_text(text, level) result(value)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: level
+        character(len=:), allocatable :: value
+        integer :: i
+        value = trim(left_trim(text(level + 1:)))
+        i = len(value)
+        do while (i > 0)
+            if (value(i:i) /= "#") exit
+            i = i - 1
         end do
-        m = j - 1
-        do while (m > i .and. len_trim(L(m)%s) == 0)
-            m = m - 1
-        end do
-
-        list = doc_add(doc, parent, DOC_LIST, status=status)
-        if (.not. status%ok()) return
-        doc%nodes(list)%ordered = kind == 1
-        doc%nodes(list)%num = start_num
-        doc%nodes(list)%tight = tight
-        doc%nodes(list)%spaced = blank_before
-        j = i
-        do while (j <= m)
-            ! Item j: its lines up to the next marker at this level.
-            if (.not. is_item(L(j)%s, k, lev2)) then
-                j = j + 1
-                cycle
-            end if
-            col = content_col(L(j)%s)
-            k = j + 1
-            do while (k <= m)
-                if (len_trim(L(k)%s) > 0) then
-                    if (indent_of(L(k)%s) <= ind0 + 1 .and. is_item(L(k)%s, k2, lev2)) exit
-                end if
-                k = k + 1
-            end do
-            ni = k - j
-            allocate (item(ni))
-            item(1)%s = L(j)%s(col:)
-            do ln = 2, ni
-                s = L(j + ln - 1)%s
-                if (indent_of(s) >= col - 1) then
-                    item(ln)%s = s(min(col, len(s) + 1):)
-                else
-                    item(ln)%s = trim(adjustl(s))
-                end if
-            end do
-            it = doc_add(doc, list, DOC_ITEM, status=status)
-            if (.not. status%ok()) return
-            call blocks(doc, it, item, ni, status=status)
-            if (.not. status%ok()) return
-            deallocate (item)
-            j = k
-        end do
-        i = m + 1
-    end subroutine list_block
-
-    ! A block quote: its lines without their >.
-    recursive subroutine quote_block(doc, parent, L, n, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent
-        type(line_t), intent(in) :: L(:)
-        integer, intent(in) :: n
-        type(line_t), allocatable :: q(:)
-        integer :: k, node
-        character(len=:), allocatable :: s
-        type(status_t), intent(out) :: status
-        allocate (q(n))
-        do k = 1, n
-            s = trim(adjustl(L(k)%s))
-            if (len(s) > 0) then
-                if (s(1:1) == ">") then
-                    s = s(2:)
-                    if (len(s) > 0) then
-                        if (s(1:1) == " ") s = s(2:)
-                    end if
-                end if
-            end if
-            q(k)%s = s
-        end do
-        node = doc_add(doc, parent, DOC_QUOTE, status=status)
-        if (.not. status%ok()) return
-        call blocks(doc, node, q, n, status=status)
-        if (.not. status%ok()) return
-    end subroutine quote_block
-
-    ! The TeX commands a line may hold by itself.
-    logical function is_raw_block(t)
-        character(len=*), intent(in) :: t
-        is_raw_block = .false.
-        if (len(t) < 2) return
-        if (t(1:1) /= BS) return
-        is_raw_block = starts(t, BS//"newpage") .or. starts(t, BS//"pagebreak") .or. &
-                       starts(t, BS//"clearpage") .or. starts(t, BS//"vfill") .or. &
-                       starts(t, BS//"vspace") .or. starts(t, BS//"bigskip") .or. &
-                       starts(t, BS//"medskip") .or. starts(t, BS//"smallskip")
-    end function is_raw_block
-
-    ! The attributes of a fenced div, ::: {.center size=20pt color=red},
-    ! without the braces.
-    function div_attrs(t) result(a)
-        character(len=*), intent(in) :: t
-        character(len=:), allocatable :: a
-        a = trim(adjustl(t(4:)))
-        if (len(a) > 0) then
-            if (a(1:1) == "{") a = a(2:)
+        if (i == 0) then
+            value = ""
+        else if (i < len(value)) then
+            if (value(i:i) == " " .or. value(i:i) == achar(9)) value = trim(value(1:i))
         end if
-        if (len(a) > 0) then
-            if (a(len(a):len(a)) == "}") a = a(1:len(a) - 1)
-        end if
-    end function div_attrs
-
-    ! ------------------------------------------------------------------
-    ! Inlines.
-    ! ------------------------------------------------------------------
-
-    ! The inlines of s, as children of parent. Emphasis opens and closes
-    ! by Pandoc's rules for * and _; the nodes it opens nest.
-    recursive subroutine inlines(doc, parent, s, status)
-        type(doc_t), intent(inout) :: doc
-        integer, intent(in) :: parent
-        character(len=*), intent(in) :: s
-        character(len=:), allocatable :: w, cmd, arg
-        integer :: i, j, k, r, cp, nb, node, a, b
-        integer :: stack(64), ns
-        logical :: em_open, strong_open, lf, rf
-        character :: c, em_c, strong_c, prev, next
-
-        type(status_t), intent(out) :: status
-        w = ""
-        ns = 1
-        stack(1) = parent
-        em_open = .false.
-        strong_open = .false.
-        em_c = " "
-        strong_c = " "
-        i = 1
-        do while (i <= len(s))
-            c = s(i:i)
-            prev = " "
-            if (i > 1) prev = s(i - 1:i - 1)
-            select case (c)
-            case (" ", NL, achar(9))
-                ! Two spaces before the end of a line break it.
-                if (c == " " .and. i + 2 <= len(s)) then
-                    if (s(i:i + 2) == "  "//NL) then
-                        call flush(status=status)
-                        if (.not. status%ok()) return
-                        node = doc_add(doc, stack(ns), IN_BREAK, status=status)
-                        if (.not. status%ok()) return
-                        i = i + 3
-                        cycle
-                    end if
-                end if
-                call flush(status=status)
-                if (.not. status%ok()) return
-                node = doc%nodes(stack(ns))%last
-                if (node > 0) then
-                    if (doc%nodes(node)%kind /= IN_SPACE) then
-                        node = doc_add(doc, stack(ns), IN_SPACE, status=status)
-                        if (.not. status%ok()) return
-                    end if
-                else
-                    node = doc_add(doc, stack(ns), IN_SPACE, status=status)
-                    if (.not. status%ok()) return
-                end if
-                i = i + 1
-            case ("*", "_")
-                r = 1
-                do while (i + r <= len(s))
-                    if (s(i + r:i + r) /= c) exit
-                    r = r + 1
-                end do
-                next = " "
-                if (i + r <= len(s)) next = s(i + r:i + r)
-                lf = .not. white(next) .and. (.not. punct(next) .or. white(prev) .or. punct(prev))
-                rf = .not. white(prev) .and. (.not. punct(prev) .or. white(next) .or. punct(next))
-                if (c == "_") then
-                    ! Inside a word, an underscore is just that.
-                    if (lf .and. rf) then
-                        lf = .false.
-                        rf = .false.
-                    end if
-                end if
-                if (rf .and. ((r == 1 .and. em_open .and. em_c == c) .or. &
-                              (r == 2 .and. strong_open .and. strong_c == c) .or. &
-                              (r >= 3 .and. em_open .and. strong_open))) then
-                    call flush(status=status)
-                    if (.not. status%ok()) return
-                    if (r == 1 .or. r >= 3) then
-                        em_open = .false.
-                        call close(IN_EMPH, status=status)
-                        if (.not. status%ok()) return
-                    end if
-                    if (r >= 2) then
-                        strong_open = .false.
-                        call close(IN_STRONG, status=status)
-                        if (.not. status%ok()) return
-                    end if
-                else if (lf .and. r <= 3) then
-                    call flush(status=status)
-                    if (.not. status%ok()) return
-                    if (r == 1 .or. r == 3) then
-                        em_open = .true.
-                        em_c = c
-                        call open(IN_EMPH, status=status)
-                        if (.not. status%ok()) return
-                    end if
-                    if (r >= 2) then
-                        strong_open = .true.
-                        strong_c = c
-                        call open(IN_STRONG, status=status)
-                        if (.not. status%ok()) return
-                    end if
-                else
-                    w = w//s(i:i + r - 1)
-                end if
-                i = i + r
-            case ("`")
-                r = 1
-                do while (i + r <= len(s))
-                    if (s(i + r:i + r) /= "`") exit
-                    r = r + 1
-                end do
-                j = index(s(i + r:), repeat("`", r))
-                if (j == 0) then
-                    w = w//s(i:i + r - 1)
-                    i = i + r
-                    cycle
-                end if
-                call flush(status=status)
-                if (.not. status%ok()) return
-                node = doc_add_text(doc, stack(ns), IN_CODE, &
-                                    trim(adjustl(s(i + r:i + r + j - 2))), status=status)
-                if (.not. status%ok()) return
-                i = i + r + j - 1 + r
-            case ("$")
-                if (i < len(s)) then
-                    if (s(i + 1:i + 1) == "$") then
-                        ! A display, and the {#id} after it.
-                        j = index(s(i + 2:), "$$")
-                        if (j > 0) then
-                            call flush(status=status)
-                            if (.not. status%ok()) return
-                            node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 2:i + j), status=status)
-                            if (.not. status%ok()) return
-                            doc%nodes(node)%display = .true.
-                            k = i + j + 3
-                            a = k
-                            do while (a <= len(s))
-                                if (s(a:a) /= " ") exit
-                                a = a + 1
-                            end do
-                            if (a + 1 <= len(s)) then
-                                if (s(a:a + 1) == "{#") then
-                                    b = index(s(a:), "}")
-                                    if (b > 0) then
-                                        doc%nodes(node)%id = s(a + 2:a + b - 2)
-                                        doc%nodes(node)%num = 1
-                                        k = a + b
-                                    end if
-                                end if
-                            end if
-                            i = k
-                            ! A line break after it is not a space.
-                            do while (i <= len(s))
-                                if (s(i:i) /= " " .and. s(i:i) /= NL) exit
-                                i = i + 1
-                            end do
-                            cycle
-                        end if
-                    end if
-                end if
-                j = closing_dollar(s, i)
-                if (j > 0) then
-                    call flush(status=status)
-                    if (.not. status%ok()) return
-                    node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 1:j - 1), status=status)
-                    if (.not. status%ok()) return
-                    i = j + 1
-                else
-                    w = w//"$"
-                    i = i + 1
-                end if
-            case (BS)
-                if (i == len(s)) then
-                    w = w//BS
-                    i = i + 1
-                    cycle
-                end if
-                next = s(i + 1:i + 1)
-                if (next == NL) then
-                    call flush(status=status)
-                    if (.not. status%ok()) return
-                    node = doc_add(doc, stack(ns), IN_BREAK, status=status)
-                    if (.not. status%ok()) return
-                    i = i + 2
-                else if (next == " ") then
-                    ! A no-break space, as Pandoc reads it.
-                    w = w//NBSP
-                    i = i + 2
-                else if (is_alpha(next)) then
-                    j = i + 1
-                    do while (j <= len(s))
-                        if (.not. is_alpha(s(j:j))) exit
-                        j = j + 1
-                    end do
-                    cmd = s(i + 1:j - 1)
-                    arg = ""
-                    k = j
-                    if (j <= len(s)) then
-                        if (s(j:j) == "{") then
-                            k = matching(s, j)
-                            arg = s(j + 1:k - 1)
-                            k = k + 1
-                        end if
-                    end if
-                    call command(cmd, arg, k, j, status=status)
-                    if (.not. status%ok()) return
-                    ! A command without an argument may be ended by {}.
-                    if (k == j .and. j + 1 <= len(s)) then
-                        if (s(j:j + 1) == "{}") k = j + 2
-                    end if
-                    i = k
-                else
-                    w = w//next
-                    i = i + 2
-                end if
-            case ("[")
-                j = matching(s, i)
-                if (j > 0 .and. j < len(s)) then
-                    if (s(j + 1:j + 1) == "(") then
-                        k = index(s(j + 1:), ")")
-                        if (k > 0) then
-                            call flush(status=status)
-                            if (.not. status%ok()) return
-                            node = doc_add_text(doc, stack(ns), IN_LINK, s(j + 2:j + k - 1), status=status)
-                            if (.not. status%ok()) return
-                            call inlines(doc, node, s(i + 1:j - 1), status=status)
-                            if (.not. status%ok()) return
-                            i = j + k + 1
-                            cycle
-                        end if
-                    else if (s(j + 1:j + 1) == "{") then
-                        k = matching(s, j + 1)
-                        if (k > 0) then
-                            call flush(status=status)
-                            if (.not. status%ok()) return
-                            node = doc_add(doc, stack(ns), IN_SPAN, status=status)
-                            if (.not. status%ok()) return
-                            doc%nodes(node)%attr = s(j + 2:k - 1)
-                            call inlines(doc, node, s(i + 1:j - 1), status=status)
-                            if (.not. status%ok()) return
-                            i = k + 1
-                            cycle
-                        end if
-                    end if
-                end if
-                w = w//"["
-                i = i + 1
-            case ("<")
-                ! <br>, the HTML line break Markdown allows too.
-                k = 0
-                if (starts(s(i:), "<br>")) k = 4
-                if (starts(s(i:), "<br/>")) k = 5
-                if (starts(s(i:), "<br />")) k = 6
-                if (k > 0) then
-                    call flush(status=status)
-                    if (.not. status%ok()) return
-                    node = doc_add(doc, stack(ns), IN_BREAK, status=status)
-                    if (.not. status%ok()) return
-                    i = i + k
-                    do while (i <= len(s))
-                        if (s(i:i) /= " " .and. s(i:i) /= NL) exit
-                        i = i + 1
-                    end do
-                else
-                    w = w//"<"
-                    i = i + 1
-                end if
-            case ("@")
-                ! A cross reference, @eq:name or @sec:name, after a space.
-                j = i + 1
-                do while (j <= len(s))
-                    if (.not. (is_alnum(s(j:j)) .or. s(j:j) == ":" .or. s(j:j) == "-" &
-                               .or. s(j:j) == "_")) exit
-                    j = j + 1
-                end do
-                do while (j > i + 1)
-                    if (is_alnum(s(j - 1:j - 1))) exit
-                    j = j - 1
-                end do
-                if (j > i + 1 .and. white(prev)) then
-                    call ref(s(i + 1:j - 1), REF_AT, status=status)
-                    if (.not. status%ok()) return
-                    i = j
-                else
-                    w = w//"@"
-                    i = i + 1
-                end if
-            case ("-")
-                if (i + 2 <= len(s)) then
-                    if (s(i:i + 2) == "---") then
-                        w = w//achar(226)//achar(128)//achar(148)
-                        i = i + 3
-                        cycle
-                    end if
-                end if
-                if (i + 1 <= len(s)) then
-                    if (s(i:i + 1) == "--") then
-                        w = w//achar(226)//achar(128)//achar(147)
-                        i = i + 2
-                        cycle
-                    end if
-                end if
-                w = w//"-"
-                i = i + 1
-            case (".")
-                if (i + 2 <= len(s)) then
-                    if (s(i:i + 2) == "...") then
-                        w = w//achar(226)//achar(128)//achar(166)
-                        i = i + 3
-                        cycle
-                    end if
-                end if
-                w = w//"."
-                i = i + 1
-            case ('"')
-                if (opening(prev)) then
-                    w = w//achar(226)//achar(128)//achar(156)
-                else
-                    w = w//achar(226)//achar(128)//achar(157)
-                end if
-                i = i + 1
-            case ("'")
-                if (opening(prev)) then
-                    w = w//achar(226)//achar(128)//achar(152)
-                else
-                    w = w//achar(226)//achar(128)//achar(153)
-                end if
-                i = i + 1
-            case default
-                call utf8_next(s, i, cp, nb)
-                w = w//s(i:i + nb - 1)
-                i = i + nb
-            end select
-        end do
-        call flush(status=status)
-        if (.not. status%ok()) return
-
-    contains
-
-        ! The text so far, a string.
-        subroutine flush(status)
-            integer :: kk
-            type(status_t), intent(out) :: status
-            if (len(w) == 0) return
-            kk = doc_add_text(doc, stack(ns), IN_STR, w, status=status)
-            if (.not. status%ok()) return
-            w = ""
-        end subroutine flush
-
-        subroutine open(kind, status)
-            integer, intent(in) :: kind
-            type(status_t), intent(out) :: status
-            if (ns == size(stack)) return
-            ns = ns + 1
-            stack(ns) = doc_add(doc, stack(ns - 1), kind, status=status)
-            if (.not. status%ok()) return
-        end subroutine open
-
-        ! Close the innermost open node of the kind; those opened inside
-        ! it go on after it.
-        subroutine close(kind, status)
-            integer, intent(in) :: kind
-            integer :: p, q, kinds(64), nk
-            type(status_t), intent(out) :: status
-            p = ns
-            do while (p > 1)
-                if (doc%nodes(stack(p))%kind == kind) exit
-                p = p - 1
-            end do
-            if (p == 1) return
-            nk = 0
-            do q = p + 1, ns
-                nk = nk + 1
-                kinds(nk) = doc%nodes(stack(q))%kind
-            end do
-            ns = p - 1
-            do q = 1, nk
-                call open(kinds(q), status=status)
-                if (.not. status%ok()) return
-            end do
-        end subroutine close
-
-        subroutine ref(name, form, status)
-            character(len=*), intent(in) :: name
-            integer, intent(in) :: form
-            integer :: kk
-            type(status_t), intent(out) :: status
-            call flush(status=status)
-            if (.not. status%ok()) return
-            kk = doc_add(doc, stack(ns), IN_REF, status=status)
-            if (.not. status%ok()) return
-            doc%nodes(kk)%id = name
-            doc%nodes(kk)%num = form
-        end subroutine ref
-
-        ! A command written in the text.
-        recursive subroutine command(cmd, arg, k, j, status)
-            character(len=*), intent(in) :: cmd, arg
-            integer, intent(inout) :: k
-            integer, intent(in) :: j
-            integer :: kk
-            type(status_t), intent(out) :: status
-            select case (cmd)
-            case ("hfill", "quad", "qquad", "TeX", "LaTeX")
-                call flush(status=status)
-                if (.not. status%ok()) return
-                kk = doc_add_text(doc, stack(ns), IN_RAW, cmd, status=status)
-                if (.not. status%ok()) return
-                k = j
-            case ("newline", "linebreak")
-                call flush(status=status)
-                if (.not. status%ok()) return
-                kk = doc_add(doc, stack(ns), IN_BREAK, status=status)
-                if (.not. status%ok()) return
-                k = j
-            case ("textbf", "emph", "textit", "textrm", "textsf", "textup")
-                call flush(status=status)
-                if (.not. status%ok()) return
-                select case (cmd)
-                case ("textbf")
-                    kk = doc_add(doc, stack(ns), IN_STRONG, status=status)
-                    if (.not. status%ok()) return
-                case ("emph")
-                    kk = doc_add(doc, stack(ns), IN_EMPH, status=status)
-                    if (.not. status%ok()) return
-                case default
-                    kk = doc_add(doc, stack(ns), IN_SPAN, status=status)
-                    if (.not. status%ok()) return
-                    if (cmd == "textit") doc%nodes(kk)%attr = ".italic"
-                    if (cmd == "textrm" .or. cmd == "textup") doc%nodes(kk)%attr = ".upright"
-                end select
-                call inlines(doc, kk, arg, status=status)
-                if (.not. status%ok()) return
-            case ("eqref")
-                call ref(arg, REF_EQ, status=status)
-                if (.not. status%ok()) return
-            case ("ref")
-                call ref(arg, REF_PLAIN, status=status)
-                if (.not. status%ok()) return
-            case ("noindent", "par")
-                k = j
-            case default
-                ! Unknown: written as it is, so that it is noticed.
-                w = w//BS//cmd
-                k = j
-            end select
-        end subroutine command
-
-    end subroutine inlines
-
-    ! ------------------------------------------------------------------
-    ! Recognizing lines.
-    ! ------------------------------------------------------------------
-
-    logical function is_heading(t, lev)
-        character(len=*), intent(in) :: t
-        integer, intent(out) :: lev
-        lev = 0
-        do while (lev < len(t))
-            if (t(lev + 1:lev + 1) /= "#") exit
-            lev = lev + 1
-        end do
-        is_heading = lev >= 1 .and. lev <= 6
-        if (is_heading .and. lev < len(t)) is_heading = t(lev + 1:lev + 1) == " "
-    end function is_heading
-
-    function heading_text(t, lev) result(h)
-        character(len=*), intent(in) :: t
-        integer, intent(in) :: lev
-        character(len=:), allocatable :: h
-        h = trim(adjustl(t(lev + 1:)))
-        ! Closing #s go.
-        do while (len(h) > 0)
-            if (h(len(h):len(h)) /= "#") exit
-            h = trim(h(1:len(h) - 1))
-        end do
     end function heading_text
 
-    ! A heading's text without its {#name .class} attributes.
-    function strip_attrs(t) result(h)
-        character(len=*), intent(in) :: t
-        character(len=:), allocatable :: h
-        integer :: a
-        h = t
-        a = index(h, "{#")
-        if (a == 0) a = index(h, "{-}")
-        if (a == 0) a = index(h, "{.")
-        if (a > 0) h = trim(h(1:a - 1))
-    end function strip_attrs
-
-    logical function is_fence(t)
-        character(len=*), intent(in) :: t
-        is_fence = starts(t, "```") .or. starts(t, "~~~")
-    end function is_fence
-
-    logical function div_opens(t)
-        character(len=*), intent(in) :: t
-        div_opens = len_trim(t(4:)) > 0 .and. verify(trim(t), ":") > 0
-    end function div_opens
-
-    logical function is_rule(t)
-        character(len=*), intent(in) :: t
-        character :: c
-        integer :: k, n
-        is_rule = .false.
-        if (len(t) < 3) return
-        c = t(1:1)
-        if (c /= "-" .and. c /= "*" .and. c /= "_") return
+    logical function rule(text)
+        character(len=*), intent(in) :: text
+        integer :: i, n
+        character :: marker
+        rule = .false.
+        if (len(text) == 0) return
+        marker = text(1:1)
+        if (scan(marker, "*-_") == 0) return
         n = 0
-        do k = 1, len(t)
-            if (t(k:k) == c) then
+        do i = 1, len(text)
+            if (text(i:i) == marker) then
                 n = n + 1
-            else if (t(k:k) /= " ") then
+            else if (text(i:i) /= " " .and. text(i:i) /= achar(9)) then
                 return
             end if
         end do
-        is_rule = n >= 3
-    end function is_rule
+        rule = n >= 3
+    end function rule
 
-    logical function is_underline(t, c)
-        character(len=*), intent(in) :: t
-        character, intent(in) :: c
-        is_underline = len(t) >= 2 .and. verify(trim(t), c) == 0
-    end function is_underline
-
-    ! A list item: a bullet (kind 0) or a number (kind 1, num its value),
-    ! then a space.
-    logical function is_item(s, num, kind)
-        character(len=*), intent(in) :: s
-        integer, intent(out) :: num, kind
+    integer function underline(text) result(level)
+        character(len=*), intent(in) :: text
         character(len=:), allocatable :: t
-        integer :: k
-        is_item = .false.
-        num = 1
-        kind = 0
-        t = adjustl(s)
-        t = trim(t)
-        if (len(t) < 2) return
-        if ((t(1:1) == "-" .or. t(1:1) == "*" .or. t(1:1) == "+") .and. t(2:2) == " ") then
-            if (is_rule(t)) return
-            is_item = .true.
+        level = 0
+        t = trim(text)
+        if (len(t) == 0) return
+        if (verify(t, "=") == 0) level = 1
+        if (verify(t, "-") == 0) level = 2
+    end function underline
+
+    subroutine fence(text, marker, count, info)
+        character(len=*), intent(in) :: text
+        character, intent(out) :: marker
+        integer, intent(out) :: count
+        character(len=:), allocatable, intent(out) :: info
+        integer :: i
+        marker = " "
+        count = 0
+        info = ""
+        if (md_indent(text) > 3) return
+        info = left_trim(text)
+        if (len(info) == 0) return
+        marker = info(1:1)
+        if (marker /= "`" .and. marker /= "~" .and. marker /= ":") then
+            marker = " "
+            info = ""
             return
         end if
-        k = 0
-        do while (k < len(t))
-            if (t(k + 1:k + 1) < "0" .or. t(k + 1:k + 1) > "9") exit
-            k = k + 1
+        do i = 1, len(info)
+            if (info(i:i) /= marker) exit
+            count = count + 1
         end do
-        if (k == 0 .or. k > 9 .or. k + 2 > len(t)) return
-        if ((t(k + 1:k + 1) == "." .or. t(k + 1:k + 1) == ")") .and. t(k + 2:k + 2) == " ") then
-            read (t(1:k), *) num
-            kind = 1
-            is_item = .true.
+        info = trim(left_trim(info(count + 1:)))
+        if (count < 3 .or. (marker == "`" .and. index(info, "`") > 0)) then
+            count = 0
+            marker = " "
         end if
-    end function is_item
+    end subroutine fence
 
-    ! Where an item's text starts in its first line.
-    integer function content_col(s)
-        character(len=*), intent(in) :: s
-        integer :: k
-        k = indent_of(s) + 1
-        do while (k <= len(s))
-            if (s(k:k) == " ") exit
-            k = k + 1
+    integer function fence_end(lines, first, last, marker, count) result(j)
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(in) :: first, last, count
+        character, intent(in) :: marker
+        character :: c
+        integer :: n
+        character(len=:), allocatable :: info
+        j = first
+        do while (j <= last)
+            call fence(lines(j)%text, c, n, info)
+            if (c == marker .and. n >= count .and. len(info) == 0) return
+            j = j + 1
         end do
-        do while (k <= len(s))
-            if (s(k:k) /= " ") exit
-            k = k + 1
-        end do
-        content_col = k
-    end function content_col
+    end function fence_end
 
-    pure integer function indent_of(s)
-        character(len=*), intent(in) :: s
-        indent_of = verify(s, " ") - 1
-        if (indent_of < 0) indent_of = len(s)
-    end function indent_of
-
-    ! ------------------------------------------------------------------
-    ! Small things.
-    ! ------------------------------------------------------------------
-
-    subroutine split_lines(text, lines, n)
+    logical function block_break(text, metadata)
         character(len=*), intent(in) :: text
-        type(line_t), allocatable, intent(out) :: lines(:)
-        integer, intent(out) :: n
-        integer :: i, j, k
-        n = 1
-        do i = 1, len(text)
-            if (text(i:i) == NL) n = n + 1
-        end do
-        allocate (lines(n))
+        integer, intent(out), optional :: metadata
+        character(len=:), allocatable :: t
+        integer :: i, n
+        t = trim(left_trim(text))
+        block_break = .false.
+        if (present(metadata)) metadata = 1
+        if (md_indent(text) > 3 .or. len(t) < 3) return
+        if (t(1:1) /= "+") return
+        n = 0
         i = 1
-        k = 0
-        do while (k < n)
-            j = index(text(i:), NL)
-            if (j == 0) then
-                j = len(text) + 1
-            else
-                j = i + j - 1
+        do while (i <= len(t))
+            if (t(i:i) == "+") then
+                n = n + 1
+            else if (t(i:i) /= " " .and. t(i:i) /= achar(9)) then
+                exit
             end if
-            k = k + 1
-            lines(k)%s = text(i:j - 1)
-            ! A carriage return before the newline goes; tabs are spaces.
-            if (len(lines(k)%s) > 0) then
-                if (lines(k)%s(len(lines(k)%s):) == achar(13)) &
-                    lines(k)%s = lines(k)%s(1:len(lines(k)%s) - 1)
-            end if
-            call detab(lines(k)%s)
-            i = j + 1
+            i = i + 1
         end do
-        do while (n > 0)
-            if (len_trim(lines(n)%s) > 0) exit
-            n = n - 1
-        end do
-    end subroutine split_lines
+        if (present(metadata)) metadata = i
+        block_break = n >= 3
+    end function block_break
 
-    subroutine detab(s)
-        character(len=:), allocatable, intent(inout) :: s
-        integer :: k
-        do k = 1, len(s)
-            if (s(k:k) == achar(9)) s(k:k) = " "
-        end do
-    end subroutine detab
+    logical function target_line(text, label)
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable, intent(out) :: label
+        character(len=:), allocatable :: t
+        t = trim(left_trim(text))
+        target_line = .false.
+        label = ""
+        if (md_indent(text) > 3 .or. len(t) < 4) return
+        if (t(1:1) /= "(" .or. .not. ends(t, ")=")) return
+        if (len(t) - 3 > 100) return
+        if (verify(t(2:len(t) - 2), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789|@<>*./_-+:") /= 0) return
+        label = md_label(t(2:len(t) - 2))
+        target_line = len(label) > 0
+    end function target_line
 
-    ! The closing $ of an inline formula opened at i, as Pandoc finds it:
-    ! the opening one has no space after it, the closing one no space
-    ! before it and no digit after it. 0 when there is none.
-    integer function closing_dollar(s, i) result(j)
-        character(len=*), intent(in) :: s
-        integer, intent(in) :: i
-        j = 0
-        if (i >= len(s)) return
-        if (s(i + 1:i + 1) == " " .or. s(i + 1:i + 1) == NL) return
+    logical function item_marker(text, number, kind, content, marker, body)
+        character(len=*), intent(in) :: text
+        integer, intent(out) :: number, kind, content
+        character, intent(out) :: marker
+        character(len=:), allocatable, intent(out), optional :: body
+        character(len=:), allocatable :: t
+        integer :: i, j, spaces, used, ios
+        item_marker = .false.
+        number = 1
+        kind = 0
+        content = 0
+        marker = " "
+        if (present(body)) body = ""
+        if (md_indent(text) > 3) return
+        t = left_trim(text)
+        if (len(t) == 0) return
+        i = 1
+        if (scan(t(i:i), "-+*") > 0) then
+            marker = t(i:i)
+            if (rule(t)) return
+        else
+            do while (i <= len(t))
+                if (verify(t(i:i), "0123456789") /= 0) exit
+                i = i + 1
+            end do
+            if (i == 1 .or. i > 10 .or. i > len(t)) return
+            if (t(i:i) /= "." .and. t(i:i) /= ")") return
+            read (t(1:i - 1), *, iostat=ios) number
+            if (ios /= 0) return
+            kind = 1
+            marker = t(i:i)
+        end if
+        if (i < len(t)) then
+            if (t(i + 1:i + 1) /= " " .and. t(i + 1:i + 1) /= achar(9)) return
+        end if
+        spaces = 0
         j = i + 1
-        do while (j <= len(s))
-            if (s(j:j) == BS) then
-                j = j + 2
+        do while (j <= len(t))
+            if (t(j:j) == " ") then
+                spaces = spaces + 1
+            else if (t(j:j) == achar(9)) then
+                spaces = spaces + 4 - mod(md_indent(text) + i + spaces, 4)
+            else
+                exit
+            end if
+            j = j + 1
+        end do
+        used = spaces
+        if (used > 4 .or. used == 0) used = 1
+        content = md_indent(text) + i + used
+        if (present(body)) body = repeat(" ", max(0, spaces - used))//t(j:)
+        item_marker = .true.
+    end function item_marker
+
+    logical function interrupts(text)
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: t, info, label, body
+        integer :: n, number, kind, col
+        character :: marker, bullet
+        interrupts = .false.
+        if (md_indent(text) > 3) return
+        t = trim(left_trim(text))
+        if (len(t) == 0) return
+        call fence(text, marker, n, info)
+        interrupts = heading_level(t) > 0 .or. rule(t) .or. n >= 3 .or. t(1:1) == ">" .or. &
+                     block_break(text) .or. target_line(text, label) .or. starts(t, "$$") .or. t(1:1) == "%"
+        if (.not. interrupts .and. item_marker(text, number, kind, col, bullet, body)) &
+            interrupts = len_trim(body) > 0 .and. (kind == 0 .or. number == 1)
+    end function interrupts
+
+    recursive subroutine blocks(doc, parent, lines, first, last, depth, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, first, last, depth
+        type(md_line_t), intent(in) :: lines(:)
+        type(status_t), intent(out) :: status
+        type(md_line_t), allocatable :: inner(:)
+        character(len=:), allocatable :: t, info, text, pending, label, part, next
+        character :: marker, bullet
+        integer :: i, j, k, count, lev, node, container, indent, number, kind, col, brk
+        if (depth > 100) then
+            call status%set(ERROR_UNSUPPORTED, "MyST: block nesting exceeds the native profile")
+            return
+        end if
+        pending = ""
+        container = parent
+        i = first
+        do while (i <= last)
+            if (empty(lines(i)%text)) then
+                i = i + 1
                 cycle
             end if
-            if (s(j:j) == "$") then
-                if (s(j - 1:j - 1) /= " " .and. s(j - 1:j - 1) /= NL) then
-                    if (j == len(s)) return
-                    if (s(j + 1:j + 1) < "0" .or. s(j + 1:j + 1) > "9") return
+            indent = md_indent(lines(i)%text)
+            t = trim(left_trim(lines(i)%text))
+            if (indent <= 3 .and. t(1:1) == "%") then
+                i = i + 1
+                cycle
+            end if
+            if (target_line(lines(i)%text, label)) then
+                if (len(pending) > 0) then
+                    call md_error(status, lines(i)%number, "multiple targets before one block are unsupported", .true.)
+                    return
+                end if
+                pending = label
+                i = i + 1
+                cycle
+            end if
+            node = 0
+            if (block_break(lines(i)%text, col)) then
+                call read_block_metadata(t(col:), part, brk, status)
+                if (.not. status%ok()) return
+                if (len(part) > 0 .and. parent /= 1) then
+                    call md_error(status, lines(i)%number, "document parts must be top-level blocks", .true.)
+                    return
+                end if
+                kind = DOC_DIV
+                if (len(part) > 0) kind = DOC_PART
+                node = doc_add(doc, parent, kind, status)
+                if (.not. status%ok()) return
+                doc%nodes(node)%part = part
+                doc%nodes(node)%break_before = brk
+                container = node
+                i = i + 1
+            else
+                call fence(lines(i)%text, marker, count, info)
+                lev = heading_level(t)
+                if (indent >= 4) then
+                    j = i
+                    text = ""
+                    do while (j <= last)
+                        if (.not. empty(lines(j)%text) .and. md_indent(lines(j)%text) < 4) exit
+                        text = text//deindent(lines(j)%text, 4)//NL
+                        j = j + 1
+                    end do
+                    do while (len(text) > 1)
+                        if (text(len(text) - 1:) /= NL//NL) exit
+                        text = text(1:len(text) - 1)
+                    end do
+                    node = doc_add_text(doc, container, DOC_CODE, text, status)
+                    i = j
+                else if (count >= 3) then
+                    j = fence_end(lines, i + 1, last, marker, count)
+                    if (starts(info, "{")) then
+                        if (j > last) then
+                            call md_error(status, lines(i)%number, "unterminated MyST directive")
+                            return
+                        end if
+                        allocate (inner(max(0, j - i - 1)))
+                        do k = 1, size(inner)
+                            inner(k) = lines(i + k)
+                            inner(k)%text = deindent(inner(k)%text, indent)
+                        end do
+                        call directive(doc, container, info, inner, depth + 1, node, status)
+                        deallocate (inner)
+                    else
+                        if (marker == ":") then
+                            call md_error(status, lines(i)%number, "colon fences require a supported {directive}", .true.)
+                            return
+                        end if
+                        text = ""
+                        do k = i + 1, min(j - 1, last)
+                            text = text//deindent(lines(k)%text, indent)//NL
+                        end do
+                        node = doc_add_text(doc, container, DOC_CODE, text, status)
+                        if (.not. status%ok()) return
+                        k = scan(info, " "//achar(9))
+                        if (k > 0) info = info(1:k - 1)
+                        call md_unescape(info, doc%nodes(node)%language, status)
+                        if (.not. status%ok()) return
+                    end if
+                    i = min(j + 1, last + 1)
+                else if (lev > 0) then
+                    node = doc_add(doc, container, DOC_HEADING, status)
+                    if (.not. status%ok()) return
+                    doc%nodes(node)%num = lev
+                    doc%nodes(node)%text = heading_text(t, lev)
+                    call md_inlines(doc, node, heading_text(t, lev), status)
+                    i = i + 1
+                else if (starts(t, "$$")) then
+                    call display_math(doc, container, lines, i, last, node, status)
+                else if (rule(t)) then
+                    node = doc_add(doc, container, DOC_RULE, status)
+                    i = i + 1
+                else if (t(1:1) == ">") then
+                    call quote_block(doc, container, lines, i, last, depth + 1, node, status)
+                else if (item_marker(lines(i)%text, number, kind, col, bullet)) then
+                    call list_block(doc, container, lines, i, last, depth + 1, node, status)
+                else
+                    if (starts(t, "[^") .or. starts(t, BS//"begin{")) then
+                        call md_error(status, lines(i)%number, "this block construct is outside the native MyST profile", .true.)
+                        return
+                    end if
+                    if (starts(t, "[") .and. index(t, "]:") > 0) then
+                        call md_error(status, lines(i)%number, "reference-definition links are outside this profile", .true.)
+                        return
+                    end if
+                    if (i < last) then
+                        if (index(t, "|") > 0 .and. table_delimiter(lines(i + 1)%text, t)) then
+                            call pipe_table(doc, container, lines, i, last, node, status)
+                            if (.not. status%ok()) return
+                            call attach_target(doc, node, pending, status)
+                            if (.not. status%ok()) return
+                            cycle
+                        end if
+                    end if
+                    text = left_trim(lines(i)%text)
+                    j = i + 1
+                    lev = 0
+                    do while (j <= last)
+                        if (empty(lines(j)%text)) exit
+                        next = trim(left_trim(lines(j)%text))
+                        if (md_indent(lines(j)%text) <= 3) then
+                            lev = underline(next)
+                            if (lev > 0) exit
+                        end if
+                        if (interrupts(lines(j)%text)) exit
+                        text = text//NL//left_trim(lines(j)%text)
+                        j = j + 1
+                    end do
+                    kind = DOC_PARA
+                    if (lev > 0) kind = DOC_HEADING
+                    node = doc_add(doc, container, kind, status)
+                    if (.not. status%ok()) return
+                    doc%nodes(node)%num = lev
+                    if (kind == DOC_HEADING) doc%nodes(node)%text = trim(text)
+                    call md_inlines(doc, node, trim(text), status)
+                    i = j
+                    if (lev > 0) i = j + 1
                 end if
             end if
-            j = j + 1
+            if (.not. status%ok()) return
+            if (node > 0) call attach_target(doc, node, pending, status)
+            if (.not. status%ok()) return
         end do
-        j = 0
-    end function closing_dollar
+        if (len(pending) > 0) call status%set(ERROR_ARGUMENT, "MyST: target has no following block: "//pending)
+    end subroutine blocks
 
-    ! The bracket or brace closing the one at i, 0 if none.
-    integer function matching(s, i) result(j)
-        character(len=*), intent(in) :: s
-        integer, intent(in) :: i
-        character :: o, c
-        integer :: depth
-        o = s(i:i)
-        if (o == "[") then
-            c = "]"
-        else if (o == "{") then
-            c = "}"
+    subroutine attach_target(doc, node, pending, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: node
+        character(len=:), allocatable, intent(inout) :: pending
+        type(status_t), intent(out) :: status
+        if (len(pending) == 0) return
+        if (len(doc%nodes(node)%id) > 0 .and. doc%nodes(node)%id /= pending) then
+            call status%set(ERROR_ARGUMENT, "MyST: conflicting labels on one block")
+            return
+        end if
+        doc%nodes(node)%id = pending
+        pending = ""
+    end subroutine attach_target
+
+    recursive subroutine directive(doc, parent, info, lines, depth, node, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, depth
+        character(len=*), intent(in) :: info
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(out) :: node
+        type(status_t), intent(out) :: status
+        character(len=:), allocatable :: name, label, value, key, text, t
+        integer :: close, i, colon, kind, j
+        logical :: enumerated, enum_set
+        node = 0
+        close = index(info, "}")
+        if (close < 3) then
+            call status%set(ERROR_ARGUMENT, "MyST: invalid directive name")
+            return
+        end if
+        name = info(2:close - 1)
+        if (len_trim(info(close + 1:)) /= 0) then
+            call status%set(ERROR_UNSUPPORTED, "MyST: directive arguments/inline options are outside this profile")
+            return
+        end if
+        if (name /= "math" .and. name /= "div") then
+            call status%set(ERROR_UNSUPPORTED, "MyST: unsupported directive: "//name)
+            return
+        end if
+        label = ""
+        enumerated = .true.
+        enum_set = .false.
+        i = 1
+        do while (i <= size(lines))
+            t = trim(left_trim(lines(i)%text))
+            if (len(t) == 0) exit
+            if (t(1:1) /= ":") exit
+            colon = index(t(2:), ":") + 1
+            if (colon <= 1) exit
+            key = t(2:colon - 1)
+            call read_scalar(t(colon + 1:), value, kind, status)
+            if (.not. status%ok()) return
+            select case (key)
+            case ("label", "name")
+                if (len(label) > 0 .or. kind /= META_STRING .or. len_trim(value) == 0) then
+                    call md_error(status, lines(i)%number, "invalid or duplicate directive label")
+                    return
+                end if
+                label = md_label(value)
+            case ("enumerated")
+                if (name /= "math" .or. kind /= META_BOOL .or. enum_set) then
+                    call md_error(status, lines(i)%number, "invalid enumerated option")
+                    return
+                end if
+                enumerated = value == "true"
+                enum_set = .true.
+            case default
+                call md_error(status, lines(i)%number, "unsupported directive option: "//key, .true.)
+                return
+            end select
+            i = i + 1
+        end do
+        if (i <= size(lines)) then
+            if (empty(lines(i)%text)) i = i + 1
+        end if
+        kind = DOC_DIV
+        if (name == "math") kind = DOC_MATH
+        node = doc_add(doc, parent, kind, status)
+        if (.not. status%ok()) return
+        doc%nodes(node)%id = label
+        if (name == "math") then
+            text = ""
+            do j = i, size(lines)
+                if (j > i) text = text//NL
+                text = text//lines(j)%text
+            end do
+            doc%nodes(node)%text = text
+            doc%nodes(node)%display = .true.
+            doc%nodes(node)%enumerated = enumerated
+            doc%nodes(node)%enum_set = enum_set
         else
-            c = ")"
+            call blocks(doc, node, lines, i, size(lines), depth, status)
         end if
-        depth = 0
+    end subroutine directive
+
+    subroutine display_math(doc, parent, lines, i, last, node, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, last
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(inout) :: i
+        integer, intent(out) :: node
+        type(status_t), intent(out) :: status
+        character(len=:), allocatable :: text, t, suffix
+        integer :: close, j
+        t = left_trim(lines(i)%text)
+        t = t(3:)
+        text = ""
         j = i
-        do while (j <= len(s))
-            if (s(j:j) == BS) then
-                j = j + 2
-                cycle
+        do
+            close = index(t, "$$")
+            if (close > 0) exit
+            if (j > i) text = text//NL
+            text = text//t
+            j = j + 1
+            if (j > last) then
+                call md_error(status, lines(i)%number, "unterminated display math")
+                return
             end if
-            if (s(j:j) == o) depth = depth + 1
-            if (s(j:j) == c) then
-                depth = depth - 1
-                if (depth == 0) return
+            t = lines(j)%text
+        end do
+        if (j > i) text = text//NL
+        text = text//t(1:close - 1)
+        suffix = trim(left_trim(t(close + 2:)))
+        if (len(suffix) > 0) then
+            if (suffix(1:1) /= "(" .or. .not. ends(suffix, ")")) then
+                call md_error(status, lines(j)%number, "text after display math; use \\label or a MyST target")
+                return
+            end if
+        end if
+        node = doc_add_text(doc, parent, DOC_MATH, trim(text), status)
+        if (.not. status%ok()) return
+        doc%nodes(node)%display = .true.
+        if (len(suffix) > 0) doc%nodes(node)%id = md_label(suffix(2:len(suffix) - 1))
+        i = j + 1
+    end subroutine display_math
+
+    function quote_content(text) result(value)
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: value, t
+        integer :: start, column, at
+        t = left_trim(text)
+        value = t
+        if (len(t) == 0) return
+        if (t(1:1) /= ">") return
+        start = md_indent(text) + 1
+        column = start
+        at = 2
+        do while (at <= len(t))
+            if (t(at:at) == " ") then
+                column = column + 1
+            else if (t(at:at) == achar(9)) then
+                column = column + 4 - mod(column, 4)
+            else
+                exit
+            end if
+            at = at + 1
+        end do
+        value = repeat(" ", max(0, column - start - 1))//t(at:)
+    end function quote_content
+
+    subroutine continuation_state(text, marker, count, paragraph)
+        character(len=*), intent(in) :: text
+        character, intent(inout) :: marker
+        integer, intent(inout) :: count
+        logical, intent(inout) :: paragraph
+        character(len=:), allocatable :: t, info, body, label
+        character :: c, bullet
+        integer :: n, number, kind, col
+        t = trim(left_trim(text))
+        if (count > 0) then
+            paragraph = .false.
+            if (marker == "$") then
+                if (index(t, "$$") > 0) count = 0
+            else
+                call fence(text, c, n, info)
+                if (c == marker .and. n >= count .and. len(info) == 0) count = 0
+            end if
+            return
+        end if
+        if (md_indent(text) >= 4) return
+        do while (starts(t, ">"))
+            t = quote_content(t)
+        end do
+        if (item_marker(t, number, kind, col, bullet, body)) t = body
+        call fence(t, c, n, info)
+        paragraph = .false.
+        if (n >= 3) then
+            marker = c
+            count = n
+        else if (starts(t, "$$")) then
+            if (index(t(3:), "$$") == 0) then
+                marker = "$"
+                count = 2
+            end if
+        else
+            paragraph = len_trim(t) > 0 .and. heading_level(t) == 0 .and. .not. rule(t) .and. &
+                        .not. block_break(t) .and. .not. target_line(t, label)
+        end if
+    end subroutine continuation_state
+
+    recursive subroutine quote_block(doc, parent, lines, i, last, depth, node, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, last, depth
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(inout) :: i
+        integer, intent(out) :: node
+        type(status_t), intent(out) :: status
+        type(md_line_t), allocatable :: inner(:)
+        character(len=:), allocatable :: t
+        integer :: j, k, count
+        character :: marker
+        logical :: paragraph
+        j = i
+        count = 0
+        marker = " "
+        paragraph = .false.
+        do while (j <= last)
+            if (empty(lines(j)%text)) exit
+            t = left_trim(lines(j)%text)
+            if (t(1:1) /= ">" .and. j > i) then
+                if (.not. paragraph .or. interrupts(lines(j)%text)) exit
+            else
+                call continuation_state(quote_content(lines(j)%text), marker, count, paragraph)
             end if
             j = j + 1
         end do
-        j = 0
-    end function matching
-
-    ! Whether a quote after prev opens: after a space, an opening bracket
-    ! or a hyphen.
-    pure logical function opening(prev)
-        character, intent(in) :: prev
-        opening = white(prev) .or. prev == "(" .or. prev == "[" .or. prev == "{" .or. &
-                  prev == "-"
-    end function opening
-
-    pure logical function white(c)
-        character, intent(in) :: c
-        white = c == " " .or. c == NL .or. c == achar(9)
-    end function white
-
-    pure logical function punct(c)
-        character, intent(in) :: c
-        punct = index("!""#$%&'()*+,-./:;<=>?@[\]^_`{|}~", c) > 0
-    end function punct
-
-    pure logical function is_alpha(c)
-        character, intent(in) :: c
-        is_alpha = (c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z")
-    end function is_alpha
-
-    pure logical function is_alnum(c)
-        character, intent(in) :: c
-        is_alnum = is_alpha(c) .or. (c >= "0" .and. c <= "9")
-    end function is_alnum
-
-    pure logical function starts(s, p)
-        character(len=*), intent(in) :: s, p
-        starts = .false.
-        if (len(s) < len(p)) return
-        starts = s(1:len(p)) == p
-    end function starts
-
-    function lower(s) result(t)
-        character(len=*), intent(in) :: s
-        character(len=len(s)) :: t
-        integer :: k
-        t = s
-        do k = 1, len(s)
-            if (t(k:k) >= "A" .and. t(k:k) <= "Z") t(k:k) = achar(iachar(t(k:k)) + 32)
+        allocate (inner(j - i))
+        do k = i, j - 1
+            inner(k - i + 1) = lines(k)
+            inner(k - i + 1)%text = quote_content(lines(k)%text)
         end do
-    end function lower
+        node = doc_add(doc, parent, DOC_QUOTE, status)
+        if (.not. status%ok()) return
+        call blocks(doc, node, inner, 1, size(inner), depth, status)
+        i = j
+    end subroutine quote_block
 
-    function unquote(s) result(t)
-        character(len=*), intent(in) :: s
+    recursive subroutine list_block(doc, parent, lines, i, last, depth, node, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, last, depth
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(inout) :: i
+        integer, intent(out) :: node
+        type(status_t), intent(out) :: status
+        type(md_line_t), allocatable :: item(:)
+        character(len=:), allocatable :: body
+        integer :: start_num, kind, col, other_num, other_kind, other_col, j, k, it, first, count
+        character :: marker, other_marker, code_marker
+        logical :: matched, blank, tight, paragraph
+        matched = item_marker(lines(i)%text, start_num, kind, col, marker)
+        node = doc_add(doc, parent, DOC_LIST, status)
+        if (.not. status%ok()) return
+        doc%nodes(node)%ordered = kind == 1
+        doc%nodes(node)%num = start_num
+        doc%nodes(node)%spaced = .true.
+        tight = .true.
+        do while (i <= last)
+            matched = item_marker(lines(i)%text, other_num, other_kind, col, other_marker, body)
+            if (.not. matched) exit
+            if (other_kind /= kind .or. other_marker /= marker) exit
+            first = i
+            paragraph = .false.
+            count = 0
+            code_marker = " "
+            call continuation_state(body, code_marker, count, paragraph)
+            j = i + 1
+            blank = .false.
+            do while (j <= last)
+                if (empty(lines(j)%text)) then
+                    if (count == 0) blank = .true.
+                    paragraph = .false.
+                    j = j + 1
+                    cycle
+                end if
+                if (md_indent(lines(j)%text) >= col) then
+                    if (blank) tight = .false.
+                    blank = .false.
+                    call continuation_state(deindent(lines(j)%text, col), code_marker, count, paragraph)
+                    j = j + 1
+                    cycle
+                end if
+                if (item_marker(lines(j)%text, other_num, other_kind, other_col, other_marker)) then
+                    if (blank .and. other_kind == kind .and. other_marker == marker) tight = .false.
+                    exit
+                end if
+                if (blank .or. .not. paragraph .or. interrupts(lines(j)%text)) exit
+                j = j + 1
+            end do
+            k = j - 1
+            do while (k > first)
+                if (.not. empty(lines(k)%text)) exit
+                k = k - 1
+            end do
+            allocate (item(k - first + 1))
+            item(1) = lines(first)
+            item(1)%text = body
+            do it = first + 1, k
+                item(it - first + 1) = lines(it)
+                if (md_indent(lines(it)%text) >= col) then
+                    item(it - first + 1)%text = deindent(lines(it)%text, col)
+                else
+                    item(it - first + 1)%text = left_trim(lines(it)%text)
+                end if
+            end do
+            it = doc_add(doc, node, DOC_ITEM, status)
+            if (.not. status%ok()) return
+            call blocks(doc, it, item, 1, size(item), depth, status)
+            if (.not. status%ok()) return
+            deallocate (item)
+            i = j
+        end do
+        doc%nodes(node)%tight = tight
+    end subroutine list_block
+
+    logical function table_delimiter(text, header)
+        character(len=*), intent(in) :: text
+        character(len=*), intent(in) :: header
+        type(md_line_t), allocatable :: cells(:), columns(:)
         character(len=:), allocatable :: t
-        t = trim(s)
-        if (len(t) >= 2) then
-            if ((t(1:1) == '"' .and. t(len(t):len(t)) == '"') .or. &
-                (t(1:1) == "'" .and. t(len(t):len(t)) == "'")) t = t(2:len(t) - 1)
+        integer :: i
+        table_delimiter = .false.
+        if (md_indent(text) > 3 .or. scan(text, "-") == 0 .or. verify(text, " |-:"//achar(9)) /= 0) return
+        call split_cells(text, cells)
+        call split_cells(header, columns)
+        if (size(cells) /= size(columns)) return
+        do i = 1, size(cells)
+            t = cells(i)%text
+            if (len(t) == 0) return
+            if (t(1:1) == ":") t = t(2:)
+            if (len(t) == 0) return
+            if (t(len(t):) == ":") t = t(1:len(t) - 1)
+            if (len(t) == 0 .or. verify(t, "-") /= 0) return
+        end do
+        table_delimiter = .true.
+    end function table_delimiter
+
+    subroutine split_cells(text, cells)
+        character(len=*), intent(in) :: text
+        type(md_line_t), allocatable, intent(out) :: cells(:)
+        character(len=:), allocatable :: t, value
+        integer :: n, i, k
+        t = trim(left_trim(text))
+        if (len(t) > 0) then
+            if (t(1:1) == "|") t = t(2:)
         end if
-    end function unquote
+        if (len(t) > 0) then
+            if (t(len(t):) == "|") then
+                if (len(t) == 1) then
+                    t = ""
+                else if (t(len(t) - 1:len(t) - 1) /= BS) then
+                    t = t(1:len(t) - 1)
+                end if
+            end if
+        end if
+        n = 1
+        i = 1
+        do while (i <= len(t))
+            if (t(i:i) == "|") then
+                if (i == 1) then
+                    n = n + 1
+                else if (t(i - 1:i - 1) /= BS) then
+                    n = n + 1
+                end if
+            end if
+            i = i + 1
+        end do
+        allocate (cells(n))
+        value = ""
+        k = 1
+        i = 1
+        do while (i <= len(t))
+            if (t(i:i) == "|") then
+                if (i > 1) then
+                    if (t(i - 1:i - 1) == BS) then
+                        value = value(1:len(value) - 1)//"|"
+                        i = i + 1
+                        cycle
+                    end if
+                end if
+                cells(k)%text = trim(left_trim(value))
+                value = ""
+                k = k + 1
+            else
+                value = value//t(i:i)
+            end if
+            i = i + 1
+        end do
+        cells(k)%text = trim(left_trim(value))
+    end subroutine split_cells
+
+    subroutine plain_cell(doc, text, value, status)
+        type(doc_t), intent(inout) :: doc
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable, intent(out) :: value
+        type(status_t), intent(out) :: status
+        integer :: node, child
+        node = doc_add(doc, 0, DOC_INLINES, status)
+        if (.not. status%ok()) return
+        call md_inlines(doc, node, text, status)
+        if (.not. status%ok()) return
+        child = doc%nodes(node)%first
+        value = ""
+        do while (child > 0)
+            select case (doc%nodes(child)%kind)
+            case (IN_STR)
+                value = value//doc%nodes(child)%text
+            case (IN_SPACE)
+                value = value//" "
+            case default
+                call status%set(ERROR_UNSUPPORTED, "MyST: pipe-table cells currently support plain text only")
+                return
+            end select
+            child = doc%nodes(child)%next
+        end do
+    end subroutine plain_cell
+
+    subroutine pipe_table(doc, parent, lines, i, last, node, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, last
+        type(md_line_t), intent(in) :: lines(:)
+        integer, intent(inout) :: i
+        integer, intent(out) :: node
+        type(status_t), intent(out) :: status
+        type(md_line_t), allocatable :: header(:), delimiter(:), row(:), values(:, :)
+        character(len=:), allocatable :: cells(:, :), columns(:), value, t
+        character(len=1), allocatable :: aligns(:)
+        integer :: nc, nr, j, k, r, width
+        call split_cells(lines(i)%text, header)
+        call split_cells(lines(i + 1)%text, delimiter)
+        nc = size(header)
+        if (size(delimiter) /= nc) then
+            call md_error(status, lines(i + 1)%number, "table header and delimiter widths differ")
+            return
+        end if
+        allocate (aligns(nc))
+        aligns = "l"
+        do k = 1, nc
+            t = delimiter(k)%text
+            if (len(t) == 0 .or. index(t, "-") == 0 .or. verify(t, ":-") /= 0) then
+                call md_error(status, lines(i + 1)%number, "invalid table delimiter")
+                return
+            end if
+            if (t(len(t):) == ":") aligns(k) = "r"
+            if (t(1:1) == ":" .and. t(len(t):) == ":") aligns(k) = "c"
+        end do
+        j = i + 2
+        do while (j <= last)
+            if (empty(lines(j)%text) .or. interrupts(lines(j)%text)) exit
+            j = j + 1
+        end do
+        nr = j - i - 2
+        allocate (values(nr + 1, nc))
+        width = 1
+        do k = 1, nc
+            call plain_cell(doc, header(k)%text, value, status)
+            if (.not. status%ok()) return
+            values(1, k)%text = value
+            width = max(width, len(value))
+        end do
+        do r = 1, nr
+            call split_cells(lines(i + 1 + r)%text, row)
+            do k = 1, nc
+                value = ""
+                if (k <= size(row)) then
+                    call plain_cell(doc, row(k)%text, value, status)
+                    if (.not. status%ok()) return
+                end if
+                values(r + 1, k)%text = value
+                width = max(width, len(value))
+            end do
+        end do
+        allocate (character(len=width) :: cells(nr, nc), columns(nc))
+        do k = 1, nc
+            columns(k) = values(1, k)%text
+            do r = 1, nr
+                cells(r, k) = values(r + 1, k)%text
+            end do
+        end do
+        node = doc_add_table(doc, parent, cells, columns, status=status)
+        if (.not. status%ok()) return
+        allocate (doc%tables(doc%nodes(node)%num)%alignment(nc))
+        doc%tables(doc%nodes(node)%num)%alignment = aligns
+        i = j
+    end subroutine pipe_table
 
 end module fplotlib_markdown

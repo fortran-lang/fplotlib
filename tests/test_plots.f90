@@ -1609,17 +1609,21 @@ contains
         character(len=90), parameter :: doc(*) = [character(len=90) :: &
             "---", &
             "title: A Small Document", &
-            "author: fplotlib", &
-            "paper: a6", &
-            "margin: 1.2cm", &
-            "fontsize: 9pt", &
-            "numbersections: true", &
+            "authors: fplotlib", &
+            "exports:", &
+            "  - format: pdf", &
+            "    template: article", &
+            "    paper: a6", &
+            "    margin: 1.2cm", &
+            "    fontsize: 9pt", &
+            "numbering:", &
+            "  headings: true", &
             "---", &
             "", &
             "# Text", &
             "", &
             "A paragraph of *emphasis*, **strong** text, `code`, a [link](https://example.org),", &
-            "an en--dash, an em---dash, ""quotes"" and a formula $e^{i\pi} + 1 = 0$, broken into", &
+            "an en–dash, an em—dash, “quotes” and a formula $e^{i\pi} + 1 = 0$, broken into", &
             "lines and hyphenated as TeX does it.", &
             "", &
             "- a list item", &
@@ -1629,21 +1633,20 @@ contains
             "", &
             "> A quotation, set with margins on both sides.", &
             "", &
-            "# Mathematics {#sec:math}", &
+            "(sec:math)=", &
+            "# Mathematics", &
             "", &
             "A numbered display, @eq:m, referred to by name:", &
             "$$ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad", &
-            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} $$ {#eq:m}", &
+            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} \label{eq:m} $$", &
             "and an aligned one:", &
             "$$ \begin{aligned} (a+b)^2 &= a^2 + 2ab + b^2 \\ &\ge 4ab \end{aligned} $$", &
             "", &
-            "::: {.center color=darkred .large}", &
-            "Centred, coloured and larger.", &
-            ":::", &
+            "A native MyST document, with no raw layout commands.", &
             "", &
-            "\newpage", &
+            "+++ {""new-page"": true}", &
             "", &
-            "Section @sec:math ends on the page before this one."]
+            "@sec:math ends on the page before this one."]
         integer :: k
         call new_report()
         call markdown(doc)

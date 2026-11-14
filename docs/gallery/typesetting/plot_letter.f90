@@ -2,15 +2,13 @@
 ! ========
 !
 ! A formal letter on US letter paper: the sender's address and the date
-! set flush right in a fenced div, the recipient's address, the body in
+! set flush right by the native letter template, the recipient's address, the body in
 ! justified paragraphs separated by space rather than indented, and the
 ! closing.
 !
-! The front matter sets the paper, the size of the type, the space
-! between paragraphs (``parskip``, which also turns the indentation off)
-! and leaves out the page number. ``<br>`` breaks the line there (as does
-! a backslash at the end of a line, in Pandoc's Markdown); ``::: right``
-! sets what it encloses flush right, as LaTeX's ``flushright`` does.
+! MyST document parts supply the sender, recipient, opening and signature.
+! The template owns paper, fonts, alignment and spacing; no TeX document
+! commands are embedded in the Markdown.
 
 program plot_letter
     use fplotlib, only: markdown, save
@@ -18,28 +16,29 @@ program plot_letter
 
     call markdown([character(len=100) :: &
         "---", &
-        "paper: letter", &
-        "fontsize: 11pt", &
-        "margin: 1.1in", &
-        "parskip: 6pt", &
-        "pagenumbers: false", &
+        "exports:", &
+        "  - format: pdf", &
+        "    template: letter", &
+        "numbering: false", &
         "---", &
         "", &
-        "::: right", &
+        "+++ {""part"": ""sender""}", &
         "Augusta Ada King, Countess of Lovelace<br>", &
         "12 St James’s Square<br>", &
         "London", &
         "", &
         "10 July 1843", &
-        ":::", &
+        "+++ {""part"": ""recipient""}", &
         "", &
         "Charles Babbage, Esq.<br>", &
         "1 Dorset Street<br>", &
         "Marylebone, London", &
         "", &
-        "\bigskip", &
+        "+++ {""part"": ""opening""}", &
         "", &
         "Dear Mr. Babbage,", &
+        "", &
+        "+++", &
         "", &
         "I send you with this letter the translation of General Menabrea’s memoir on the", &
         "Analytical Engine, together with the notes I have added to it. They have grown, as", &
@@ -60,11 +59,11 @@ program plot_letter
         "shall be in town until the end of the week, and can call upon you at any hour that", &
         "suits you.", &
         "", &
-        "\bigskip", &
+        "+++ {""part"": ""closing""}", &
         "", &
         "With kind regards, I remain yours most sincerely,", &
         "", &
-        "\vspace{1.2cm}", &
+        "+++ {""part"": ""signature""}", &
         "", &
         "A. A. L."])
     call save("letter.svg")

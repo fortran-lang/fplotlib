@@ -92,9 +92,12 @@ program plot_frame_composition
 
     call md_parse("---"//NL// &
         "title: A Report Directly from Fortran"//NL// &
-        "author: Numerical methods group"//NL// &
-        "paper: letter"//NL// &
-        "margin: 0.7in"//NL// &
+        "authors: Numerical methods group"//NL// &
+        "exports:"//NL// &
+        "  - format: pdf"//NL// &
+        "    template: article"//NL// &
+        "    paper: letter"//NL// &
+        "    margin: 0.7in"//NL// &
         "---"//NL//NL// &
         "# A damped oscillator"//NL//NL// &
         "The computed trajectory below is a vector plot, not a screenshot. " // &
@@ -103,11 +106,9 @@ program plot_frame_composition
     call require_ok(status)
     group = doc_add(tree, 1, DOC_DIV, status=status)
     call require_ok(status)
-    tree%nodes(group)%attr = ".center"
     node = doc_add_frame(tree, group, composed, status=status)
     call require_ok(status)
-    call md_append("\smallskip"//NL//NL// &
-                   "*Figure 1.* Oscillatory motion with exponential damping.", tree, group, status=status)
+    call md_append("*Figure 1.* Oscillatory motion with exponential damping.", tree, group, status=status)
     call require_ok(status)
     call md_append("## Interpretation"//NL//NL// &
         "For $x(t)=e^{-\alpha t}\cos(\omega t)$, the amplitude halves after"//NL// &

@@ -2,9 +2,9 @@
 !
 ! A reader (fplotlib_markdown) builds the tree from the text; a document
 ! class (fplotlib_docclass) sets it, with fplotlib_typeset, as LaTeX's
-! article or book class would. The tree is Pandoc's: blocks hold blocks or
-! inlines, inlines hold inlines, and the front matter is a list of keys
-! and values. A program may build a tree itself and hand it to a class.
+! native print template would. Blocks hold blocks or inlines, inlines hold
+! inlines, and front matter retains typed values. This is a small frontend
+! tree, not the low-level owned graphics IR.
 !
 ! Nodes live in one array; a node's children are a list from first to
 ! last through next. Node 1 is the root, the document's blocks.
@@ -19,10 +19,10 @@ module fplotlib_doctree
     public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame, doc_add_table
     public :: doc_validate
     public :: DOC_ROOT, DOC_PARA, DOC_HEADING, DOC_LIST, DOC_ITEM, DOC_QUOTE, DOC_CODE, &
-              DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES, DOC_FRAME, DOC_FIGURE, DOC_TABLE
-    public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, &
-              IN_SPAN, IN_RAW, IN_REF
-    public :: REF_PLAIN, REF_EQ, REF_AT
+              DOC_RULE, DOC_DIV, DOC_PART, DOC_INLINES, DOC_FRAME, DOC_FIGURE, DOC_TABLE, DOC_MATH
+    public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, IN_REF
+    public :: REF_AUTO, REF_TITLE, REF_EQ
+    public :: META_STRING, META_BOOL, META_NUMBER, META_NULL, META_MAP, META_SEQUENCE
 
     ! Blocks.
     integer, parameter :: DOC_ROOT = 1     ! the document: blocks
@@ -33,12 +33,13 @@ module fplotlib_doctree
     integer, parameter :: DOC_QUOTE = 6    ! a block quote: blocks
     integer, parameter :: DOC_CODE = 7     ! text, its lines as they are
     integer, parameter :: DOC_RULE = 8     ! a thematic break
-    integer, parameter :: DOC_DIV = 9      ! attr; blocks
-    integer, parameter :: DOC_RAW = 10     ! a TeX command, text (\newpage, \vspace{1cm})
+    integer, parameter :: DOC_DIV = 9      ! a grouping of blocks
+    integer, parameter :: DOC_PART = 10    ! a MyST document part, placed by the native template
     integer, parameter :: DOC_INLINES = 11 ! inlines not in a paragraph (a meta value)
     integer, parameter :: DOC_FRAME = 12   ! supplied graphics; num is its handle
     integer, parameter :: DOC_FIGURE = 13  ! frame and optional caption blocks
     integer, parameter :: DOC_TABLE = 14   ! num indexes tables; children are its caption
+    integer, parameter :: DOC_MATH = 15    ! a MyST display equation
     ! Inlines.
     integer, parameter :: IN_STR = 20      ! text without spaces
     integer, parameter :: IN_SPACE = 21    ! a space between words
@@ -48,11 +49,10 @@ module fplotlib_doctree
     integer, parameter :: IN_CODE = 25     ! text, as it is
     integer, parameter :: IN_MATH = 26     ! TeX math, text; display; id
     integer, parameter :: IN_LINK = 27     ! text the target; inlines
-    integer, parameter :: IN_SPAN = 28     ! attr; inlines
-    integer, parameter :: IN_RAW = 29      ! a TeX command, text (hfill, quad, TeX)
-    integer, parameter :: IN_REF = 30      ! a reference to the label id, written as ref
-    ! How a reference is written: \ref, \eqref, or @name.
-    integer, parameter :: REF_PLAIN = 0, REF_EQ = 1, REF_AT = 2
+    integer, parameter :: IN_REF = 28      ! a typed cross-reference to id
+    integer, parameter :: REF_AUTO = 0, REF_TITLE = 1, REF_EQ = 2
+    integer, parameter :: META_STRING = 1, META_BOOL = 2, META_NUMBER = 3, META_NULL = 4
+    integer, parameter :: META_MAP = 5, META_SEQUENCE = 6
 
     type :: doc_node_t
         integer :: kind = 0
@@ -64,13 +64,13 @@ module fplotlib_doctree
         ! Math: displayed.
         logical :: ordered = .false., tight = .false., spaced = .false.
         logical :: display = .false.
-        ! The text of a string, code, math, raw TeX, or a link's target.
+        logical :: enumerated = .true., enum_set = .false.
+        integer :: break_before = 0
+        ! The text of a string, code, math, or a link's target.
         character(len=:), allocatable :: text
         ! A heading's, a display's or a reference's id.
         character(len=:), allocatable :: id
-        ! A div's or a span's attributes, as written: .center size=20pt.
-        character(len=:), allocatable :: attr
-        character(len=:), allocatable :: number
+        character(len=:), allocatable :: part, language
         real(dp) :: width = 0.0_dp
     end type doc_node_t
 
@@ -78,11 +78,13 @@ module fplotlib_doctree
     type :: doc_meta_t
         character(len=:), allocatable :: key, value
         integer :: node = 0
+        integer :: kind = META_STRING
     end type doc_meta_t
 
     type :: doc_table_t
         character(len=:), allocatable :: cells(:, :), headers(:)
         logical :: numeric = .false.
+        character(len=1), allocatable :: alignment(:)
     end type doc_table_t
 
     type :: doc_t
@@ -117,10 +119,9 @@ contains
         type(doc_node_t), allocatable :: tmp(:)
 
         k = 0
-        k = 0
         call check_parent(doc, parent, status)
         if (.not. status%ok()) return
-        if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_TABLE) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
+        if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_MATH) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
             call status%set(ERROR_UNSUPPORTED, "doc_add: unsupported node kind")
             return
         end if
@@ -131,11 +132,12 @@ contains
         end if
         doc%n = doc%n + 1
         k = doc%n
+        doc%nodes(k) = doc_node_t()
         doc%nodes(k)%kind = kind
         doc%nodes(k)%text = ""
         doc%nodes(k)%id = ""
-        doc%nodes(k)%attr = ""
-        doc%nodes(k)%number = ""
+        doc%nodes(k)%part = ""
+        doc%nodes(k)%language = ""
         if (parent > 0) then
             if (doc%nodes(parent)%last > 0) then
                 doc%nodes(doc%nodes(parent)%last)%next = k
@@ -208,6 +210,7 @@ contains
                 tmp(i)%numeric = doc%tables(i)%numeric
                 call move_alloc(doc%tables(i)%cells, tmp(i)%cells)
                 call move_alloc(doc%tables(i)%headers, tmp(i)%headers)
+                call move_alloc(doc%tables(i)%alignment, tmp(i)%alignment)
             end do
             call move_alloc(tmp, doc%tables)
         end if
@@ -279,7 +282,7 @@ contains
                 s = s//" "
             case (IN_MATH)
                 s = s//"$"//doc%nodes(c)%text//"$"
-            case (IN_RAW, IN_REF)
+            case (IN_REF)
             case default
                 s = s//plain_node(doc, c)
             end select
@@ -331,14 +334,22 @@ contains
                 return
             end if
             kind = doc%nodes(i)%kind
-            if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_TABLE) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
+            if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_MATH) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
                 call status%set(ERROR_UNSUPPORTED, "document: unsupported node kind")
                 return
             end if
             if (i == 1) cycle
             if (.not. allocated(doc%nodes(i)%text) .or. .not. allocated(doc%nodes(i)%id) .or. &
-                .not. allocated(doc%nodes(i)%attr) .or. .not. allocated(doc%nodes(i)%number)) then
+                .not. allocated(doc%nodes(i)%part) .or. .not. allocated(doc%nodes(i)%language)) then
                 call status%set(ERROR_ARGUMENT, "document: initialize node strings with doc_add")
+                return
+            end if
+            if (doc%nodes(i)%break_before < 0 .or. doc%nodes(i)%break_before > 2) then
+                call status%set(ERROR_ARGUMENT, "document: invalid page-break policy")
+                return
+            end if
+            if (kind == IN_REF .and. (doc%nodes(i)%num < REF_AUTO .or. doc%nodes(i)%num > REF_EQ)) then
+                call status%set(ERROR_ARGUMENT, "document: invalid reference form")
                 return
             end if
         end do
@@ -393,11 +404,33 @@ contains
                 call status%set(ERROR_ARGUMENT, "document: invalid metadata")
                 return
             end if
+            if (doc%meta(i)%kind < META_STRING .or. doc%meta(i)%kind > META_SEQUENCE) then
+                call status%set(ERROR_ARGUMENT, "document: invalid metadata kind")
+                return
+            end if
         end do
         do i = 1, doc%ntables
             if (.not. allocated(doc%tables(i)%cells)) then
                 call status%set(ERROR_ARGUMENT, "document: missing table cells")
                 return
+            end if
+            if (allocated(doc%tables(i)%headers)) then
+                if (size(doc%tables(i)%headers) /= size(doc%tables(i)%cells, 2)) then
+                    call status%set(ERROR_ARGUMENT, "document: table header width does not match its cells")
+                    return
+                end if
+            end if
+            if (allocated(doc%tables(i)%alignment)) then
+                if (size(doc%tables(i)%alignment) /= size(doc%tables(i)%cells, 2)) then
+                    call status%set(ERROR_ARGUMENT, "document: table alignment width does not match its cells")
+                    return
+                end if
+                do j = 1, size(doc%tables(i)%alignment)
+                    if (scan(doc%tables(i)%alignment(j), "lcr") == 0) then
+                        call status%set(ERROR_ARGUMENT, "document: invalid table alignment")
+                        return
+                    end if
+                end do
             end if
         end do
     end subroutine doc_validate

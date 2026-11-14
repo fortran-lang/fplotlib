@@ -101,9 +101,12 @@ contains
             s = achar(code)
         else if (code < 2048) then
             s = achar(192 + code/64)//achar(128 + iand(code, 63))
-        else
+        else if (code < 65536) then
             s = achar(224 + code/4096)//achar(128 + iand(code/64, 63)) &
                 //achar(128 + iand(code, 63))
+        else
+            s = achar(240 + code/262144)//achar(128 + iand(code/4096, 63)) &
+                //achar(128 + iand(code/64, 63))//achar(128 + iand(code, 63))
         end if
     end function utf8_char
 

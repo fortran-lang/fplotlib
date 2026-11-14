@@ -30,9 +30,12 @@ program plot_hpc_report
     call markdown([character(len=100) :: &
         "---", &
         "title: A Report Directly from Fortran", &
-        "author: Numerical methods group", &
-        "paper: letter", &
-        "margin: 0.7in", &
+        "authors: Numerical methods group", &
+        "exports:", &
+        "  - format: pdf", &
+        "    template: article", &
+        "    paper: letter", &
+        "    margin: 0.7in", &
         "---", &
         "", &
         "# A damped oscillator", &
@@ -56,9 +59,12 @@ program plot_hpc_report
     call markdown([character(len=100) :: &
         "## Interpretation", &
         "", &
-        "Figure @fig:motion shows the oscillations and Table @tab:values their decreasing amplitude.", &
+        "@fig:motion shows the oscillations and @tab:values their decreasing amplitude.", &
         "The envelope halves after", &
-        "$$ t_{1/2}=\frac{\log 2}{\alpha}\approx 4.62. $$", &
+        "```{math}", &
+        ":enumerated: false", &
+        "t_{1/2}=\frac{\log 2}{\alpha}\approx 4.62.", &
+        "```", &
         "The same retained report can be exported repeatedly; saving it does not clear it."])
 
     call save("hpc_report.svg")

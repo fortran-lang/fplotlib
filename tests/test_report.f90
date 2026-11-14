@@ -17,6 +17,7 @@ contains
         nfail = 0
         call procedural_report(nfail)
         call independent_reports(nfail)
+        call failed_append(nfail)
         call table_pages(nfail)
         print "(a,i0)", "immediate reports: failures = ", nfail
     end subroutine report_check
@@ -39,7 +40,7 @@ contains
 
         ! No initialization call: the first document operation starts it.
         call markdown("# Immediate report")
-        call markdown("See Figure @fig:original and Table @tab:original.")
+        call markdown("See @fig:original and @tab:original.")
         call figure(figsize=[2.5_dp, 1.5_dp], dpi=72.0_dp)
         call plot([0.0_dp, 1.0_dp], [1.0_dp, 0.0_dp])
         call title("Original plot")
@@ -96,7 +97,7 @@ contains
         type(status_t) :: status
         character(len=:), allocatable :: source_text_value1
         label = "tab:"//repeat("long_label_", 8)//"end"
-        call a%markdown("See Table @"//label//".", status=status)
+        call a%markdown("See @"//label//".", status=status)
         call require_ok(status)
         numbers(1, :) = [1.25_dp, 2.5_dp]
         call a%include_table(numbers, columns=["Left ", "Right"], label=label, caption="Numeric values.", status=status)
@@ -140,6 +141,42 @@ contains
         call new_report()
     end subroutine independent_reports
 
+    subroutine failed_append(nfail)
+        integer, intent(inout) :: nfail
+        type(report_t) :: report
+        type(document_asset_t), allocatable :: before(:), after(:)
+        type(status_t) :: status
+        character, parameter :: NL = achar(10)
+        integer :: pages
+        call report%markdown("Retained report.", status)
+        call require_ok(status)
+        call report%export("svg", before, status=status)
+        call require_ok(status)
+        call report%markdown("Partial append."//NL//NL//"```{unknown}"//NL//"body"//NL//"```", status)
+        call check(status%code == ERROR_UNSUPPORTED, "failed Markdown append returns an error", nfail)
+        call report%include_table(reshape([1, 2], [1, 2]), caption="+++ {""new-page"":true}"//NL//"caption", status=status)
+        call check(status%code == ERROR_ARGUMENT, "invalid caption is rejected before including a table", nfail)
+        call report%export("svg", after, status=status)
+        call require_ok(status)
+        call check(before(1)%bytes == after(1)%bytes, "failed appends preserve cached report contents", nfail)
+        call report%markdown("Successful append.", status)
+        call require_ok(status)
+        call report%export("svg", after, status=status)
+        call require_ok(status)
+        call check(index(after(1)%bytes, "Successful append.") > 0, "report remains usable after an append error", nfail)
+        call report%clear(status)
+        call require_ok(status)
+        call report%markdown("See @later.", status)
+        call require_ok(status)
+        pages = report%page_count(status)
+        call check(status%code == ERROR_LAYOUT, "unresolved forward reference is recoverable", nfail)
+        call report%markdown("(later)="//NL//"# Later heading", status)
+        call require_ok(status)
+        pages = report%page_count(status)
+        call require_ok(status)
+        call check(pages == 1, "adding a target recovers a report after layout failure", nfail)
+    end subroutine failed_append
+
     subroutine table_pages(nfail)
         integer, intent(inout) :: nfail
         type(report_t) :: report
@@ -153,8 +190,9 @@ contains
             write (cells(i, 1), "(a,i3.3)") "ROW", i
             cells(i, 2) = "A description which can wrap within its column."
         end do
-        call report%markdown([character(len=32) :: "---", "paper: a6", "margin: 12pt", &
-                              "fontsize: 9pt", "pagenumbers: false", "---", "", "Introductory paragraph."], status=status)
+        call report%markdown([character(len=40) :: "---", "exports:", "  - format: pdf", "    template: article", &
+                              "    paper: a6", "    margin: 12pt", "    fontsize: 9pt", &
+                              "    pagenumbers: false", "---", "", "Introductory paragraph."], status=status)
         call require_ok(status)
         call report%include_table(cells, columns=["Index      ", "Description"], caption="Rows across pages.", status=status)
         call require_ok(status)

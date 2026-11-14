@@ -1,0 +1,202 @@
+# myst-parser 1.7.5; options: {"extensions":{"smartquotes":false,"math":{"amsmath":false,"dollarmath":true},"footnotes":false,"deflist":false,"tasklist":false},"mdast":{"handlers":{"bullet_list":{"type":"list"},"ordered_list":{"type":"list"}}}}
+text
+"Plain text.\nA soft break."
+["root",[["p","",[["text","Plain text. A soft break."]]]]]
+emphasis
+"*one* **two** _three_ __four__"
+["root",[["p","",[["em",[["text","one"]]],["text"," "],["strong",[["text","two"]]],["text"," "],["em",[["text","three"]]],["text"," "],["strong",[["text","four"]]]]]]]
+nested emphasis
+"***both*** and **strong *inside*** and *em **inside***"
+["root",[["p","",[["em",[["strong",[["text","both"]]]]],["text"," and "],["strong",[["text","strong "],["em",[["text","inside"]]]]],["text"," and "],["em",[["text","em "],["strong",[["text","inside"]]]]]]]]]
+delimiter runs
+"foo***bar***baz a***b**c* **a*b** c* _a__b_"
+["root",[["p","",[["text","foo"],["em",[["strong",[["text","bar"]]]]],["text","baz a"],["em",[["strong",[["text","b"]]],["text","c"]]],["text"," "],["strong",[["text","a*b"]]],["text"," c* "],["em",[["text","a__b"]]]]]]]
+unmatched delimiters
+"*unclosed and foo_bar_baz and ** and ___"
+["root",[["p","",[["text","*unclosed and foo_bar_baz and ** and ___"]]]]]
+punctuation flanking
+"a_“b”_c and “*yes*” and x**+**y"
+["root",[["p","",[["text","a_“b”_c and “"],["em",[["text","yes"]]],["text","” and x**+**y"]]]]]
+literal typography
+"\"quotes\" -- --- ..."
+["root",[["p","",[["text","\"quotes\" -- --- ..."]]]]]
+escapes
+"\\*literal\\* and \\_x\\_ and \\\\ and \\newpage"
+["root",[["p","",[["text","*literal* and _x_ and \\ and \\newpage"]]]]]
+removed spans
+"[text]{color=red} and [title]{.Huge}"
+["root",[["p","",[["text","[text]{color=red} and [title]{.Huge}"]]]]]
+entities
+"&amp; &lt; &gt; &quot; &apos; &nbsp; &#945; &#x1F600;"
+["root",[["p","",[["text","& < > \" '   α 😀"]]]]]
+numeric entity replacements
+"&#128; &#x82; &#0; &#xD800;"
+["root",[["p","",[["text","� � � �"]]]]]
+code spans
+"`a *b*` and `` a ` b `` and `  padded  `"
+["root",[["p","",[["code","a *b*"],["text"," and "],["code","a ` b"],["text"," and "],["code"," padded "]]]]]
+multiline code
+"``\nword\n``"
+["root",[["p","",[["code","word"]]]]]
+unmatched code
+"``no close ` here"
+["root",[["p","",[["text","``no close ` here"]]]]]
+hard breaks
+"first  \nsecond\\\nthird"
+["root",[["p","",[["text","first"],["break"],["text","second"],["break"],["text","third"]]]]]
+dollar math
+"$x^2$ and $ a $ and $20 then $30."
+["root",[["p","",[["math","x^2"],["text"," and "],["math"," a "],["text"," and "],["math","20 then "],["text","30."]]]]]
+escaped dollars
+"\\$5 and $a\\$b$"
+["root",[["p","",[["text","$5 and "],["math","a\\$b"]]]]]
+math role
+"{math}`x^2 + y^2`"
+["root",[["p","",[["math","x^2 + y^2"]]]]]
+inline links
+"[label *em*](https://example.org/a_(b) \"Title\")"
+["root",[["p","",[["link","https://example.org/a_(b)",[["text","label "],["em",[["text","em"]]]]]]]]]
+nested links
+"[outer [inner](https://example.org)](https://example.com)"
+["root",[["p","",[["text","[outer "],["link","https://example.org",[["text","inner"]]],["text","](https://example.com)"]]]]]
+inline double dollars
+"Text $$ x $$ and $$x$$."
+["root",[["p","",[["text","Text "],["display","",true,false,"x"],["text"," and "],["display","",true,false,"x"],["text","."]]]]]
+autolinks
+"<https://example.org/> and <a@example.org>"
+["root",[["p","",[["link","https://example.org/",[["text","https://example.org/"]]],["text"," and "],["link","mailto:a@example.org",[["text","a@example.org"]]]]]]]
+headings
+"# First\n\n## Second ##\n\nSetext\nheading\n------"
+["root",[["h",1,"",[["text","First"]]],["h",2,"",[["text","Second"]]],["h",2,"",[["text","Setext heading"]]]]]
+literal heading attributes
+"# Title {#old}"
+["root",[["h",1,"",[["text","Title {#old}"]]]]]
+empty headings
+"#\n\n## ###"
+["root",[["h",1,"",[]],["h",2,"",[]]]]
+rules
+"***\n\n- - -\n\n___"
+["root",[["rule",""],["rule",""],["rule",""]]]
+fenced code
+"````fortran\n```inner\nprint *, 1\n```\n````"
+["root",[["pre","","fortran","```inner\nprint *, 1\n```"]]]
+fence kind
+"```text\n~~~\n```"
+["root",[["pre","","text","~~~"]]]
+unclosed code
+"```text\nend at EOF"
+["root",[["pre","","text","end at EOF"]]]
+indented fences
+"  ```fortran\n  x = 1\n    y = 2\n  ```"
+["root",[["pre","","fortran","x = 1\n  y = 2"]]]
+indented code
+"    x = 1\n\n    y = 2\n\nAfter."
+["root",[["pre","","","x = 1\n\ny = 2"],["p","",[["text","After."]]]]]
+blockquotes
+"> First.\n>\n> Second **bold**.\n\nOutside."
+["root",[["quote","",[["p","",[["text","First."]]],["p","",[["text","Second "],["strong",[["text","bold"]]],["text","."]]]]],["p","",[["text","Outside."]]]]]
+lazy quote
+"> First\ncontinuation\n\nOutside."
+["root",[["quote","",[["p","",[["text","First continuation"]]]]],["p","",[["text","Outside."]]]]]
+quote heading boundary
+"> # Heading\nOutside."
+["root",[["quote","",[["h",1,"",[["text","Heading"]]]]],["p","",[["text","Outside."]]]]]
+quote code boundary
+"> ```text\n> code\n> ```\nOutside."
+["root",[["quote","",[["pre","","text","code"]]],["p","",[["text","Outside."]]]]]
+nested quotes
+"> Outer\n>\n> > Inner"
+["root",[["quote","",[["p","",[["text","Outer"]]],["quote","",[["p","",[["text","Inner"]]]]]]]]]
+lists
+"- First\n- Second\n\n1. One\n2. Two"
+["root",[["list",false,1,true,"",[["item",[["p","",[["text","First"]]]]],["item",[["p","",[["text","Second"]]]]]]],["list",true,1,true,"",[["item",[["p","",[["text","One"]]]]],["item",[["p","",[["text","Two"]]]]]]]]]
+loose list
+"- First\n\n- Second"
+["root",[["list",false,1,false,"",[["item",[["p","",[["text","First"]]]]],["item",[["p","",[["text","Second"]]]]]]]]]
+nested lists
+"- Outer\n  - Inner\n  - Other\n- Next"
+["root",[["list",false,1,true,"",[["item",[["p","",[["text","Outer"]]],["list",false,1,true,"",[["item",[["p","",[["text","Inner"]]]]],["item",[["p","",[["text","Other"]]]]]]]]],["item",[["p","",[["text","Next"]]]]]]]]]
+list continuation
+"3) First\n   continuation\n4) Second"
+["root",[["list",true,3,true,"",[["item",[["p","",[["text","First continuation"]]]]],["item",[["p","",[["text","Second"]]]]]]]]]
+list blocks
+"- First\n\n  Another paragraph.\n\n- Last"
+["root",[["list",false,1,false,"",[["item",[["p","",[["text","First"]]],["p","",[["text","Another paragraph."]]]]],["item",[["p","",[["text","Last"]]]]]]]]]
+list heading boundary
+"- # Heading\nOutside."
+["root",[["list",false,1,true,"",[["item",[["h",1,"",[["text","Heading"]]]]]]],["p","",[["text","Outside."]]]]]
+empty list interruption
+"Paragraph\n*"
+["root",[["p","",[["text","Paragraph *"]]]]]
+tab list
+"-\tFirst\n-\tSecond"
+["root",[["list",false,1,true,"",[["item",[["p","",[["text","First"]]]]],["item",[["p","",[["text","Second"]]]]]]]]]
+tab continuation
+"-\tFirst\n\tcontinuation\n-\tSecond"
+["root",[["list",false,1,true,"",[["item",[["p","",[["text","First continuation"]]]]],["item",[["p","",[["text","Second"]]]]]]]]]
+indented list content
+"-     code\n\n- text"
+["root",[["list",false,1,false,"",[["item",[["pre","","","code"]]],["item",[["p","",[["text","text"]]]]]]]]]
+tab quote
+">\tIndented"
+["root",[["quote","",[["p","",[["text","Indented"]]]]]]]
+list after paragraph
+"A paragraph\n2. not a list\n\n1. List"
+["root",[["p","",[["text","A paragraph 2. not a list"]]],["list",true,1,true,"",[["item",[["p","",[["text","List"]]]]]]]]]
+target
+"(Section-A)=\n# Heading\n\nSee @Section-A and [](#Section-A)."
+["root",[["h",1,"section-a",[["text","Heading"]]],["p","",[["text","See "],["ref",0,"section-a",""],["text"," and "],["ref",0,"section-a",""],["text","."]]]]]
+target normalization
+"(A  “Quoted” Equation)=\n# Heading\n\n[](#a%20quoted%20equation)"
+["root",[["p","",[["text","(A “Quoted” Equation)="]]],["h",1,"",[["text","Heading"]]],["p","",[["ref",0,"a quoted equation",""]]]]]
+reference roles
+"{ref}`heading` and {eq}`energy` and {numref}`table`"
+["root",[["p","",[["ref",1,"heading",""],["text"," and "],["ref",2,"energy",""],["text"," and "],["ref",0,"table",""]]]]]
+display math
+"$$\nx^2\n$$"
+["root",[["display","",true,false,"x^2"]]]
+labeled display
+"$$ x^2 $$ (energy)"
+["root",[["display","energy",true,false,"x^2"]]]
+math directive
+"```{math}\n:label: energy\n:enumerated: false\n\nE=mc^2\n```"
+["root",[["display","energy",false,true,"E=mc^2"]]]
+colon math
+":::{math}\n:label: energy\n\nx^2\n:::"
+["root",[["display","energy",true,false,"x^2"]]]
+nested directives
+"::::{div}\nText.\n\n:::{math}\nx^2\n:::\n::::"
+["root",[["p","",[["text","Text."]]],["display","",true,false,"x^2"]]]
+parts
+"+++ {\"part\":\"sender\"}\nAddress\n+++\nBody."
+["root",[["block","","sender",0,[["p","",[["text","Address"]]]]],["p","",[["text","Body."]]]]]
+page breaks
+"First.\n\n+++ {\"new-page\":true}\nSecond."
+["root",[["p","",[["text","First."]]],["block","","",1,[["p","",[["text","Second."]]]]]]]
+spaced block markers
+"First.\n\n+ + + + {\"page-break\":true}\nSecond."
+["root",[["p","",[["text","First."]]],["block","","",2,[["p","",[["text","Second."]]]]]]]
+comments
+"% comment\nFirst.\n\n% another\nSecond."
+["root",[["p","",[["text","First."]]],["p","",[["text","Second."]]]]]
+pipe table
+"| A | B |\n|---|---|\n| 1 | 2 |"
+["root",[["table","",["l","l"],[["A","B"],["1","2"]]]]]
+table alignments
+"A | B | C\n:-- | :-: | --:\nx | y | z"
+["root",[["table","",["l","c","r"],[["A","B","C"],["x","y","z"]]]]]
+table missing cells
+"A | B\n---|---\nx\ny | z | ignored"
+["root",[["table","",["l","l"],[["A","B"],["x",""],["y","z"]]]]]
+table escaped pipes
+"| A\\|B | C |\n|---|---|\n| x\\|y | z |"
+["root",[["table","",["l","l"],[["A|B","C"],["x|y","z"]]]]]
+invalid table delimiter
+"A | B\n-:- | ---\nx | y"
+["root",[["p","",[["text","A | B -:- | --- x | y"]]]]]
+mismatched table header
+"A | B\n---\nx | y"
+["root",[["h",2,"",[["text","A | B"]]],["p","",[["text","x | y"]]]]]
+table escaped slash
+"| A | B |\n|---|---|\n| x | y\\\\|"
+["root",[["table","",["l","l"],[["A","B"],["x","y|"]]]]]
