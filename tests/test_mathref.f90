@@ -14,7 +14,7 @@
 module test_mathref
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t
-    use fplotlib_mathtext, only: math_layout, mrules_t
+    use fplotlib_mathtext, only: math_layout, mrules_t, math_context_t
     use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked, &
                                glyph_adv, FACE_BOLD, FACE_MATH
     implicit none
@@ -27,6 +27,10 @@ module test_mathref
     ! The size XeTeX sets the formulas at.
     real(dp), parameter :: SIZE = 10.0_dp
     integer, parameter :: MAXG = 256
+
+    ! One context reused for every formula: it has to give the same layout
+    ! as the scratch arenas of a call without one.
+    type(math_context_t), save :: shared
 
 contains
 
@@ -79,6 +83,22 @@ contains
             " differ from XeTeX"
     end subroutine math_ref_check
 
+    logical function same_layout(run, rules, w, run2, rules2, w2) result(same)
+        type(glyphrun_t), intent(in) :: run, run2
+        type(mrules_t), intent(in) :: rules, rules2
+        real(dp), intent(in) :: w, w2
+        integer :: n, m
+        n = run%n
+        m = rules%n
+        same = w2 == w .and. run2%n == n .and. rules2%n == m
+        if (.not. same) return
+        if (n > 0) same = all(run2%gid(1:n) == run%gid(1:n)) .and. all(run2%x(1:n) == run%x(1:n)) &
+                          .and. all(run2%y(1:n) == run%y(1:n)) .and. all(run2%size(1:n) == run%size(1:n))
+        if (.not. same) return
+        if (m > 0) same = all(rules2%x(1:m) == rules%x(1:m)) .and. all(rules2%y(1:m) == rules%y(1:m)) &
+                          .and. all(rules2%w(1:m) == rules%w(1:m)) .and. all(rules2%h(1:m) == rules%h(1:m))
+    end function same_layout
+
     subroutine check_one(formula, ng, gcp, gsz, gx, gy, nr, rb, nfail)
         character(len=*), intent(in) :: formula
         integer, intent(in) :: ng, nr
@@ -86,14 +106,19 @@ contains
         real(dp), intent(inout) :: gsz(:), gx(:), gy(:)
         real(dp), intent(in) :: rb(:, :)
         integer, intent(inout) :: nfail
-        type(glyphrun_t) :: run
-        type(mrules_t) :: rules
-        real(dp) :: w, err, worst, r(4)
+        type(glyphrun_t) :: run, run2
+        type(mrules_t) :: rules, rules2
+        real(dp) :: w, w2, err, worst, r(4)
         integer :: k, c, j
         logical :: bad, used(MAXG)
         real(dp) :: ry(MAXG)
 
         call math_layout(formula, SIZE, run, rules, w)
+        call math_layout(formula, SIZE, run2, rules2, w2, context=shared)
+        if (.not. same_layout(run, rules, w, run2, rules2, w2)) then
+            print "(a)", "  "//formula//": a reused context lays it out differently"
+            nfail = nfail + 1
+        end if
         ! A space is glue, which XeTeX does not write as a glyph.
         j = 0
         do k = 1, run%n
