@@ -1,6 +1,7 @@
 module test_frame_backends
     use fplotlib_style, only: dp
-    use fplotlib_render, only: paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE
+    use fplotlib_render, only: paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
+                              FILL_EVENODD, FILL_NONZERO
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_png, only: png_renderer_t
     use fplotlib_glyphs, only: glyph_cmap, FACE_REGULAR
@@ -20,6 +21,7 @@ contains
         call pdf_text_check(nfail)
         call png_frames_check(nfail)
         call png_image_check(nfail)
+        call png_evenodd_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
     end subroutine frame_backend_check
 
@@ -246,6 +248,56 @@ contains
         call expect_pixel(png, 14, 8, [255, 255, 255], "image child clip excludes v=0.5", nfail)
         call expect_pixel(png, 26, 20, [255, 255, 255], "image retains ancestor clip in device space", nfail)
     end subroutine png_image_check
+
+    subroutine png_evenodd_check(nfail)
+        integer, intent(inout) :: nfail
+        type(png_renderer_t) :: png
+        type(paint_t) :: paint
+        type(clip_t) :: clip
+        integer, parameter :: verbs(10) = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE, &
+                                          VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE]
+        real(dp) :: x(8), y(8)
+        call png%set_dpi(72.0_dp)
+        paint%filled = .true.
+        x = [1.0_dp, 11.0_dp, 11.0_dp, 1.0_dp, 4.0_dp, 8.0_dp, 8.0_dp, 4.0_dp]
+        y = [1.0_dp, 1.0_dp, 11.0_dp, 11.0_dp, 4.0_dp, 4.0_dp, 8.0_dp, 8.0_dp]
+        call png%open_canvas(12.0_dp, 12.0_dp)
+        paint%fill_rule = FILL_NONZERO
+        call png%draw_path(x, y, verbs, 10, paint)
+        call expect(png%cv%px(4, 6, 6) == 1.0_dp, "nonzero keeps same-winding nested contours filled", nfail)
+        call png%close_canvas()
+
+        call png%open_canvas(12.0_dp, 12.0_dp)
+        paint%fill_rule = FILL_EVENODD
+        clip = clip_t(.true., 2.0_dp, 2.0_dp, 8.0_dp, 8.0_dp)
+        call png%begin_frame([-1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 12.0_dp, 0.0_dp], clip)
+        call png%draw_path(x, y, verbs, 10, paint)
+        call png%end_frame()
+        call expect(png%cv%px(4, 6, 6) == 0.0_dp .and. png%cv%px(4, 3, 3) == 1.0_dp, &
+                    "even-odd keeps holes under reflected frame transforms", nfail)
+        call expect(png%cv%px(4, 2, 6) == 0.0_dp, "even-odd respects frame clipping", nfail)
+        call png%close_canvas()
+
+        ! Averaged winding followed by modulo would incorrectly paint these edges.
+        x(1:4) = [1.25_dp, 10.75_dp, 10.75_dp, 1.25_dp]
+        y(1:4) = [1.125_dp, 1.375_dp, 10.875_dp, 10.625_dp]
+        x(5:8) = x(1:4)
+        y(5:8) = y(1:4)
+        call png%open_canvas(12.0_dp, 12.0_dp)
+        call png%draw_path(x, y, verbs, 10, paint)
+        call expect(maxval(abs(png%cv%px(4, :, :))) < 1.0e-12_dp, &
+                    "coincident even-odd contours cancel at fractional pixel edges", nfail)
+        call png%close_canvas()
+
+        ! A self-crossing bow tie, only 1/64 pixel high, still has analytic area.
+        x(1:4) = [1.0_dp, 3.0_dp, 1.0_dp, 3.0_dp]
+        y(1:4) = [1.0_dp, 1.015625_dp, 1.015625_dp, 1.0_dp]
+        call png%open_canvas(12.0_dp, 12.0_dp)
+        call png%draw_path(x(1:4), y(1:4), verbs(1:5), 5, paint)
+        call expect(abs(sum(png%cv%px(4, :, :)) - 0.015625_dp) < 1.0e-12_dp, &
+                    "even-odd integrates self-crossings without losing thin shapes", nfail)
+        call png%close_canvas()
+    end subroutine png_evenodd_check
 
     subroutine expect(ok, label, nfail)
         logical, intent(in) :: ok

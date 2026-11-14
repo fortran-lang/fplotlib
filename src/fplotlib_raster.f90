@@ -16,8 +16,9 @@
 ! crossing lists. Overlapping contours of the same orientation saturate to one
 ! and opposite orientations cancel, which is exactly nonzero.
 !
-! The catch, and the reason to say so plainly: this gives nonzero only. Even-odd
-! would need a different accumulator. fplotlib never asks for it.
+! Even-odd paths are split at vertices and edge crossings into disjoint
+! trapezoids, which use the same analytic area accumulator. Applying parity
+! to an already averaged winding number would give incorrect edge coverage.
 !
 ! Everything else reduces to filling a path. Strokes are converted to outlines
 ! and filled; text is glyph outlines and filled; markers are a shape filled once
@@ -27,7 +28,7 @@ module fplotlib_raster
     use fplotlib_style, only: dp
     use fplotlib_render, only: paint_t, clip_t, VERB_MOVE, VERB_LINE, VERB_CUBIC, &
                             VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
-                            JOIN_MITER, JOIN_ROUND, JOIN_BEVEL, MAX_DASH
+                            JOIN_MITER, JOIN_ROUND, JOIN_BEVEL, MAX_DASH, FILL_NONZERO, FILL_EVENODD
     implicit none
     private
 
@@ -483,22 +484,27 @@ contains
     ! renderer closes it implicitly.
     ! ------------------------------------------------------------------
 
-    subroutine fill_path_buf(cv, pb, rgb, alpha, clip)
+    subroutine fill_path_buf(cv, pb, rgb, alpha, clip, fill_rule)
         type(canvas_t), intent(inout) :: cv
         type(pathbuf_t), intent(in) :: pb
         integer, intent(in) :: rgb(3)
         real(dp), intent(in) :: alpha
         type(clip_t), intent(in) :: clip
+        integer, intent(in), optional :: fill_rule
         integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b
         real(dp) :: run, cov, sa, sr, sg, sb_, ia
-        logical :: scoped
+        logical :: scoped, evenodd
 
         if (pb%ns == 0 .or. alpha <= 0.0_dp) return
 
-        scoped = .not. cv%identity_transform .or. cv%n_clip > 0
+        evenodd = .false.
+        if (present(fill_rule)) evenodd = fill_rule == FILL_EVENODD
+        scoped = .not. cv%identity_transform .or. cv%n_clip > 0 .or. evenodd
         y0b = cv%h + 1
         y1b = 0
-        if (scoped) then
+        if (evenodd) then
+            call acc_evenodd_path(cv, pb, clip, y0b, y1b)
+        else if (scoped) then
             call acc_transformed_path(cv, pb, clip, y0b, y1b)
         else
             do s = 1, pb%ns
@@ -548,33 +554,170 @@ contains
         type(clip_t), intent(in) :: clip
         integer, intent(inout) :: y0b, y1b
         real(dp), allocatable :: x(:), y(:)
-        real(dp) :: qx(4), qy(4)
-        integer :: s, b, n, i, j
+        integer :: s, n, i
 
         if (cv%matrix(1)*cv%matrix(4) - cv%matrix(2)*cv%matrix(3) == 0.0_dp) return
-        if (clip%on) call transformed_rect(cv, clip, qx, qy)
         do s = 1, pb%ns
-            b = pb%sub_beg(s)
-            n = pb%sub_len(s)
-            if (n < 3) cycle
-            allocate (x(n), y(n))
-            x = cv%matrix(1)*pb%x(b:b + n - 1) + cv%matrix(3)*pb%y(b:b + n - 1) + cv%matrix(5)
-            y = cv%matrix(2)*pb%x(b:b + n - 1) + cv%matrix(4)*pb%y(b:b + n - 1) + cv%matrix(6)
-            do j = 1, cv%n_frame
-                if (.not. cv%frames(j)%clipped) cycle
-                call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
-                if (n < 3) exit
-            end do
-            if (clip%on) call clip_polygon(x, y, n, qx, qy)
+            call transformed_contour(cv, pb, s, clip, x, y, n)
             if (n >= 3) then
                 do i = 1, n - 1
                     call acc_edge(cv, x(i), y(i), x(i + 1), y(i + 1), y0b, y1b)
                 end do
                 call acc_edge(cv, x(n), y(n), x(1), y(1), y0b, y1b)
             end if
-            deallocate (x, y)
         end do
     end subroutine acc_transformed_path
+
+    subroutine transformed_contour(cv, pb, s, clip, x, y, n)
+        type(canvas_t), intent(in) :: cv
+        type(pathbuf_t), intent(in) :: pb
+        integer, intent(in) :: s
+        type(clip_t), intent(in) :: clip
+        real(dp), allocatable, intent(out) :: x(:), y(:)
+        integer, intent(out) :: n
+        real(dp) :: qx(4), qy(4)
+        integer :: b, j
+        b = pb%sub_beg(s)
+        n = pb%sub_len(s)
+        if (n < 3) return
+        allocate (x(n), y(n))
+        x = cv%matrix(1)*pb%x(b:b + n - 1) + cv%matrix(3)*pb%y(b:b + n - 1) + cv%matrix(5)
+        y = cv%matrix(2)*pb%x(b:b + n - 1) + cv%matrix(4)*pb%y(b:b + n - 1) + cv%matrix(6)
+        do j = 1, cv%n_frame
+            if (.not. cv%frames(j)%clipped) cycle
+            call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
+            if (n < 3) return
+        end do
+        if (clip%on) then
+            call transformed_rect(cv, clip, qx, qy)
+            call clip_polygon(x, y, n, qx, qy)
+        end if
+    end subroutine transformed_contour
+
+    subroutine acc_evenodd_path(cv, pb, clip, y0b, y1b)
+        type(canvas_t), intent(inout) :: cv
+        type(pathbuf_t), intent(in) :: pb
+        type(clip_t), intent(in) :: clip
+        integer, intent(inout) :: y0b, y1b
+        type(pathbuf_t) :: flat
+        real(dp), allocatable :: x(:), y(:), edges(:, :), events(:), crossings(:)
+        integer, allocatable :: order(:)
+        real(dp) :: lo, hi, mid, slope, cross, left0, left1, right0, right1
+        integer :: s, b, n, i, j, k, next, ne, ny, na, left, right
+
+        if (cv%matrix(1)*cv%matrix(4) - cv%matrix(2)*cv%matrix(3) == 0.0_dp) return
+        call pb_reset(flat)
+        do s = 1, pb%ns
+            call transformed_contour(cv, pb, s, clip, x, y, n)
+            if (n < 3) cycle
+            call pb_move(flat, x(1), y(1))
+            do i = 2, n
+                call pb_line(flat, x(i), y(i))
+            end do
+            call pb_close(flat)
+        end do
+        allocate (edges(4, flat%n), crossings(flat%n), order(flat%n), events(max(2, 2*flat%n)))
+        ne = 0
+        ny = 0
+        call append_event(events, ny, 0.0_dp)
+        call append_event(events, ny, real(cv%h, dp))
+        do s = 1, flat%ns
+            b = flat%sub_beg(s)
+            n = flat%sub_len(s)
+            do i = b, b + n - 1
+                next = b + mod(i - b + 1, n)
+                if (flat%y(i) == flat%y(next)) cycle
+                j = i
+                k = next
+                if (flat%y(j) > flat%y(k)) then
+                    j = next
+                    k = i
+                end if
+                if (flat%y(k) <= 0.0_dp .or. flat%y(j) >= real(cv%h, dp)) cycle
+                ne = ne + 1
+                slope = (flat%x(k) - flat%x(j))/(flat%y(k) - flat%y(j))
+                edges(:, ne) = [flat%x(j), flat%y(j), slope, flat%y(k)]
+                call append_event(events, ny, max(0.0_dp, flat%y(j)))
+                call append_event(events, ny, min(real(cv%h, dp), flat%y(k)))
+            end do
+        end do
+        do i = 1, ne
+            do j = i + 1, ne
+                lo = max(edges(2, i), edges(2, j), 0.0_dp)
+                hi = min(edges(4, i), edges(4, j), real(cv%h, dp))
+                if (hi <= lo) cycle
+                slope = edges(3, i) - edges(3, j)
+                if (slope == 0.0_dp) cycle
+                cross = lo + (edges(1, j) + edges(3, j)*(lo - edges(2, j)) &
+                              - edges(1, i) - edges(3, i)*(lo - edges(2, i)))/slope
+                if (cross > lo .and. cross < hi) call append_event(events, ny, cross)
+            end do
+        end do
+        call sort_crossings(events, ny)
+        do k = 1, ny - 1
+            lo = events(k)
+            hi = events(k + 1)
+            if (hi <= lo) cycle
+            mid = lo + 0.5_dp*(hi - lo)
+            na = 0
+            do i = 1, ne
+                if (mid < edges(2, i) .or. mid >= edges(4, i)) cycle
+                na = na + 1
+                order(na) = i
+                crossings(na) = edges(1, i) + edges(3, i)*(mid - edges(2, i))
+            end do
+            call sort_crossings(crossings, na, order)
+            do i = 1, na - 1, 2
+                left = order(i)
+                right = order(i + 1)
+                left0 = edges(1, left) + edges(3, left)*(lo - edges(2, left))
+                left1 = edges(1, left) + edges(3, left)*(hi - edges(2, left))
+                right0 = edges(1, right) + edges(3, right)*(lo - edges(2, right))
+                right1 = edges(1, right) + edges(3, right)*(hi - edges(2, right))
+                call acc_edge(cv, left1, hi, left0, lo, y0b, y1b)
+                call acc_edge(cv, right0, lo, right1, hi, y0b, y1b)
+            end do
+        end do
+    end subroutine acc_evenodd_path
+
+    subroutine append_event(events, n, value)
+        real(dp), allocatable, intent(inout) :: events(:)
+        integer, intent(inout) :: n
+        real(dp), intent(in) :: value
+        real(dp), allocatable :: grown(:)
+        if (n == size(events)) then
+            allocate (grown(2*size(events)))
+            grown(1:n) = events(1:n)
+            call move_alloc(grown, events)
+        end if
+        n = n + 1
+        events(n) = value
+    end subroutine append_event
+
+    subroutine sort_crossings(values, n, order)
+        real(dp), intent(inout) :: values(:)
+        integer, intent(in) :: n
+        integer, intent(inout), optional :: order(:)
+        real(dp) :: value
+        integer :: gap, i, j, index
+        gap = n/2
+        do while (gap > 0)
+            do i = gap + 1, n
+                value = values(i)
+                if (present(order)) index = order(i)
+                j = i
+                do while (j > gap)
+                    if (values(j - gap) <= value) exit
+                    values(j) = values(j - gap)
+                    if (present(order)) order(j) = order(j - gap)
+                    j = j - gap
+                end do
+                values(j) = value
+                if (present(order)) order(j) = index
+            end do
+            gap = gap/2
+        end do
+    end subroutine sort_crossings
 
     ! Clip each contour against convex frame rectangles before accumulating
     ! coverage. This intersects geometry, rather than multiplying unrelated
