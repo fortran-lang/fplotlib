@@ -24,6 +24,7 @@
 ! per point. There is one rasterizer here, not five.
 
 module fplotlib_raster
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render, only: paint_t, clip_t, VERB_MOVE, VERB_LINE, VERB_CUBIC, &
                             VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
@@ -80,9 +81,10 @@ contains
         cv%px(4, :, :) = bg_alpha
     end subroutine canvas_init
 
-    subroutine canvas_free(cv)
+    subroutine canvas_free(cv, status)
         type(canvas_t), intent(inout) :: cv
 
+        type(status_t), intent(out) :: status
         if (allocated(cv%px)) deallocate (cv%px)
         if (allocated(cv%acc)) deallocate (cv%acc)
     end subroutine canvas_free
@@ -90,12 +92,18 @@ contains
     ! Undo the premultiplication on the way out, because PNG stores straight
     ! alpha. Fully transparent pixels have no colour to recover and are left
     ! black, which is what every other encoder does.
-    function canvas_rgba(cv) result(out)
+    subroutine canvas_rgba(cv, out, status)
+        use fplotlib_status, only: status_t, ERROR_STATE
         type(canvas_t), intent(in) :: cv
-        integer, allocatable :: out(:, :, :)
+        integer, allocatable, intent(out) :: out(:, :, :)
+        type(status_t), intent(out) :: status
         integer :: x, y, c
         real(dp) :: a, v
 
+        if (.not. allocated(cv%px)) then
+            call status%set(ERROR_STATE, "raster: canvas is not initialized")
+            return
+        end if
         allocate (out(4, cv%w, cv%h))
         do y = 1, cv%h
             do x = 1, cv%w
@@ -111,7 +119,7 @@ contains
                 end if
             end do
         end do
-    end function canvas_rgba
+    end subroutine canvas_rgba
 
     ! ------------------------------------------------------------------
     ! Path building. Coordinates go in as points and come out as pixels, so

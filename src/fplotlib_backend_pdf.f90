@@ -21,6 +21,8 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -48,7 +50,7 @@ module fplotlib_backend_pdf
         character(len=:), allocatable :: alpha
     end type pdf_image_t
 
-    type, extends(renderer_t) :: pdf_renderer_t
+    type, extends(encoded_renderer_t) :: pdf_renderer_t
         ! The page content stream. The file itself is assembled in
         ! close_canvas, once the length of this is known.
         type(svg_builder) :: c
@@ -218,7 +220,7 @@ contains
         call put(self, "Q"//new_line("a"))
     end subroutine end_paint
 
-    subroutine pdf_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+    subroutine pdf_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: width, height
         integer, intent(in), optional :: bg_rgb(3)
@@ -226,6 +228,14 @@ contains
         real(dp), intent(in), optional :: x0, y0
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
+
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status=status)
+        if (.not. status%ok()) return
+        self%has_output = .false.
+        self%width = width
+        self%height = height
+        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
@@ -247,7 +257,8 @@ contains
             p%filled = .true.
             p%fill_rgb = bg_rgb
             if (present(bg_alpha)) p%fill_alpha = bg_alpha
-            call pdf_draw_rect(self, self%x0, self%y0, width, height, p)
+            call pdf_draw_rect(self, self%x0, self%y0, width, height, p, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine pdf_open_canvas
 
@@ -283,23 +294,35 @@ contains
         end do
     end subroutine emit_path
 
-    subroutine pdf_draw_path(self, x, y, verbs, n_verb, paint)
+    subroutine pdf_draw_path(self, x, y, verbs, n_verb, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_path(x, y, verbs, n_verb, paint, status=status)
+        if (.not. status%ok()) return
         if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
         call end_paint(self, paint)
     end subroutine pdf_draw_path
 
-    subroutine pdf_draw_rect(self, x, y, w, h, paint, radius)
+    subroutine pdf_draw_rect(self, x, y, w, h, paint, radius, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(x, y, w, h, paint, radius, status=status)
+        if (.not. status%ok()) return
         call begin_paint(self, paint)
         ! Rounded corners are rare enough that they go through the general
         ! path; the plain case gets the single "re" operator.
@@ -311,34 +334,56 @@ contains
         call end_paint(self, paint)
     end subroutine pdf_draw_rect
 
-    subroutine pdf_draw_circle(self, cx, cy, r, paint)
+    subroutine pdf_draw_circle(self, cx, cy, r, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
         real(dp) :: x(13), y(13), k
         integer :: v(6)
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(cx, cy, r, r, paint, status=status)
+        if (.not. status%ok()) return
         k = r*0.5522847498307933_dp
         x = [cx + r, cx + r, cx + k, cx, cx - k, cx - r, cx - r, cx - r, &
              cx - k, cx, cx + k, cx + r, cx + r]
         y = [cy, cy + k, cy + r, cy + r, cy + r, cy + k, cy, cy - k, &
              cy - r, cy - r, cy - r, cy - k, cy]
         v = [VERB_MOVE, VERB_CUBIC, VERB_CUBIC, VERB_CUBIC, VERB_CUBIC, VERB_CLOSE]
-        call pdf_draw_path(self, x, y, v, 6, paint)
+        call pdf_draw_path(self, x, y, v, 6, paint, status=status)
+        if (.not. status%ok()) return
     end subroutine pdf_draw_circle
 
     ! Repeating the outline per point rather than defining a form XObject.
     ! A form would make the file smaller, but every point still needs its own
     ! placement operator, so the drawing cost is the same either way.
-    subroutine pdf_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+    subroutine pdf_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         real(dp), intent(in) :: mx(:), my(:)
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (size(x) /= size(y)) then
+            call status%set(ERROR_ARGUMENT, "markers: inconsistent coordinate counts")
+            return
+        end if
+        call check_finite(x, status=status)
+        if (.not. status%ok()) return
+        call check_finite(y, status=status)
+        if (.not. status%ok()) return
+        call check_path(mx, my, mverbs, n_mverb, paint, status=status)
+        if (.not. status%ok()) return
         do i = 1, size(x)
-            call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
+            call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine pdf_draw_markers
 
@@ -346,7 +391,7 @@ contains
     ! at one size on one baseline, placed by its own text matrix. Within a
     ! segment the glyphs follow each other by their widths, and kerning is
     ! the number TJ takes between two of them.
-    subroutine pdf_draw_glyphs(self, x, y, run, paint, angle)
+    subroutine pdf_draw_glyphs(self, x, y, run, paint, angle, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
@@ -358,6 +403,16 @@ contains
         logical :: open
         character(len=1) :: eol
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, angle], status=status)
+        if (.not. status%ok()) return
+        call check_paint(paint, status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         if (run%n == 0) return
         eol = new_line("a")
         pp = paint
@@ -430,16 +485,22 @@ contains
     ! with the first row at the top of it, so the matrix that lands it on the
     ! API's rectangle is a flip: v = 1 is the top edge, and the page is
     ! already flipped underneath.
-    subroutine pdf_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+    subroutine pdf_draw_image(self, x, y, w, h, rgba, nx, ny, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         integer, allocatable :: rgb(:), a(:)
         integer :: i, j, k, id
         logical :: opaque
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_image(x, y, w, h, rgba, nx, ny, paint, status=status)
+        if (.not. status%ok()) return
         if (nx < 1 .or. ny < 1 .or. self%n_img >= MAX_IMG) return
 
         allocate (rgb(3*nx*ny), a(nx*ny))
@@ -480,7 +541,7 @@ contains
 
     ! Assemble the file. Objects have to be byte-counted as they are written
     ! because the trailing xref table records where each one starts.
-    subroutine pdf_close_canvas(self)
+    subroutine pdf_close_canvas(self, status)
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=:), allocatable :: content, res, gs, xo, ft
@@ -489,6 +550,10 @@ contains
         integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
         character(len=1) :: eol
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
         eol = new_line("a")
         content = builder_get(self%c)
 
@@ -602,6 +667,8 @@ contains
         call emit(f, pos, "startxref"//eol//int_str(xref_pos)//eol//"%%EOF"//eol)
 
         self%out = builder_get(f)
+        self%is_open = .false.
+        self%has_output = .true.
     end subroutine pdf_close_canvas
 
     ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
@@ -722,9 +789,16 @@ contains
         write (t, "(I10.10)") i
     end function pad10
 
-    function pdf_bytes(self) result(s)
+    function pdf_bytes(self, status) result(s)
         class(pdf_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+        type(status_t), intent(out) :: status
+
+        s = ""
+        if (.not. self%has_output .or. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: no finished encoded output")
+            return
+        end if
         if (allocated(self%out)) then
             s = self%out
         else

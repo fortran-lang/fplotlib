@@ -2,8 +2,9 @@ program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
+    use test_errors, only: error_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface
+    integer :: fig1, nmath, ndelim, nface, nerror
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1573,6 +1574,8 @@ program test_plots
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
+    ! Recoverable errors below the facade; see test_errors.f90.
+    call error_check(nerror)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1580,6 +1583,7 @@ program test_plots
     if (nmath > 0) error stop "math layout differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
+    if (nerror > 0) error stop "recoverable errors misbehave"
 
 contains
 

@@ -39,6 +39,8 @@
 ! Text outside the dollar signs is set in Lato, as any other text; a
 ! dollar sign written \$ is a dollar sign, in text and in math.
 module fplotlib_mathtext
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t
     use fplotlib_text, only: text_layout, run_add
@@ -233,22 +235,26 @@ contains
     end function math_is
 
     ! Width of a string in points, mathtext or not, with its text in face.
-    function math_width(s, size, face, context) result(w)
+    subroutine math_width(s, size, width, face, context, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in), optional :: face
         type(math_context_t), intent(inout), optional :: context
-        real(dp) :: w
+        real(dp), intent(out) :: width
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
-        call math_layout(s, size, run, rules, w, face, context)
-    end function math_width
+        type(status_t), intent(out) :: status
+
+        width = 0.0_dp
+        call math_layout(s, size, run, rules, width, face, context, status=status)
+        if (.not. status%ok()) return
+    end subroutine math_width
 
     ! Lay a string out: its glyphs are appended to run and its rules to
     ! rules, starting at the origin, and width is how far it reaches.
     ! Text outside the dollar signs is copied through as ordinary text, in
     ! face (the regular one by default), with \$ written as a dollar sign.
-    subroutine math_layout(s, size, run, rules, width, face, context)
+    subroutine math_layout(s, size, run, rules, width, face, context, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         type(glyphrun_t), intent(inout) :: run
@@ -258,14 +264,24 @@ contains
         type(math_context_t), intent(inout), optional :: context
         type(math_context_t) :: scratch
 
+        type(status_t), intent(out) :: status
+
+        call check_font(FACE_REGULAR, size, status=status)
+        if (.not. status%ok()) return
+        if (present(face)) then
+            call check_font(face, size, status)
+            if (.not. status%ok()) return
+        end if
         if (present(context)) then
-            call math_layout_impl(context, s, size, run, rules, width, face)
+            call math_layout_impl(context, s, size, run, rules, width, face, status=status)
+            if (.not. status%ok()) return
         else
-            call math_layout_impl(scratch, s, size, run, rules, width, face)
+            call math_layout_impl(scratch, s, size, run, rules, width, face, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine math_layout
 
-    subroutine math_layout_impl(state, s, size, run, rules, width, face)
+    subroutine math_layout_impl(state, s, size, run, rules, width, face, status)
         type(math_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
@@ -277,6 +293,7 @@ contains
         integer :: i, j, head, k, tf
         real(dp) :: pen, xnew
 
+        type(status_t), intent(out) :: status
         tf = FACE_REGULAR
         if (present(face)) tf = face
         pen = 0.0_dp
@@ -287,11 +304,13 @@ contains
                 if (j > i + 1) then
                     call reset_arenas(state)
                     head = parse_list(state, s(i + 1:j - 1), ALPH_MATH)
-                    call mlist_box(state, head, ST_T, .false., size, box)
+                    call mlist_box(state, head, ST_T, .false., size, box, status=status)
+                    if (.not. status%ok()) return
                     do k = box%i0, box%i1
                         if (state%it_kind(k) == 1) then
                             call run_add(run, state%it_gid(k), pen + state%it_x(k), &
-                                         -state%it_y(k), state%it_s(k))
+                                         -state%it_y(k), state%it_s(k), status=status)
+                            if (.not. status%ok()) return
                         else
                             call rule_add(rules, pen + state%it_x(k), &
                                           -(state%it_y(k) + state%it_h(k)), &
@@ -311,13 +330,15 @@ contains
                     j = j + 1
                 end do
                 if (j > i) then
-                    call text_layout(s(i:j - 1), size, tf, pen, 0.0_dp, run, xnew)
+                    call text_layout(s(i:j - 1), size, tf, pen, 0.0_dp, run, xnew, status=status)
+                    if (.not. status%ok()) return
                     pen = xnew
                 end if
                 ! A dollar written \$ is one.
                 if (j < len(s)) then
                     if (s(j:j) == BS) then
-                        call text_layout("$", size, tf, pen, 0.0_dp, run, xnew)
+                        call text_layout("$", size, tf, pen, 0.0_dp, run, xnew, status=status)
+                        if (.not. status%ok()) return
                         pen = xnew
                         j = j + 2
                     end if
@@ -332,7 +353,7 @@ contains
     ! when display is true and text style otherwise. Its glyphs and rules
     ! are appended to run and rules about the origin on its baseline, y
     ! down, and w, h and d are its width, height and depth in points.
-    subroutine math_formula(s, size, display, run, rules, w, h, d, context)
+    subroutine math_formula(s, size, display, run, rules, w, h, d, context, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         logical, intent(in) :: display
@@ -342,14 +363,20 @@ contains
         type(math_context_t), intent(inout), optional :: context
         type(math_context_t) :: scratch
 
+        type(status_t), intent(out) :: status
+
+        call check_font(FACE_REGULAR, size, status=status)
+        if (.not. status%ok()) return
         if (present(context)) then
-            call math_formula_impl(context, s, size, display, run, rules, w, h, d)
+            call math_formula_impl(context, s, size, display, run, rules, w, h, d, status=status)
+            if (.not. status%ok()) return
         else
-            call math_formula_impl(scratch, s, size, display, run, rules, w, h, d)
+            call math_formula_impl(scratch, s, size, display, run, rules, w, h, d, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine math_formula
 
-    subroutine math_formula_impl(state, s, size, display, run, rules, w, h, d)
+    subroutine math_formula_impl(state, s, size, display, run, rules, w, h, d, status)
         type(math_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
@@ -360,14 +387,17 @@ contains
         type(mbox_t) :: box
         integer :: head, k, st
 
+        type(status_t), intent(out) :: status
         st = ST_T
         if (display) st = ST_D
         call reset_arenas(state)
         head = parse_list(state, s, ALPH_MATH)
-        call mlist_box(state, head, st, .false., size, box)
+        call mlist_box(state, head, st, .false., size, box, status=status)
+        if (.not. status%ok()) return
         do k = box%i0, box%i1
             if (state%it_kind(k) == 1) then
-                call run_add(run, state%it_gid(k), state%it_x(k), -state%it_y(k), state%it_s(k))
+                call run_add(run, state%it_gid(k), state%it_x(k), -state%it_y(k), state%it_s(k), status=status)
+                if (.not. status%ok()) return
             else
                 call rule_add(rules, state%it_x(k), -(state%it_y(k) + state%it_h(k)), &
                               state%it_w(k), state%it_h(k))
@@ -1501,7 +1531,7 @@ contains
     ! first pass turns every noad into a box and settles the classes; the
     ! second sets the boxes side by side with the glue between classes.
     ! A style change applies to what follows it in the list.
-    recursive subroutine mlist_box(state, head, style, cramped, size, box)
+    recursive subroutine mlist_box(state, head, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: head, style
         logical, intent(in) :: cramped
@@ -1512,7 +1542,9 @@ contains
         integer :: n, k, q, prev, cur
         real(dp) :: pen, sz
 
-        call settle_auto(state, head, style, cramped, size)
+        type(status_t), intent(out) :: status
+        call settle_auto(state, head, style, cramped, size, status=status)
+        if (.not. status%ok()) return
         n = 0
         q = head
         do while (q > 0)
@@ -1544,15 +1576,20 @@ contains
                     bx(k)%w = state%noads(q)%amount*sz
                 end if
             case (K_FRAC)
-                call make_frac(state, q, cur, cramped, size, bx(k))
+                call make_frac(state, q, cur, cramped, size, bx(k), status=status)
+                if (.not. status%ok()) return
             case (K_RAD)
-                call make_rad(state, q, cur, size, bx(k))
+                call make_rad(state, q, cur, size, bx(k), status=status)
+                if (.not. status%ok()) return
             case (K_ACC)
-                call make_acc(state, q, cur, cramped, size, bx(k))
+                call make_acc(state, q, cur, cramped, size, bx(k), status=status)
+                if (.not. status%ok()) return
             case (K_OVER, K_UNDER)
-                call make_bar(state, q, cur, cramped, size, bx(k))
+                call make_bar(state, q, cur, cramped, size, bx(k), status=status)
+                if (.not. status%ok()) return
             case (K_LR)
-                call make_lr(state, q, cur, cramped, size, bx(k))
+                call make_lr(state, q, cur, cramped, size, bx(k), status=status)
+                if (.not. status%ok()) return
                 ! An automatic pair is spaced as its delimiters would be.
                 if (state%noads(q)%auto > 0) then
                     cls_l(k) = CL_OPEN
@@ -1592,13 +1629,16 @@ contains
                         cls_r(prev) = CL_ORD
                     end if
                 end if
-                call make_atom(state, q, cur, cramped, size, bx(k))
+                call make_atom(state, q, cur, cramped, size, bx(k), status=status)
+                if (.not. status%ok()) return
             end select
             ! Whatever else carries scripts takes them on its box.
             select case (state%noads(q)%kind)
             case (K_FRAC, K_RAD, K_OVER, K_UNDER, K_LR, K_BIG)
-                if (state%noads(q)%sup >= 0 .or. state%noads(q)%sub >= 0) &
-                    call make_scripts(state, q, cur, cramped, size, bx(k))
+                if (state%noads(q)%sup >= 0 .or. state%noads(q)%sub >= 0) then
+                    call make_scripts(state, q, cur, cramped, size, bx(k), status=status)
+                    if (.not. status%ok()) return
+                end if
             end select
             if (state%noads(q)%kind /= K_SPACE .and. state%noads(q)%kind /= K_STYLE) prev = k
             q = state%noads(q)%next
@@ -1641,7 +1681,7 @@ contains
     ! An atom: its nucleus, and its scripts if it has any. A large
     ! operator takes them above and below in display style (or after
     ! \limits) and beside it otherwise.
-    recursive subroutine make_atom(state, q, style, cramped, size, box)
+    recursive subroutine make_atom(state, q, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -1650,6 +1690,7 @@ contains
         real(dp) :: sz, delta
         logical :: op, limits
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         op = state%noads(q)%cls == CL_OP
         delta = 0.0_dp
@@ -1670,9 +1711,11 @@ contains
                 end if
             end if
         case (NUC_LIST)
-            call mlist_box(state, state%noads(q)%list, style, cramped, size, box)
+            call mlist_box(state, state%noads(q)%list, style, cramped, size, box, status=status)
+            if (.not. status%ok()) return
         case (NUC_TEXT)
-            call text_box(state, q, style, size, box)
+            call text_box(state, q, style, size, box, status=status)
+            if (.not. status%ok()) return
         case default
             box = empty_box(state)
         end select
@@ -1681,7 +1724,8 @@ contains
         limits = op .and. (state%noads(q)%limits == 1 .or. &
                            (state%noads(q)%limits == 0 .and. style == ST_D))
         if (limits) then
-            call make_limits(state, q, style, cramped, size, box, delta)
+            call make_limits(state, q, style, cramped, size, box, delta, status=status)
+            if (.not. status%ok()) return
         else
             if (op) then
                 ! An operator's italic correction goes only between its
@@ -1693,13 +1737,14 @@ contains
                     box%ital = 0.0_dp
                 end if
             end if
-            call make_scripts(state, q, style, cramped, size, box)
+            call make_scripts(state, q, style, cramped, size, box, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine make_atom
 
     ! Text as a box: the letters of an operator name in the math font, or
     ! \text in the text font with its kerning.
-    subroutine text_box(state, q, style, size, box)
+    subroutine text_box(state, q, style, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         real(dp), intent(in) :: size
@@ -1709,6 +1754,7 @@ contains
         integer :: k, code, nb, i0
         real(dp) :: sz, pen, x0, y0, x1, y1
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         box = empty_box(state)
         i0 = state%ni + 1
@@ -1738,7 +1784,8 @@ contains
                 nb = index(state%tpool(k:state%noads(q)%t1), " ") - 1
                 if (nb < 0) nb = state%noads(q)%t1 - k + 1
                 call text_layout(state%tpool(k:k + nb - 1), sz, state%noads(q)%face, &
-                                 pen, 0.0_dp, run, x1)
+                                 pen, 0.0_dp, run, x1, status=status)
+                if (.not. status%ok()) return
                 pen = x1
                 k = k + nb
             end do
@@ -1812,7 +1859,7 @@ contains
     ! each clear of it by the MATH table's gap and baseline distance, with
     ! TeX's \big_op_spacing5 of space beyond it, which XeTeX takes to be
     ! StackGapMin.
-    recursive subroutine make_limits(state, q, style, cramped, size, box, delta)
+    recursive subroutine make_limits(state, q, style, cramped, size, box, delta, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -1822,6 +1869,7 @@ contains
         real(dp) :: sz, w, up, down, h, d, w0
         logical :: has_sup, has_sub
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         has_sup = state%noads(q)%sup >= 0
         has_sub = state%noads(q)%sub >= 0
@@ -1830,11 +1878,13 @@ contains
         d = box%d
         w = w0
         if (has_sup) then
-            call mlist_box(state, state%noads(q)%sup, sup_style(style), cramped, size, x)
+            call mlist_box(state, state%noads(q)%sup, sup_style(style), cramped, size, x, status=status)
+            if (.not. status%ok()) return
             w = max(w, x%w)
         end if
         if (has_sub) then
-            call mlist_box(state, state%noads(q)%sub, sup_style(style), .true., size, z)
+            call mlist_box(state, state%noads(q)%sub, sup_style(style), .true., size, z, status=status)
+            if (.not. status%ok()) return
             w = max(w, z%w)
         end if
         call move_box(state, box, 0.5_dp*(w - w0), 0.0_dp)
@@ -1866,7 +1916,7 @@ contains
     ! the minimum gap, the subscript going down until the superscript's
     ! bottom has risen as far as it may. A superscript is moved out by the
     ! nucleus's italic correction and a subscript is not.
-    recursive subroutine make_scripts(state, q, style, cramped, size, box)
+    recursive subroutine make_scripts(state, q, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -1876,6 +1926,7 @@ contains
         real(dp) :: sz, ssz, u, v, gap, psi, w, x_sup, x_sub
         logical :: has_sup, has_sub
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         ssz = style_size(sup_style(style), size)
         has_sup = state%noads(q)%sup >= 0
@@ -1889,8 +1940,14 @@ contains
         end if
         x_sup = box%w + box%ital
 
-        if (has_sup) call mlist_box(state, state%noads(q)%sup, sup_style(style), cramped, size, sup)
-        if (has_sub) call mlist_box(state, state%noads(q)%sub, sup_style(style), .true., size, sub)
+        if (has_sup) then
+            call mlist_box(state, state%noads(q)%sup, sup_style(style), cramped, size, sup, status=status)
+            if (.not. status%ok()) return
+        end if
+        if (has_sub) then
+            call mlist_box(state, state%noads(q)%sub, sup_style(style), .true., size, sub, status=status)
+            if (.not. status%ok()) return
+        end if
 
         if (has_sup) then
             if (cramped) then
@@ -1988,7 +2045,7 @@ contains
     ! DelimitedSubFormulaMinHeight tall in display style and at most 1.5
     ! ems otherwise, as in XeTeX; a fraction without delimiters has a null
     ! delimiter's space on either side, as TeX leaves it.
-    recursive subroutine make_frac(state, q, style0, cramped, size, box)
+    recursive subroutine make_frac(state, q, style0, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style0
         logical, intent(in) :: cramped
@@ -1998,6 +2055,7 @@ contains
         real(dp) :: sz, u, v, a, th, phi_n, phi_d, w, nds, clr, delta, target
         integer :: i0, style
 
+        type(status_t), intent(out) :: status
         target = 0.0_dp
         style = style0
         if (state%noads(q)%style >= 0) style = state%noads(q)%style
@@ -2013,9 +2071,11 @@ contains
             if (style /= ST_D) target = min(1.5_dp*sz, target)
             call make_delim(state, state%noads(q)%dl, target, style, size, dl)
         end if
-        call mlist_box(state, state%noads(q)%a, frac_style(style), cramped, size, num)
+        call mlist_box(state, state%noads(q)%a, frac_style(style), cramped, size, num, status=status)
+        if (.not. status%ok()) return
         if (state%noads(q)%strut) call strut_box(num, STRUT_H*size, STRUT_D*size)
-        call mlist_box(state, state%noads(q)%b, frac_style(style), .true., size, den)
+        call mlist_box(state, state%noads(q)%b, frac_style(style), .true., size, den, status=status)
+        if (.not. status%ok()) return
 
         if (state%noads(q)%rule) then
             if (style == ST_D) then
@@ -2084,7 +2144,7 @@ contains
     ! RadicalKernBeforeDegree before it and RadicalKernAfterDegree after,
     ! its baseline raised by RadicalDegreeBottomRaisePercent of the
     ! radical's height less its depth, as unicode-math places it.
-    recursive subroutine make_rad(state, q, style, size, box)
+    recursive subroutine make_rad(state, q, style, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         real(dp), intent(in) :: size
@@ -2093,6 +2153,7 @@ contains
         real(dp) :: sz, th, phi, need, hg, dg, extra, rise, xs, left, ybot
         integer :: i0, g, nd
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         th = math_const(MC_RADICAL_RULE_THICKNESS)*sz
         if (style == ST_D) then
@@ -2104,7 +2165,8 @@ contains
         ! The sign goes into the box before the radicand, as TeX puts it;
         ! the radicand is laid out first to know how tall a sign it needs,
         ! and then moved behind it.
-        call mlist_box(state, state%noads(q)%a, style, .true., size, x)
+        call mlist_box(state, state%noads(q)%a, style, .true., size, x, status=status)
+        if (.not. status%ok()) return
         need = x%h + x%d + phi + th
 
         g = glyph_cmap(FACE_MATH, 8730)
@@ -2121,7 +2183,8 @@ contains
         box%h = x%h + phi + th + math_const(MC_RADICAL_EXTRA_ASCENDER)*sz
         box%d = max(x%d, dg - rise)
         if (state%noads(q)%b >= 0) then
-            call mlist_box(state, state%noads(q)%b, ST_SS, .false., size, deg)
+            call mlist_box(state, state%noads(q)%b, ST_SS, .false., size, deg, status=status)
+            if (.not. status%ok()) return
             nd = deg%i1 - deg%i0 + 1
             left = math_const(MC_RADICAL_KERN_BEFORE_DEGREE)*sz
             ybot = math_percent(MC_RADICAL_DEGREE_BOTTOM_RAISE_PERCENT)/100.0_dp &
@@ -2158,7 +2221,7 @@ contains
     ! a taller one. Under an accent the dotless i and j are used. A
     ! character's scripts are set on it first, the accent going over the
     ! character alone, as TeX sets them.
-    recursive subroutine make_acc(state, q, style, cramped, size, box)
+    recursive subroutine make_acc(state, q, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -2171,6 +2234,7 @@ contains
         real(dp) :: sz, s, sa, h, w, delta, x0, y0, x1, y1, ya
         logical :: char_nuc, asm, has_scripts
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         i0 = state%ni + 1
         hq = state%noads(q)%a
@@ -2199,9 +2263,13 @@ contains
                 x%w = x%w + x%ital
                 x%ital = 0.0_dp
             end if
-            if (has_scripts) call make_scripts(state, q, style, cramped, size, x)
+            if (has_scripts) then
+                call make_scripts(state, q, style, cramped, size, x, status=status)
+                if (.not. status%ok()) return
+            end if
         else
-            call mlist_box(state, hq, style, .true., size, x)
+            call mlist_box(state, hq, style, .true., size, x, status=status)
+            if (.not. status%ok()) return
             s = 0.5_dp*x%w
             w = x%w
             h = x%h
@@ -2239,14 +2307,17 @@ contains
         box%h = max(x%h, h - delta + ya + acc%h)
         box%d = x%d
         ! Anything but a character takes the scripts on the accented box.
-        if (has_scripts .and. .not. char_nuc) call make_scripts(state, q, style, cramped, size, box)
+        if (has_scripts .and. .not. char_nuc) then
+            call make_scripts(state, q, style, cramped, size, box, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine make_acc
 
     ! \overline and \underline (rules 9 and 10, with the MATH table's
     ! Overbar and Underbar constants): a rule above the argument, which is
     ! cramped, or below it, with the gap between and the extra space
     ! beyond.
-    recursive subroutine make_bar(state, q, style, cramped, size, box)
+    recursive subroutine make_bar(state, q, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -2254,16 +2325,19 @@ contains
         type(mbox_t), intent(out) :: box
         real(dp) :: sz, gap, th, extra
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         if (state%noads(q)%kind == K_OVER) then
-            call mlist_box(state, state%noads(q)%a, style, .true., size, box)
+            call mlist_box(state, state%noads(q)%a, style, .true., size, box, status=status)
+            if (.not. status%ok()) return
             gap = math_const(MC_OVERBAR_VERTICAL_GAP)*sz
             th = math_const(MC_OVERBAR_RULE_THICKNESS)*sz
             extra = math_const(MC_OVERBAR_EXTRA_ASCENDER)*sz
             call add_rule(state, 0.0_dp, box%h + gap, box%w, th)
             box%h = box%h + gap + th + extra
         else
-            call mlist_box(state, state%noads(q)%a, style, cramped, size, box)
+            call mlist_box(state, state%noads(q)%a, style, cramped, size, box, status=status)
+            if (.not. status%ok()) return
             gap = math_const(MC_UNDERBAR_VERTICAL_GAP)*sz
             th = math_const(MC_UNDERBAR_RULE_THICKNESS)*sz
             extra = math_const(MC_UNDERBAR_EXTRA_DESCENDER)*sz
@@ -2282,7 +2356,7 @@ contains
     ! then takes the closing delimiter's scripts, and its lone |s become
     ! \middle. Otherwise the pair is put back as it was written, so that
     ! f(x) is set exactly as without automatic delimiters.
-    recursive subroutine settle_auto(state, head, style, cramped, size)
+    recursive subroutine settle_auto(state, head, style, cramped, size, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: head, style
         logical, intent(in) :: cramped
@@ -2292,6 +2366,7 @@ contains
         real(dp) :: sz, ax, full, save, x0, y0, x1, y1, hl, hr
         logical :: grow
 
+        type(status_t), intent(out) :: status
         cur = style
         q = head
         do while (q > 0)
@@ -2301,7 +2376,8 @@ contains
                 i0 = state%ni
                 save = state%lr_target
                 state%lr_target = -1.0_dp
-                call mlist_box(state, state%noads(q)%a, cur, cramped, size, inner)
+                call mlist_box(state, state%noads(q)%a, cur, cramped, size, inner, status=status)
+                if (.not. status%ok()) return
                 state%lr_target = save
                 state%ni = i0
                 ax = math_const(MC_AXIS_HEIGHT)*sz
@@ -2353,7 +2429,7 @@ contains
     ! laid out again with its \middle delimiters at that size. The
     ! delimiters of an automatic pair cover it as Typst's do: all of it,
     ! less 0.1 em, with an assembly built to cover all of it.
-    recursive subroutine make_lr(state, q, style, cramped, size, box)
+    recursive subroutine make_lr(state, q, style, cramped, size, box, status)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         logical, intent(in) :: cramped
@@ -2363,12 +2439,14 @@ contains
         real(dp) :: sz, a, d1, d2, target, full, save, save_full
         integer :: i0
 
+        type(status_t), intent(out) :: status
         sz = style_size(style, size)
         i0 = state%ni + 1
         save = state%lr_target
         save_full = state%lr_full
         state%lr_target = -1.0_dp
-        call mlist_box(state, state%noads(q)%a, style, cramped, size, inner)
+        call mlist_box(state, state%noads(q)%a, style, cramped, size, inner, status=status)
+        if (.not. status%ok()) return
         state%ni = i0 - 1
         a = math_const(MC_AXIS_HEIGHT)*sz
         d2 = inner%d + a
@@ -2385,7 +2463,8 @@ contains
         call make_delim(state, state%noads(q)%dl, target, style, size, dl, full)
         state%lr_target = target
         state%lr_full = full
-        call mlist_box(state, state%noads(q)%a, style, cramped, size, inner)
+        call mlist_box(state, state%noads(q)%a, style, cramped, size, inner, status=status)
+        if (.not. status%ok()) return
         state%lr_target = save
         state%lr_full = save_full
         call make_delim(state, state%noads(q)%dr, target, style, size, dr, full)

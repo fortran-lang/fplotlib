@@ -88,6 +88,7 @@
 ! size. glyph_advance, glyph_verbs and glyph_points are the older
 ! code point interface, in the font units of the text faces (EM per em).
 module fplotlib_glyphs
+    use fplotlib_status
     use iso_fortran_env, only: int16, int64
     use fplotlib_style, only: dp
     use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
@@ -103,7 +104,7 @@ module fplotlib_glyphs
     implicit none
     private
 
-    public :: NFACE, NGLYPH
+    public :: NFACE, NGLYPH, initialize_glyphs
     public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH
     public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
               glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
@@ -203,7 +204,6 @@ contains
     function glyph_cmap(face, cp) result(gid)
         integer, intent(in) :: face, cp
         integer :: gid, lo, hi, mid
-        call ensure_loaded()
         gid = 0
         if (face < 1 .or. face > NFACE) return
         lo = CMB(face)
@@ -223,7 +223,6 @@ contains
 
     integer function glyph_face(gid)
         integer, intent(in) :: gid
-        call ensure_loaded()
         glyph_face = 0
         if (gid >= 1 .and. gid <= NGLYPH) glyph_face = GFACE(gid)
     end function glyph_face
@@ -232,7 +231,6 @@ contains
     function glyph_adv(gid) result(a)
         integer, intent(in) :: gid
         real(dp) :: a
-        call ensure_loaded()
         a = 0.0_dp
         if (gid < 1 .or. gid > NGLYPH) return
         a = real(GADV(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
@@ -244,7 +242,6 @@ contains
         integer, intent(in) :: gid
         real(dp), intent(out) :: x0, y0, x1, y1
         real(dp) :: s
-        call ensure_loaded()
         x0 = 0.0_dp
         y0 = 0.0_dp
         x1 = 0.0_dp
@@ -265,7 +262,6 @@ contains
         integer, intent(out) :: nv
         real(dp), allocatable, intent(out) :: x(:), y(:)
         integer, intent(out) :: np
-        call ensure_loaded()
         if (gid < 1 .or. gid > NGLYPH) then
             nv = 0
             np = 0
@@ -278,7 +274,6 @@ contains
     ! Whether a glyph draws anything at all; a space does not.
     logical function glyph_inked(gid)
         integer, intent(in) :: gid
-        call ensure_loaded()
         glyph_inked = .false.
         if (gid < 1 .or. gid > NGLYPH) return
         glyph_inked = OBEG(gid + 1) > OBEG(gid) .or. PBEG(gid + 1) > PBEG(gid)
@@ -290,7 +285,6 @@ contains
         integer, intent(in) :: face, g1, g2
         real(dp) :: k
         integer :: l, r, src, i1, i2
-        call ensure_loaded()
         k = 0.0_dp
         if (face < 1 .or. face > NFACE) return
         if (g1 < 1 .or. g1 > NGLYPH .or. g2 < 1 .or. g2 > NGLYPH) return
@@ -309,7 +303,6 @@ contains
     ! The code point a glyph stands for, 0 for one that has none.
     integer function glyph_char(gid)
         integer, intent(in) :: gid
-        call ensure_loaded()
         glyph_char = 0
         if (gid >= 1 .and. gid <= NGLYPH) glyph_char = GCHAR(gid)
     end function glyph_char
@@ -367,7 +360,6 @@ contains
     function glyph_italic(gid) result(v)
         integer, intent(in) :: gid
         real(dp) :: v
-        call ensure_loaded()
         v = 0.0_dp
         if (gid < 1 .or. gid > NGLYPH) return
         v = real(GITAL(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
@@ -378,7 +370,6 @@ contains
     function glyph_top_accent(gid) result(v)
         integer, intent(in) :: gid
         real(dp) :: v
-        call ensure_loaded()
         v = 0.0_dp
         if (gid < 1 .or. gid > NGLYPH) return
         if (FACE_HAS_MATH(GFACE(gid))) then
@@ -396,7 +387,6 @@ contains
         real(dp), intent(in) :: height
         real(dp) :: v, em
         integer :: n, i
-        call ensure_loaded()
         v = 0.0_dp
         if (gid < 1 .or. gid > NGLYPH) return
         n = MKN(corner, gid)
@@ -412,7 +402,6 @@ contains
 
     logical function glyph_extended(gid)
         integer, intent(in) :: gid
-        call ensure_loaded()
         glyph_extended = .false.
         if (gid >= 1 .and. gid <= NGLYPH) glyph_extended = GEXT(gid)
     end function glyph_extended
@@ -427,7 +416,6 @@ contains
         integer, allocatable, intent(out) :: gids(:)
         real(dp), allocatable, intent(out) :: adv(:)
         integer :: d, k
-        call ensure_loaded()
         n = 0
         if (gid >= 1 .and. gid <= NGLYPH) then
             d = merge(1, 2, vertical)
@@ -455,7 +443,6 @@ contains
         real(dp), intent(out) :: italic
         integer :: d, a, k, p
         real(dp) :: em
-        call ensure_loaded()
         n = 0
         italic = 0.0_dp
         a = 0
@@ -482,7 +469,6 @@ contains
     ! the glyph itself when it has none.
     integer function glyph_ssty(gid, level)
         integer, intent(in) :: gid, level
-        call ensure_loaded()
         glyph_ssty = gid
         if (gid < 1 .or. gid > NGLYPH .or. level < 1 .or. level > 2) return
         if (SSTY(level, gid) > 0) glyph_ssty = SSTY(level, gid)
@@ -491,7 +477,6 @@ contains
     ! The dotless form of a glyph, for under an accent; itself if none.
     integer function glyph_dotless(gid)
         integer, intent(in) :: gid
-        call ensure_loaded()
         glyph_dotless = gid
         if (gid < 1 .or. gid > NGLYPH) return
         if (DTLS(gid) > 0) glyph_dotless = DTLS(gid)
@@ -753,13 +738,20 @@ contains
 
     ! --- unpacking the blob ------------------------------------------
 
-    subroutine ensure_loaded()
+    ! Internal table queries below do not initialize shared state. Public text,
+    ! math and rendering entrypoints prepare resources and check this result.
+    subroutine initialize_glyphs(status)
+        use fplotlib_status, only: status_t
+        type(status_t), intent(out) :: status
         if (loaded) return
-        call unpack()
+        call unpack(status)
+        if (.not. status%ok()) return
         loaded = .true.
-    end subroutine ensure_loaded
+    end subroutine initialize_glyphs
 
-    subroutine unpack()
+    subroutine unpack(status)
+        use fplotlib_status, only: status_t, ERROR_RESOURCE
+        type(status_t), intent(out) :: status
         integer :: f, k, j, gid, base, ng, lbits, nc, n, ip, ic, icp, ik, ikv
         integer :: guess, prev_adv, xx, yy, cp, prev, nl, nr, l, c, cnt, pf
         integer :: shrink(4, NGLYPH), xf, rg, r0, cx, cy, dx, dy, o, onp, onp2
@@ -773,7 +765,11 @@ contains
         do f = 1, NFACE
             FBASE(f + 1) = FBASE(f) + FACE_NG(f)
         end do
-        if (FBASE(NFACE + 1) /= NGLYPH) error stop "fplotlib_glyphs: face sizes disagree"
+        if (FBASE(NFACE + 1) /= NGLYPH) then
+            call status%set(ERROR_RESOURCE, "fplotlib_glyphs: face sizes disagree")
+            deallocate (BUF)
+            return
+        end if
 
         ip = 0
         ic = 0
@@ -800,7 +796,11 @@ contains
         nvar_ = 0
         nasm_ = 0
         npart_ = 0
-        if (.not. FACE_HAS_MATH(FACE_MATH)) error stop "fplotlib_glyphs: FACE_MATH is not the math face"
+        if (.not. FACE_HAS_MATH(FACE_MATH)) then
+            call status%set(ERROR_RESOURCE, "fplotlib_glyphs: FACE_MATH is not the math face")
+            deallocate (BUF)
+            return
+        end if
         do f = 1, NFACE
             base = FBASE(f)
             ng = FACE_NG(f)
@@ -977,7 +977,7 @@ contains
         if (ip /= NPT .or. ic /= NCONT .or. ik /= NCOMP .or. icp /= NCMAP &
             .or. ikv /= NKERN .or. nmkh_ /= NMKH .or. nmkv_ /= NMKV &
             .or. nvar_ /= NVAR .or. nasm_ /= NASM .or. npart_ /= NPART) then
-            error stop "fplotlib_glyphs: blob does not fill the tables"
+            call status%set(ERROR_RESOURCE, "fplotlib_glyphs: blob does not fill the tables")
         end if
         deallocate (BUF)
     end subroutine unpack
