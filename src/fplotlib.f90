@@ -20,7 +20,12 @@ module fplotlib
     use fplotlib_dates
     use fplotlib_state
     use fplotlib_artist
-    use fplotlib_draw
+    use fplotlib_draw, core_render_svg => render_svg, core_render_pdf => render_pdf, &
+                       core_render_png => render_png, core_render_eps => render_eps, &
+                       core_tight_layout => tight_layout
+    use fplotlib_status
+    use, intrinsic :: iso_fortran_env, only: error_unit
+    use fplotlib_io, only: file_ext, write_bytes
     implicit none
     private
 
@@ -6102,23 +6107,6 @@ contains
     ! another come out wrong.
     ! ------------------------------------------------------------------
 
-    ! The extension picks the backend, as it does in matplotlib. A name with
-    ! no extension at all is taken as SVG.
-    function file_ext(filename) result(ext)
-        character(len=*), intent(in) :: filename
-        character(len=:), allocatable :: ext
-        integer :: d, sl
-
-        d = index(filename, ".", back=.true.)
-        sl = max(index(filename, "/", back=.true.), &
-                 index(filename, achar(92), back=.true.))
-        if (d <= sl + 1) then
-            ext = "svg"
-        else
-            ext = lower(filename(d + 1:len_trim(filename)))
-        end if
-    end function file_ext
-
     ! Writing SVG bytes into a .png would produce a file no viewer can open,
     ! so an unsupported extension is a hard error rather than a silent default.
     subroutine reject_ext(filename)
@@ -6131,6 +6119,60 @@ contains
 
     ! dpi sizes the raster in the PNG backend. The vector formats ignore it,
     ! as matplotlib does: they emit the same inches*72 canvas at any dpi.
+    function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(data)
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        character(len=:), allocatable :: data
+        type(status_t) :: status
+        data = core_render_svg(facecolor, transparent, bbox_inches, pad_inches, status=status)
+        call abort_on_error(status)
+    end function render_svg
+
+    function render_pdf(facecolor, transparent, bbox_inches, pad_inches) result(data)
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        character(len=:), allocatable :: data
+        type(status_t) :: status
+        data = core_render_pdf(facecolor, transparent, bbox_inches, pad_inches, status=status)
+        call abort_on_error(status)
+    end function render_pdf
+
+    function render_png(facecolor, transparent, bbox_inches, pad_inches) result(data)
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        character(len=:), allocatable :: data
+        type(status_t) :: status
+        data = core_render_png(facecolor, transparent, bbox_inches, pad_inches, status=status)
+        call abort_on_error(status)
+    end function render_png
+
+    function render_eps(facecolor, transparent, bbox_inches, pad_inches) result(data)
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        character(len=:), allocatable :: data
+        type(status_t) :: status
+        data = core_render_eps(facecolor, transparent, bbox_inches, pad_inches, status=status)
+        call abort_on_error(status)
+    end function render_eps
+
+    subroutine tight_layout(pad)
+        real(dp), intent(in), optional :: pad
+        type(status_t) :: status
+        call core_tight_layout(pad, status=status)
+        call abort_on_error(status)
+    end subroutine tight_layout
+
+    subroutine abort_on_error(status)
+        type(status_t), intent(in) :: status
+        if (status%ok()) return
+        write (error_unit, "(a)") status%message
+        error stop 1
+    end subroutine abort_on_error
+
     subroutine savefig(filename, transparent, facecolor, dpi, bbox_inches, pad_inches)
         character(len=*), intent(in) :: filename
         logical, intent(in), optional :: transparent
@@ -6141,6 +6183,7 @@ contains
 
         ! dpi given here applies to this file only, as it does in matplotlib;
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
+        type(status_t) :: status
         saved_dpi = fig_dpi
         if (present(dpi)) then
             if (dpi <= 0.0_dp) error stop "fplotlib: savefig dpi must be positive"
@@ -6160,30 +6203,9 @@ contains
             return
         end select
         fig_dpi = saved_dpi
-        call write_bytes(filename, svg)
+        call write_bytes(filename, svg, status=status)
+        call abort_on_error(status)
     end subroutine savefig
-
-    subroutine write_bytes(filename, data)
-        character(len=*), intent(in) :: filename, data
-        integer :: u, ios
-
-        open (newunit=u, file=trim(filename), status="replace", action="write", &
-              form="unformatted", access="stream", iostat=ios)
-        if (ios /= 0) then
-            ! fallback formatted
-            open (newunit=u, file=trim(filename), status="replace", action="write", &
-                  form="formatted", iostat=ios)
-            if (ios /= 0) then
-                print *, "fplotlib: failed to open ", trim(filename)
-                return
-            end if
-            write (u, "(A)") data
-            close (u)
-            return
-        end if
-        if (len(data) > 0) write (u) data
-        close (u)
-    end subroutine write_bytes
 
     ! ------------------------------------------------------------------
     ! Animation. matplotlib builds an Animation object around a callback;
@@ -6197,11 +6219,14 @@ contains
         type(png_renderer_t) :: r
         real(dp) :: saved_dpi
 
+        type(status_t) :: status
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
         r%keep_pixels = .true.
-        call r%set_dpi(fig_dpi)
-        call render_figure(r, facecolor)
+        call r%set_dpi(fig_dpi, status=status)
+        call abort_on_error(status)
+        call render_figure(r, facecolor, status=status)
+        call abort_on_error(status)
         fig_dpi = saved_dpi
 
         if (anim_n > 0) then
@@ -6245,6 +6270,7 @@ contains
         logical :: rep
         integer :: delay
 
+        type(status_t) :: status
         if (anim_n == 0) then
             print *, "fplotlib: no frames; call add_frame before save_animation"
             return
@@ -6269,13 +6295,15 @@ contains
         delay = max(1, nint(100.0_dp/rate))
         if (file_ext(filename) == "gif") then
             call write_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
-                                                  anim_pix(1:anim_len), delay, rep))
+                                                  anim_pix(1:anim_len), delay, rep), status=status)
+            call abort_on_error(status)
         else
             ! APNG delays are a fraction, so the frame rate is not rounded
             ! to hundredths of a second.
             call write_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
-                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep))
+                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep), status=status)
+            call abort_on_error(status)
         end if
         anim_n = 0
         anim_w = 0

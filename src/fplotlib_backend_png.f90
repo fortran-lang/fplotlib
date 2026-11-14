@@ -16,6 +16,8 @@
 ! paths, so all four formats show the same text.
 
 module fplotlib_backend_png
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_raster
@@ -30,7 +32,7 @@ module fplotlib_backend_png
     ! the only place a pixel size is decided.
     real(dp), parameter :: DEFAULT_DPI = 100.0_dp
 
-    type, extends(renderer_t) :: png_renderer_t
+    type, extends(encoded_renderer_t) :: png_renderer_t
         type(canvas_t) :: cv
         type(pathbuf_t) :: pb
         real(dp) :: dpi = DEFAULT_DPI
@@ -59,14 +61,26 @@ contains
 
     ! Has to be called before open_canvas, since the canvas is allocated at
     ! its final pixel size and never resampled.
-    subroutine png_set_dpi(self, dpi)
+    subroutine png_set_dpi(self, dpi, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: dpi
 
+        type(status_t), intent(out) :: status
+
+        call check_finite([dpi], status=status)
+        if (.not. status%ok()) return
+        if (dpi <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "png: dpi must be positive")
+            return
+        end if
+        if (self%is_open) then
+            call status%set(ERROR_STATE, "png: set dpi before opening the canvas")
+            return
+        end if
         self%dpi = dpi
     end subroutine png_set_dpi
 
-    subroutine png_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+    subroutine png_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: width, height
         integer, intent(in), optional :: bg_rgb(3)
@@ -75,6 +89,37 @@ contains
         integer :: rgb(3), wpx, hpx
         real(dp) :: alpha, s
 
+        type(status_t), intent(out) :: status
+
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status=status)
+        if (.not. status%ok()) return
+        call check_finite([self%dpi], status)
+        if (.not. status%ok()) return
+        s = self%dpi/72.0_dp
+        if (s <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "png: dpi is not a usable positive scale")
+            return
+        end if
+        if (s > 1.0_dp) then
+            if (max(width, height) > real(huge(1) - 1, dp)/s) then
+                call status%set(ERROR_ARGUMENT, "png: canvas exceeds the pixel dimension limit")
+                return
+            end if
+        else
+            if (max(width, height)*s > real(huge(1) - 1, dp)) then
+                call status%set(ERROR_ARGUMENT, "png: canvas exceeds the pixel dimension limit")
+                return
+            end if
+        end if
+        wpx = max(1, nint(width*s))
+        hpx = max(1, nint(height*s))
+        ! Reserve room for RGBA, scanline filters and worst-case encoded data
+        ! without overflowing the default-integer lengths used by the encoder.
+        if (real(wpx, dp)*real(hpx, dp) > real(huge(1)/8, dp)) then
+            call status%set(ERROR_ARGUMENT, "png: canvas exceeds the encoded image size limit")
+            return
+        end if
+        self%has_output = .false.
         ! No background colour means no figure patch at all, which is how
         ! transparent=True reaches the backend. The vector formats express
         ! that by drawing nothing; a raster has to say it, as alpha zero.
@@ -92,26 +137,30 @@ contains
 
         self%width = width
         self%height = height
-        s = self%dpi/72.0_dp
-        wpx = max(1, nint(width*s))
-        hpx = max(1, nint(height*s))
         call canvas_init(self%cv, wpx, hpx, s, rgb, alpha)
         self%is_open = .true.
     end subroutine png_open_canvas
 
-    subroutine png_close_canvas(self)
+    subroutine png_close_canvas(self, status)
         class(png_renderer_t), intent(inout) :: self
         integer, allocatable :: rgba(:, :, :)
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
         if (.not. self%is_open) return
-        rgba = canvas_rgba(self%cv)
+        call canvas_rgba(self%cv, rgba, status=status)
+        if (.not. status%ok()) return
         if (self%keep_pixels) then
             call pack_rgb(self, rgba)
         else
             self%out = png_encode(self%cv%w, self%cv%h, rgba)
         end if
-        call canvas_free(self%cv)
+        call canvas_free(self%cv, status=status)
+        if (.not. status%ok()) return
         self%is_open = .false.
+        self%has_output = .not. self%keep_pixels
     end subroutine png_close_canvas
 
     ! GIF has no alpha to speak of, so the frame is flattened onto white
@@ -137,10 +186,17 @@ contains
         end do
     end subroutine pack_rgb
 
-    function png_bytes(self) result(b)
+    function png_bytes(self, status) result(b)
         class(png_renderer_t), intent(in) :: self
         character(len=:), allocatable :: b
 
+        type(status_t), intent(out) :: status
+
+        b = ""
+        if (.not. self%has_output .or. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: no finished encoded output")
+            return
+        end if
         if (allocated(self%out)) then
             b = self%out
         else
@@ -241,24 +297,36 @@ contains
         end do
     end subroutine build_path
 
-    subroutine png_draw_path(self, x, y, verbs, n_verb, paint)
+    subroutine png_draw_path(self, x, y, verbs, n_verb, paint, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_path(x, y, verbs, n_verb, paint, status=status)
+        if (.not. status%ok()) return
         call build_path(self, x, y, verbs, n_verb)
         call maybe_snap(self, paint)
         call paint_buf(self, paint)
     end subroutine png_draw_path
 
-    subroutine png_draw_rect(self, x, y, w, h, paint, radius)
+    subroutine png_draw_rect(self, x, y, w, h, paint, radius, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
         real(dp) :: r, k, x0, y0, x1, y1
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(x, y, w, h, paint, radius, status=status)
+        if (.not. status%ok()) return
         r = 0.0_dp
         if (present(radius)) r = min(radius, 0.5_dp*min(w, h))
         x0 = tx(self, x); y0 = ty(self, y)
@@ -291,7 +359,7 @@ contains
     ! Straight to a polygon rather than through four cubics: the rasterizer
     ! would flatten the cubics anyway, and going direct gives an exact circle
     ! instead of the 0.02% error the cubic approximation carries.
-    subroutine png_draw_circle(self, cx, cy, r, paint)
+    subroutine png_draw_circle(self, cx, cy, r, paint, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
@@ -299,6 +367,12 @@ contains
         real(dp) :: rp, a
         integer :: i, n
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(cx, cy, r, r, paint, status=status)
+        if (.not. status%ok()) return
         rp = r*self%cv%scale
         n = max(12, min(256, ceiling(rp*3.0_dp)))
         call pb_reset(self%pb)
@@ -318,7 +392,7 @@ contains
     ! backend has to draw it every time, so the saving here is only in not
     ! rebuilding the shape description. Stamping is still one fill per point
     ! because overlapping markers must composite, not union.
-    subroutine png_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+    subroutine png_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         real(dp), intent(in) :: mx(:), my(:)
@@ -327,6 +401,20 @@ contains
         integer :: i, j, p
         real(dp), allocatable :: sx(:), sy(:)
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (size(x) /= size(y)) then
+            call status%set(ERROR_ARGUMENT, "markers: inconsistent coordinate counts")
+            return
+        end if
+        call check_finite(x, status=status)
+        if (.not. status%ok()) return
+        call check_finite(y, status=status)
+        if (.not. status%ok()) return
+        call check_path(mx, my, mverbs, n_mverb, paint, status=status)
+        if (.not. status%ok()) return
         allocate (sx(size(mx)), sy(size(my)))
         do i = 1, size(x)
             call pb_reset(self%pb)
@@ -359,7 +447,7 @@ contains
 
     ! All the glyphs of a run go into one path and are filled together,
     ! so that two glyphs that touch do not double their antialiased edge.
-    subroutine png_draw_glyphs(self, x, y, run, paint, angle)
+    subroutine png_draw_glyphs(self, x, y, run, paint, angle, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
@@ -371,6 +459,16 @@ contains
         integer :: i, j, p, nv, np
         type(paint_t) :: pp
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, angle], status=status)
+        if (.not. status%ok()) return
+        call check_paint(paint, status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         if (run%n == 0) return
         ca = cos(angle*3.141592653589793_dp/180.0_dp)
         sa = sin(angle*3.141592653589793_dp/180.0_dp)
@@ -433,13 +531,19 @@ contains
 
     end subroutine png_draw_glyphs
 
-    subroutine png_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+    subroutine png_draw_image(self, x, y, w, h, rgba, nx, ny, paint, status)
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_image(x, y, w, h, rgba, nx, ny, paint, status=status)
+        if (.not. status%ok()) return
         call blit_image(self%cv, x - self%ox, y - self%oy, w, h, rgba, nx, ny, &
                         paint%fill_alpha, shifted_clip(self, paint%clip))
     end subroutine png_draw_image

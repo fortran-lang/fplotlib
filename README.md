@@ -253,6 +253,17 @@ fpm build --compiler flang
 fpm build --compiler lfortran
 ```
 
+Below the plotting API, the renderers, the text and math layout and file
+output report failures instead of stopping the program: every call that can
+fail takes a required `status_t` argument from `fplotlib_status`. Check
+`status%ok()` before using the call's other outputs or making another call;
+there is no hidden last-error state. The `fplotlib` procedures themselves,
+`savefig` among them, stop the program with the message.
+
+`fplotlib_render:renderer_t` is a drawing target, not a file writer; only
+`encoded_renderer_t`, which the SVG, PNG, PDF and EPS backends extend, adds
+`bytes`.
+
 The pixi tasks below are for developing fplotlib itself, with pinned compilers.
 
 ## Build
@@ -346,6 +357,7 @@ src/           library modules
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib.f90         the plotting API
+               fplotlib_status.f90  the status_t of every call that can fail
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
 ```

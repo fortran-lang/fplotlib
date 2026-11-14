@@ -18,11 +18,12 @@
 ! The faces are Lato: regular, bold and italic; bold italic is set in
 ! bold.
 module fplotlib_text
+    use fplotlib_render_checks
+    use fplotlib_resources
+    use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
-    use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
-                               glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC
+    use fplotlib_glyphs
     implicit none
     private
 
@@ -49,7 +50,7 @@ contains
 
     ! Append s, set in face at size, to run, starting with the pen at
     ! (x0, y0). xend is where the pen is left.
-    subroutine text_layout(s, size, face, x0, y0, run, xend)
+    subroutine text_layout(s, size, face, x0, y0, run, xend, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size, x0, y0
         integer, intent(in) :: face
@@ -59,6 +60,14 @@ contains
         integer :: n, k, gid, prev
         real(dp) :: pen
 
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x0, y0], status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         call code_points(s, cps, n)
         pen = x0
         prev = 0
@@ -66,7 +75,8 @@ contains
             gid = glyph_cmap(face, cps(k))
             if (gid == 0) gid = glyph_cmap(face, 32)
             if (prev > 0) pen = pen + glyph_kern(face, prev, gid)*size
-            call run_add(run, gid, pen, y0, size)
+            call run_add(run, gid, pen, y0, size, status=status)
+            if (.not. status%ok()) return
             pen = pen + glyph_adv(gid)*size
             prev = gid
         end do
@@ -74,25 +84,29 @@ contains
     end subroutine text_layout
 
     ! Width of s in points, laid out exactly as text_layout lays it out.
-    function text_width(s, size, face) result(w)
+    subroutine text_width(s, size, face, width, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in) :: face
-        real(dp) :: w
+        real(dp), intent(out) :: width
         integer, allocatable :: cps(:)
         integer :: n, k, gid, prev
 
+        type(status_t), intent(out) :: status
+
+        width = 0.0_dp
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
         call code_points(s, cps, n)
-        w = 0.0_dp
         prev = 0
         do k = 1, n
             gid = glyph_cmap(face, cps(k))
             if (gid == 0) gid = glyph_cmap(face, 32)
-            if (prev > 0) w = w + glyph_kern(face, prev, gid)*size
-            w = w + glyph_adv(gid)*size
+            if (prev > 0) width = width + glyph_kern(face, prev, gid)*size
+            width = width + glyph_adv(gid)*size
             prev = gid
         end do
-    end function text_width
+    end subroutine text_width
 
     ! The code points of s, with combining marks composed onto the letter
     ! before them where the repertoire has the result, and the characters
@@ -135,7 +149,7 @@ contains
         run%n = 0
     end subroutine run_reset
 
-    subroutine run_add(run, gid, x, y, fs)
+    subroutine run_add(run, gid, x, y, fs, status)
         type(glyphrun_t), intent(inout) :: run
         integer, intent(in) :: gid
         real(dp), intent(in) :: x, y, fs
@@ -143,10 +157,20 @@ contains
         real(dp), allocatable :: t(:)
         integer :: cap
 
+        type(status_t), intent(out) :: status
+
+        call initialize_resources(status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, fs], status=status)
+        if (.not. status%ok()) return
+        if (gid < 0 .or. gid > NGLYPH .or. fs < 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "run_add: invalid glyph or size")
+            return
+        end if
         if (.not. allocated(run%gid)) then
             allocate (run%gid(16), run%x(16), run%y(16), run%size(16))
         else if (run%n >= size(run%gid)) then
-            cap = 2*size(run%gid)
+            cap = max(16, 2*size(run%gid))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)
