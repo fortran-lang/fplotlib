@@ -8,6 +8,7 @@ module fplotlib_docclass
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight, &
                                face_capheight
+    use fplotlib_text, only: text_width
     use fplotlib_doctree
     use fplotlib_markdown, only: md_parse
     use fplotlib_myst_inline, only: md_inlines, md_label
@@ -1304,14 +1305,14 @@ contains
             do k = 1, len(line)
                 if (line(k:k) == achar(9) .or. line(k:k) == achar(13)) line(k:k) = " "
             end do
-            ts_word_width_value1 = ts_word_width(line, face, fs, status=status)
+            call ts_word_width(line, face, fs, ts_word_width_value1, status=status)
             if (.not. status%ok()) return
             natural = max(natural, ts_word_width_value1)
             i = 1
             do while (i <= len(line))
                 j = index(line(i:), " ")
                 if (j == 0) j = len(line) - i + 2
-                ts_word_width_value2 = ts_word_width(line(i:i + j - 2), face, fs, status=status)
+                call ts_word_width(line(i:i + j - 2), face, fs, ts_word_width_value2, status=status)
                 if (.not. status%ok()) return
                 minimum = max(minimum, ts_word_width_value2)
                 i = i + j
@@ -1417,7 +1418,7 @@ contains
         st%size = size
         hang = 0.0_dp
         if (len(num) > 0) then
-            text_width_value1 = text_width(num, FACE_BOLD, size, status=status)
+            call text_width(num, size, FACE_BOLD, text_width_value1, status=status)
             if (.not. status%ok()) return
             hang = text_width_value1 + size
         end if
@@ -1657,7 +1658,7 @@ contains
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
         if (.not. status%ok()) return
         call ts_set_parskip(state%engine, ts_glue_t())
-        sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size, status=status)
+        call text_width(" ", 0.9_dp*ctx%size, FACE_REGULAR, sp, status=status)
         if (.not. status%ok()) return
         a = 1
         do while (a <= len(text))
@@ -2423,18 +2424,5 @@ contains
             end do
         end do
     end function roman
-
-    ! The width of a string in a face, as the engine measures words.
-    real(dp) function text_width(s, face, size, status)
-        use fplotlib_text, only: tw => text_width
-        character(len=*), intent(in) :: s
-        integer, intent(in) :: face
-        real(dp), intent(in) :: size
-        type(status_t), intent(out) :: status
-
-        text_width = 0.0_dp
-        text_width = tw(s, size, face, status=status)
-        if (.not. status%ok()) return
-    end function text_width
 
 end module fplotlib_docclass

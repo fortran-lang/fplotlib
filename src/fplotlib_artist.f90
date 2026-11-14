@@ -463,10 +463,10 @@ contains
         if (present(weight)) wt = weight
         if (present(slant)) sl = slant
         if (math_is(s)) then
-            w = math_width(s, size, text_face(wt, sl), status=status)
+            call math_width(s, size, w, text_face(wt, sl), status=status)
             if (.not. status%ok()) return
         else
-            w = text_width(s, size, text_face(wt, sl), status=status)
+            call text_width(s, size, text_face(wt, sl), w, status=status)
             if (.not. status%ok()) return
         end if
     end function str_width

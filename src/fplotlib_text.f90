@@ -92,30 +92,29 @@ contains
     end subroutine text_layout
 
     ! Width of s in points, laid out exactly as text_layout lays it out.
-    function text_width(s, size, face, status) result(w)
+    subroutine text_width(s, size, face, width, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in) :: face
-        real(dp) :: w
+        real(dp), intent(out) :: width
         integer, allocatable :: cps(:)
         integer :: n, k, gid, prev
 
         type(status_t), intent(out) :: status
 
-        w = 0.0_dp
+        width = 0.0_dp
         call check_font(face, size, status=status)
         if (.not. status%ok()) return
         call code_points(s, cps, n)
-        w = 0.0_dp
         prev = 0
         do k = 1, n
             gid = glyph_cmap(face, cps(k))
             if (gid == 0) gid = glyph_cmap(face, 32)
-            if (prev > 0) w = w + glyph_kern(face, prev, gid)*size
-            w = w + glyph_adv(gid)*size
+            if (prev > 0) width = width + glyph_kern(face, prev, gid)*size
+            width = width + glyph_adv(gid)*size
             prev = gid
         end do
-    end function text_width
+    end subroutine text_width
 
     ! The code points of s, with combining marks composed onto the letter
     ! before them where the repertoire has the result, and the characters

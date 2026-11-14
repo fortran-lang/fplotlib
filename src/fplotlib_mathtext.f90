@@ -261,20 +261,20 @@ contains
     end function math_is
 
     ! Width of a string in points, mathtext or not, with its text in face.
-    function math_width(s, size, face, context, status) result(w)
+    subroutine math_width(s, size, width, face, context, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in), optional :: face
         type(math_context_t), intent(inout), optional :: context
-        real(dp) :: w
+        real(dp), intent(out) :: width
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         type(status_t), intent(out) :: status
 
-        w = 0.0_dp
-        call math_layout(s, size, run, rules, w, face, context, status=status)
+        width = 0.0_dp
+        call math_layout(s, size, run, rules, width, face, context, status=status)
         if (.not. status%ok()) return
-    end function math_width
+    end subroutine math_width
 
     ! Lay a string out: its glyphs are appended to run and its rules to
     ! rules, starting at the origin, and width is how far it reaches.

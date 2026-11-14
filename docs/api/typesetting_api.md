@@ -190,7 +190,7 @@ ts_page_draw(state, r, p, status)
 ts_hsize(state) -> width
 ts_vsize(state) -> height
 ts_font_size(state) -> size
-ts_word_width(text, face, fontsize, status) -> width
+ts_word_width(text, face, fontsize, width, status)
 ts_xheight(size) -> height
 ts_quad(size) -> width
 ```
@@ -212,7 +212,7 @@ ts_line_info(state, l, gids, xs, n, status)
 fplotlib_text
   text_face(weight, slant) -> face
   text_layout(s, size, face, x0, y0, run, xend, status)
-  text_width(s, size, face, status) -> width
+  text_width(s, size, face, width, status)
   code_points(s, cps, n, [first, last])
   run_reset(run)
   run_add(run, gid, x, y, fs, status)
@@ -225,7 +225,7 @@ fplotlib_hyph
 
 fplotlib_mathtext
   math_is(s) -> logical
-  math_width(s, size, [face, context], status) -> width
+  math_width(s, size, width, [face, context], status)
   math_layout(s, size, run, rules, width, [face, context], status)
   math_formula(s, size, display, run, rules, w, h, d, [context], status)
   math_frame(s, size, display, frame, [paint, context], status)
@@ -236,6 +236,9 @@ fplotlib_grid
 ```
 
 `math_is` only detects dollar signs; it is not a syntax validator.
+Fallible public measurements are subroutines with an explicit result and
+required status, so each measurement can be checked before its result is used.
+Infallible queries such as `ts_hsize` and `document%page_count()` remain functions.
 `math_layout` handles mixed text and `$...$`; `math_formula` and `math_frame`
 take a formula without dollar delimiters. `math_context_t` is optional reusable
 scratch storage, not a global math workspace. `mrules_t` holds rule positions.

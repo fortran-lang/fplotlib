@@ -1563,7 +1563,7 @@ contains
         rlw = 0.0_dp
         if (allocated(a%tbl_row)) then
             do i = 1, nr
-                math_width_value1 = math_width(trim(a%tbl_row(i)), fs, status=status)
+                call math_width(trim(a%tbl_row(i)), fs, math_width_value1, status=status)
                 if (.not. status%ok()) return
                 rlw = max(rlw, math_width_value1*(1.0_dp + 2.0_dp*PAD))
             end do

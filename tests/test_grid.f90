@@ -96,17 +96,25 @@ contains
     end subroutine widths_check
 
     subroutine word_width_check(nfail)
+        use fplotlib_text, only: text_width
+        use fplotlib_mathtext, only: math_width
         integer, intent(inout) :: nfail
         character(len=3), parameter :: double_struck_c = achar(226)//achar(132)//achar(130)
         integer :: g
         real(dp) :: measured, expected
 
         type(status_t) :: status
+        call text_width("label", -1.0_dp, FACE_REGULAR, measured, status)
+        call check(status%code == ERROR_ARGUMENT, "text measurement propagates an invalid size", nfail)
+        call math_width("$x$", -1.0_dp, measured, status=status)
+        call check(status%code == ERROR_ARGUMENT, "math measurement propagates an invalid size", nfail)
+        call ts_word_width("label", FACE_REGULAR, -1.0_dp, measured, status)
+        call check(status%code == ERROR_ARGUMENT, "word measurement propagates an invalid size", nfail)
         g = glyph_cmap(FACE_MATH, 8450)
         call check(glyph_cmap(FACE_REGULAR, 8450) == 0 .and. g > 0, &
                    "double-struck C exercises the math-face fallback", nfail)
         if (g == 0) return
-        measured = ts_word_width(double_struck_c//double_struck_c, FACE_REGULAR, 12.0_dp, status=status)
+        call ts_word_width(double_struck_c//double_struck_c, FACE_REGULAR, 12.0_dp, measured, status=status)
         call require_ok(status)
         expected = (2.0_dp*glyph_adv(g) + glyph_kern(FACE_MATH, g, g))*12.0_dp
         call check(abs(measured - expected) < 1.0e-10_dp, &

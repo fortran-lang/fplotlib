@@ -596,10 +596,11 @@ contains
     end subroutine measure
 
     ! Measure with the same Unicode normalization, font fallback and kerning as ts_word.
-    real(dp) function ts_word_width(text, face, fontsize, status) result(width)
+    subroutine ts_word_width(text, face, fontsize, width, status)
         character(len=*), intent(in) :: text
         integer, intent(in) :: face
         real(dp), intent(in) :: fontsize
+        real(dp), intent(out) :: width
         integer, allocatable :: cps(:)
         integer :: n
         real(dp) :: height, depth
@@ -610,7 +611,7 @@ contains
         if (.not. status%ok()) return
         call code_points(text, cps, n)
         call shape(cps(1:n), face, fontsize, width, height, depth)
-    end function ts_word_width
+    end subroutine ts_word_width
 
     subroutine shape(cps, face, s, w, h, d)
         integer, intent(in) :: cps(:), face
