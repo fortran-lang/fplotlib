@@ -8,7 +8,8 @@ default instance.
 Use `markdown` to append blocks, `include_frame` to snapshot supplied graphics,
 and `include_table` to copy numerical or character cells. `export` performs
 layout only when the content has changed, then returns PDF/SVG/PNG/EPS byte
-assets. `page_frame` returns an owned page snapshot. `clear` starts a fresh
+assets; `save(filename, dpi)` writes the same pages directly to files.
+`page_frame` returns an owned page snapshot. `clear` starts a fresh
 description without invalidating previously returned frames or byte assets.
 
 Captions and labels are stored with the content. Figure/table numbers are

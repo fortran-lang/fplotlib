@@ -23,6 +23,7 @@ fplotlib_glyphs_data
 fplotlib_grid
 fplotlib_hyph
 fplotlib_hyph_data
+fplotlib_io
 fplotlib_markdown
 fplotlib_mathsym
 fplotlib_mathtext

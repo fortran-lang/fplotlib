@@ -21,9 +21,9 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
-    use fplotlib_scene, only: frame_t, paged_document_t
-    use fplotlib_document, only: document_asset_t, export_document
+    use fplotlib_scene, only: frame_t
+    use fplotlib_document, only: document_asset_t
+    use fplotlib_io, only: file_ext, write_bytes
     use fplotlib_report, only: report_t
     implicit none
     private
@@ -67,8 +67,6 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
-    public :: frame_t, paged_document_t, layout_context_t, layout_markdown, layout_fragment
-    public :: render_frame, save_document
     public :: markdown, include_figure, include_table, new_report, save, render_report, document_asset_t
 
     ! Only this convenience facade selects an implicit report. The builder
@@ -6121,23 +6119,6 @@ contains
     ! another come out wrong.
     ! ------------------------------------------------------------------
 
-    ! The extension picks the backend, as it does in matplotlib. A name with
-    ! no extension at all is taken as SVG.
-    function file_ext(filename) result(ext)
-        character(len=*), intent(in) :: filename
-        character(len=:), allocatable :: ext
-        integer :: d, sl
-
-        d = index(filename, ".", back=.true.)
-        sl = max(index(filename, "/", back=.true.), &
-                 index(filename, achar(92), back=.true.))
-        if (d <= sl + 1) then
-            ext = "svg"
-        else
-            ext = lower(filename(d + 1:len_trim(filename)))
-        end if
-    end function file_ext
-
     ! Writing SVG bytes into a .png would produce a file no viewer can open,
     ! so an unsupported extension is a hard error rather than a silent default.
     subroutine reject_ext(filename)
@@ -6238,79 +6219,8 @@ contains
     subroutine save(filename, dpi)
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
-        type(document_asset_t), allocatable :: assets(:)
-        call render_report(file_ext(filename), assets, dpi)
-        call write_assets(assets, filename)
+        call current_report%save(filename, dpi)
     end subroutine save
-
-    subroutine save_document(document, filename, dpi)
-        type(paged_document_t), intent(in) :: document
-        character(len=*), intent(in) :: filename
-        real(dp), intent(in), optional :: dpi
-        type(document_asset_t), allocatable :: assets(:)
-        character(len=:), allocatable :: ext
-        ext = file_ext(filename)
-        select case (ext)
-        case ("pdf", "svg", "png", "eps")
-            call export_document(document, ext, assets, dpi)
-            call write_assets(assets, filename)
-        case default
-            call reject_ext(filename)
-        end select
-    end subroutine save_document
-
-    subroutine write_assets(assets, filename)
-        type(document_asset_t), intent(in) :: assets(:)
-        character(len=*), intent(in) :: filename
-        integer :: p
-        do p = 1, size(assets)
-            call write_bytes(page_file(filename, p, size(assets)), assets(p)%bytes)
-        end do
-    end subroutine write_assets
-
-    ! The file page p of n goes into: the name itself for a single page,
-    ! name-p.ext for each of several.
-    function page_file(filename, p, n) result(f)
-        character(len=*), intent(in) :: filename
-        integer, intent(in) :: p, n
-        character(len=:), allocatable :: f
-        character(len=16) :: num
-        integer :: dot, slash
-        if (n <= 1) then
-            f = filename
-            return
-        end if
-        write (num, "(I0)") p
-        dot = index(filename, ".", back=.true.)
-        slash = max(index(filename, "/", back=.true.), index(filename, achar(92), back=.true.))
-        if (dot <= slash + 1) then
-            f = trim(filename)//"-"//trim(num)//".svg"
-        else
-            f = filename(1:dot - 1)//"-"//trim(num)//filename(dot:)
-        end if
-    end function page_file
-
-    subroutine write_bytes(filename, data)
-        character(len=*), intent(in) :: filename, data
-        integer :: u, ios
-
-        open (newunit=u, file=trim(filename), status="replace", action="write", &
-              form="unformatted", access="stream", iostat=ios)
-        if (ios /= 0) then
-            print *, "fplotlib: failed to open ", trim(filename), ", iostat=", ios
-            error stop "fplotlib: output file could not be opened"
-        end if
-        if (len(data) > 0) then
-            write (u, iostat=ios) data
-            if (ios /= 0) then
-                print *, "fplotlib: failed to write ", trim(filename), ", iostat=", ios
-                close (u)
-                error stop "fplotlib: output write failed"
-            end if
-        end if
-        close (u, iostat=ios)
-        if (ios /= 0) error stop "fplotlib: output close failed"
-    end subroutine write_bytes
 
     ! ------------------------------------------------------------------
     ! Animation. matplotlib builds an Animation object around a callback;

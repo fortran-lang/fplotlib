@@ -36,7 +36,7 @@ module fplotlib_backend_eps
 
     public :: eps_renderer_t
 
-    type, extends(renderer_t) :: eps_renderer_t
+    type, extends(encoded_renderer_t) :: eps_renderer_t
         type(svg_builder) :: c
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp

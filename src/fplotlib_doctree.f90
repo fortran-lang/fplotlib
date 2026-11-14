@@ -146,7 +146,7 @@ contains
         integer, intent(in) :: parent
         type(frame_t), intent(in) :: frame
         integer :: handle
-        call doc%graphics%add_frame(frame, handle)
+        call doc%graphics%import_frame(frame, handle)
         k = doc_add(doc, parent, DOC_FRAME)
         doc%nodes(k)%num = handle
         doc%ngraphics = doc%ngraphics + 1

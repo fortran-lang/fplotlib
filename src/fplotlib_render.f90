@@ -1,6 +1,6 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract renderer that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF, EPS and recorders implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
@@ -72,14 +72,13 @@ module fplotlib_render
     implicit none
     private
 
-    public :: renderer_t, paint_t, font_t, clip_t, glyphrun_t
+    public :: renderer_t, encoded_renderer_t, paint_t, font_t, clip_t, glyphrun_t
     public :: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     public :: CAP_BUTT, CAP_ROUND, CAP_SQUARE
     public :: JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
     public :: FILL_NONZERO, FILL_EVENODD
     public :: ANCHOR_START, ANCHOR_MIDDLE, ANCHOR_END
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
-    public :: FAMILY_SANS, FAMILY_SERIF, FAMILY_MONO
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
     public :: MAX_DASH
 
@@ -99,10 +98,8 @@ module fplotlib_render
     integer, parameter :: BASE_ALPHABETIC = 0, BASE_MIDDLE = 1
     integer, parameter :: BASE_TOP = 2, BASE_BOTTOM = 3
 
-    ! A closed set, not a font name string. Every backend draws from the
-    ! compiled-in outlines, which are one sans family, so the family is
-    ! carried for the caller's sake and draws the same whatever it says.
-    integer, parameter :: FAMILY_SANS = 0, FAMILY_SERIF = 1, FAMILY_MONO = 2
+    ! Styles of the built-in sans family. Font selection is carried by glyph
+    ! IDs in a finished run, not by an unsupported family preference.
     integer, parameter :: WEIGHT_NORMAL = 0, WEIGHT_BOLD = 1
     integer, parameter :: SLANT_ROMAN = 0, SLANT_ITALIC = 1
 
@@ -147,7 +144,6 @@ module fplotlib_render
 
     type :: font_t
         real(dp) :: size = 10.0_dp
-        integer :: family = FAMILY_SANS
         integer :: weight = WEIGHT_NORMAL
         integer :: slant = SLANT_ROMAN
     end type font_t
@@ -178,7 +174,6 @@ module fplotlib_render
         ! Lifecycle.
         procedure(open_canvas_i), deferred :: open_canvas
         procedure(close_canvas_i), deferred :: close_canvas
-        procedure(bytes_i), deferred :: bytes
 
         ! The primitives. Every one is a decision a backend has to make for
         ! itself, which is why none of them has a default.
@@ -196,6 +191,13 @@ module fplotlib_render
         procedure :: begin_frame
         procedure :: end_frame
     end type renderer_t
+
+    ! Encoding is separate from drawing: a recorder or an interactive target
+    ! need not invent a file format or implement a meaningless bytes method.
+    type, abstract, extends(renderer_t) :: encoded_renderer_t
+    contains
+        procedure(bytes_i), deferred :: bytes
+    end type encoded_renderer_t
 
     abstract interface
 
@@ -227,8 +229,8 @@ module fplotlib_render
         ! file type, so binary formats can return raw bytes and callers can
         ! write a file or hand it to a notebook without a temporary file.
         function bytes_i(self) result(b)
-            import :: renderer_t
-            class(renderer_t), intent(in) :: self
+            import :: encoded_renderer_t
+            class(encoded_renderer_t), intent(in) :: self
             character(len=:), allocatable :: b
         end function bytes_i
 

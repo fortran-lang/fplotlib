@@ -6,7 +6,7 @@ module fplotlib_report
     use fplotlib_markdown, only: md_parse, md_append
     use fplotlib_docclass, only: layout_context_t, doc_typeset
     use fplotlib_scene, only: frame_t, paged_document_t
-    use fplotlib_document, only: document_asset_t, export_document
+    use fplotlib_document, only: document_asset_t, export_document, save_document
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
@@ -30,6 +30,7 @@ module fplotlib_report
         procedure, private :: table_integer => report_table_integer
         generic :: include_table => table_text, table_real, table_integer
         procedure :: export => report_export
+        procedure :: save => report_save
         procedure :: page_count => report_page_count
         procedure :: page_frame => report_page_frame
     end type report_t
@@ -191,6 +192,14 @@ contains
         call layout(self)
         call export_document(self%pages, format, assets, dpi)
     end subroutine report_export
+
+    subroutine report_save(self, filename, dpi)
+        class(report_t), intent(inout) :: self
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        call layout(self)
+        call save_document(self%pages, filename, dpi)
+    end subroutine report_save
 
     integer function report_page_count(self) result(n)
         class(report_t), intent(inout) :: self

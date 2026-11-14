@@ -1,14 +1,15 @@
-! Export owned pages without a frontend, filesystem, or live layout context.
+! Export owned pages to memory or files, without a frontend or live layout context.
 module fplotlib_document
     use fplotlib_style, only: dp
     use fplotlib_scene, only: paged_document_t
+    use fplotlib_io, only: file_ext, write_bytes
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_svg, only: svg_renderer_t
     use fplotlib_backend_png, only: png_renderer_t
     use fplotlib_backend_eps, only: eps_renderer_t
     implicit none
     private
-    public :: document_asset_t, export_document
+    public :: document_asset_t, export_document, save_document
 
     type :: document_asset_t
         integer :: page = 0
@@ -77,5 +78,38 @@ contains
             error stop "export_document: expected pdf, svg, png or eps"
         end select
     end subroutine export_document
+
+    subroutine save_document(document, filename, dpi)
+        type(paged_document_t), intent(in) :: document
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        type(document_asset_t), allocatable :: assets(:)
+        integer :: p
+        call export_document(document, file_ext(filename), assets, dpi)
+        do p = 1, size(assets)
+            call write_bytes(page_file(filename, p, size(assets)), assets(p)%bytes)
+        end do
+    end subroutine save_document
+
+    ! A single asset uses filename; multiple assets use name-page.ext.
+    function page_file(filename, p, n) result(f)
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: p, n
+        character(len=:), allocatable :: f
+        character(len=16) :: num
+        integer :: dot, slash
+        if (n <= 1) then
+            f = filename
+            return
+        end if
+        write (num, "(i0)") p
+        dot = index(filename, ".", back=.true.)
+        slash = max(index(filename, "/", back=.true.), index(filename, achar(92), back=.true.))
+        if (dot <= slash + 1) then
+            f = trim(filename)//"-"//trim(num)//".svg"
+        else
+            f = filename(1:dot - 1)//"-"//trim(num)//filename(dot:)
+        end if
+    end function page_file
 
 end module fplotlib_document

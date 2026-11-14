@@ -2349,7 +2349,7 @@ contains
         type(typeset_context_t), intent(inout) :: state
         type(frame_t), intent(in) :: frame
         integer, intent(out) :: handle
-        call state%graphics%add_frame(frame, handle)
+        call state%graphics%import_frame(frame, handle)
     end subroutine ts_import_frame
 
     ! An unbreakable block. Its contents remain a shared child frame.

@@ -9,13 +9,13 @@
 ! The annotation has its own layout context. Clearing the plotting state
 ! and reusing that context cannot invalidate the captured frames or report.
 program plot_frame_composition
-    use fplotlib, only: dp, figure, plot, title, xlabel, ylabel, grid, ylim, clf, &
-                        render_frame, frame_t, paged_document_t, layout_context_t, &
-                        layout_fragment, save_document
+    use fplotlib, only: dp, figure, plot, title, xlabel, ylabel, grid, ylim, clf
+    use fplotlib_draw, only: render_frame
     use fplotlib_doctree, only: doc_t, doc_add, doc_add_frame, DOC_DIV
     use fplotlib_markdown, only: md_parse, md_append
-    use fplotlib_docclass, only: doc_typeset
-    use fplotlib_scene, only: recording_renderer_t, IDENTITY
+    use fplotlib_docclass, only: doc_typeset, layout_context_t, layout_fragment
+    use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
+    use fplotlib_document, only: save_document
     use fplotlib_render, only: paint_t, clip_t
     implicit none
     character, parameter :: NL = achar(10)
@@ -63,9 +63,9 @@ program plot_frame_composition
     call recorder%take(panel)
 
     call composed%init(w, h)
-    call composed%add_frame(chart, handle)
+    call composed%import_frame(chart, handle)
     call composed%place(handle)
-    call composed%add_frame(panel, handle)
+    call composed%import_frame(panel, handle)
     matrix = IDENTITY
     matrix(5:6) = [w - nw - 54.0_dp, 38.0_dp]
     clip = clip_t(.true., 0.0_dp, 0.0_dp, nw + 16.0_dp, nh + 16.0_dp)

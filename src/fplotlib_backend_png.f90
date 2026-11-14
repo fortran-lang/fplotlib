@@ -30,7 +30,7 @@ module fplotlib_backend_png
     ! the only place a pixel size is decided.
     real(dp), parameter :: DEFAULT_DPI = 100.0_dp
 
-    type, extends(renderer_t) :: png_renderer_t
+    type, extends(encoded_renderer_t) :: png_renderer_t
         type(canvas_t) :: cv
         type(pathbuf_t) :: pb
         real(dp) :: dpi = DEFAULT_DPI

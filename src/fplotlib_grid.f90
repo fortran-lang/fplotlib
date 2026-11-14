@@ -87,7 +87,7 @@ contains
         x = padding
         do i = 1, size(cells)
             call cells(i)%metrics(w, h, baseline)
-            call frame%add_frame(cells(i), handle)
+            call frame%import_frame(cells(i), handle)
             matrix = IDENTITY
             matrix(5:6) = [x, padding + ascent - baseline]
             call frame%place(handle, matrix)
@@ -101,7 +101,7 @@ contains
             call recorder%draw_rect(0.0_dp, row_h - thick, row_w, thick, paint)
             call recorder%close_canvas()
             call recorder%take(rule)
-            call frame%add_frame(rule, handle)
+            call frame%import_frame(rule, handle)
             call frame%place(handle)
         end if
         call frame%set_baseline(row_h)

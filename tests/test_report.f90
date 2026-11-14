@@ -89,8 +89,8 @@ contains
         type(frame_t) :: page
         type(document_asset_t), allocatable :: before(:), after(:)
         real(dp) :: numbers(1, 2)
-        integer :: counts(1, 2)
-        character(len=:), allocatable :: text, label
+        integer :: counts(1, 2), u, n
+        character(len=:), allocatable :: text, label, data
         label = "tab:"//repeat("long_label_", 8)//"end"
         call a%markdown("See Table @"//label//".")
         numbers(1, :) = [1.25_dp, 2.5_dp]
@@ -105,12 +105,20 @@ contains
         call a%export("svg", after)
         call check(before(1)%bytes == after(1)%bytes, "explicit reports do not share the default session", nfail)
         call a%page_frame(1, page)
-        text = page%logical_text()
+        text = page%source_text()
         call check(index(text, "See Table 1.") > 0, "long named table reference is retained", nfail)
         call check(index(text, "1.25000") > 0 .and. index(text, "-99") == 0, "numeric values are snapshotted", nfail)
         call check(index(text, "7") > 0 .and. index(text, "11") > 0, "integer tables reach layout", nfail)
+        call a%save("tests/out/explicit_report.pdf")
+        call a%export("pdf", after)
+        inquire (file="tests/out/explicit_report.pdf", size=n)
+        allocate (character(len=n) :: data)
+        open (newunit=u, file="tests/out/explicit_report.pdf", access="stream", form="unformatted", status="old")
+        read (u) data
+        close (u)
+        call check(data == after(1)%bytes, "explicit save uses the report's cached pages", nfail)
         call a%clear()
-        call check(index(page%logical_text(), "See Table 1.") > 0, "exported page outlives report reset", nfail)
+        call check(index(page%source_text(), "See Table 1.") > 0, "exported page outlives report reset", nfail)
         call new_report()
     end subroutine independent_reports
 
@@ -135,7 +143,7 @@ contains
         all_text = ""
         do p = 1, pages
             call report%page_frame(p, page)
-            text = page%logical_text()
+            text = page%source_text()
             call check(occurrences(text, "Index") == 1, "table header repeats exactly once per page", nfail)
             all_text = all_text//text
         end do

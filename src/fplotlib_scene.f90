@@ -31,7 +31,7 @@ module fplotlib_scene
         real(dp) :: w = 0, h = 0, baseline = 0
     end type box_t
 
-    ! Handles returned by add_frame belong to this owner. Placing a handle
+    ! Handles returned by import_frame belong to this owner. Placing a handle
     ! again shares its graphics; importing a frame makes an independent copy.
     type :: frame_t
         private
@@ -44,10 +44,10 @@ module fplotlib_scene
         procedure :: ink_bounds => frame_ink_bounds
         procedure :: set_baseline => frame_set_baseline
         procedure :: set_size => frame_set_size
-        procedure :: add_frame => frame_import
+        procedure :: import_frame => frame_import
         procedure :: place => frame_place
         procedure :: draw => frame_draw
-        procedure :: logical_text => frame_text
+        procedure :: source_text => frame_text
     end type frame_t
 
     type :: paged_document_t
@@ -72,7 +72,6 @@ module fplotlib_scene
     contains
         procedure :: open_canvas => record_open
         procedure :: close_canvas => record_close
-        procedure :: bytes => record_bytes
         procedure :: draw_path => record_path
         procedure :: draw_rect => record_rect
         procedure :: draw_circle => record_circle
@@ -352,6 +351,8 @@ contains
         end do
     end function text_of
 
+    ! Stored source in drawing order, including TeX for formulas. This is not
+    ! semantic text, accessibility text, or a reconstruction of the frontend.
     function frame_text(self) result(text)
         class(frame_t), intent(in) :: self
         character(len=:), allocatable :: text
@@ -480,12 +481,6 @@ contains
         call self%end_frame()
         self%is_open = .false.
     end subroutine record_close
-
-    function record_bytes(self) result(bytes)
-        class(recording_renderer_t), intent(in) :: self
-        character(len=:), allocatable :: bytes
-        error stop "recorder: use take() to obtain a frame, not bytes()"
-    end function record_bytes
 
     subroutine record_take(self, frame)
         class(recording_renderer_t), intent(inout) :: self
@@ -660,7 +655,7 @@ contains
             tmp(1:self%n) = self%pages(1:self%n)
             call move_alloc(tmp, self%pages)
         end if
-        call self%scene%add_frame(page, handle)
+        call self%scene%import_frame(page, handle)
         self%n = self%n + 1
         self%pages(self%n) = handle
     end subroutine document_add_page

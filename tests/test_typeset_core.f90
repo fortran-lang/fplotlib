@@ -10,7 +10,9 @@ module test_typeset_core
     use fplotlib_text, only: text_layout
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD
     use fplotlib_mathtext, only: math_context_t, math_frame
-    use fplotlib, only: figure, plot, clf, render_frame, render_png
+    use fplotlib_artist, only: append_text
+    use fplotlib, only: figure, plot, clf, render_png
+    use fplotlib_draw, only: render_frame
     implicit none
     private
     public :: typeset_core_check
@@ -23,6 +25,7 @@ contains
         call interleaved_layout(nfail)
         call owned_frames(nfail)
         call logical_text(nfail)
+        call recorded_source(nfail)
         call embedded_document(nfail)
         call captured_plot(nfail)
         print "(a,i0)", "typesetting core failures: ", nfail
@@ -110,14 +113,14 @@ contains
         end block
 
         call parent%init(160.0_dp, 60.0_dp)
-        call parent%add_frame(child, handle)
+        call parent%import_frame(child, handle)
         call parent%place(handle)
         matrix = IDENTITY
         matrix(5:6) = [80.0_dp, 30.0_dp]
         call parent%place(handle, matrix)
         call document%add_page(parent)
         call export_document(document, "svg", before)
-        call check(index(parent%logical_text(), "OwnedOwned") > 0, "shared child instances retain text", nfail)
+        call check(index(parent%source_text(), "OwnedOwned") > 0, "shared child instances retain text", nfail)
         call child%init(1.0_dp, 1.0_dp)
         call parent%init(2.0_dp, 2.0_dp)
         call export_document(document, "svg", after)
@@ -152,11 +155,24 @@ contains
         call ts_space(state, FACE_REGULAR, 10.0_dp)
         call ts_word(state, "three", FACE_REGULAR, 10.0_dp, color=16711680)
         call ts_finish_frame(state, frame)
-        call check(frame%logical_text() == "one two three", "colours preserve source order and spaces", nfail)
+        call check(frame%source_text() == "one two three", "colours preserve source order and spaces", nfail)
         call math_frame("\frac{x}{y}", 12.0_dp, .true., formula, context=math)
         call math_frame("z^2", 9.0_dp, .false., frame, context=math)
-        call check(formula%logical_text() == "\frac{x}{y}", "math frame retains its source independently", nfail)
+        call check(formula%source_text() == "\frac{x}{y}", "math frame retains its source independently", nfail)
     end subroutine logical_text
+
+    subroutine recorded_source(nfail)
+        integer, intent(inout) :: nfail
+        type(recording_renderer_t) :: recorder
+        type(frame_t) :: frame
+        call recorder%open_canvas(200.0_dp, 50.0_dp)
+        call append_text(recorder, 0.0_dp, 12.0_dp, "Plain.", "left", 10.0_dp, "#000000")
+        call append_text(recorder, 0.0_dp, 26.0_dp, "Cost \$2 and $x^2$.", "left", 10.0_dp, "#000000")
+        call recorder%close_canvas()
+        call recorder%take(frame)
+        call check(frame%source_text() == "Plain.Cost $2 and $x^2$.", &
+                   "recorded labels retain their source once without replacing cluster text", nfail)
+    end subroutine recorded_source
 
     subroutine embedded_document(nfail)
         integer, intent(inout) :: nfail
@@ -177,7 +193,7 @@ contains
         call export_document(document, "svg", after)
         call check(before(1)%bytes == after(1)%bytes, "embedded document owns source graphics", nfail)
         call document%page_frame(1, frame)
-        call check(index(frame%logical_text(), "A plot annotation") > 0, "embedded frame reaches finished page", nfail)
+        call check(index(frame%source_text(), "A plot annotation") > 0, "embedded frame reaches finished page", nfail)
     end subroutine embedded_document
 
     subroutine captured_plot(nfail)

@@ -51,7 +51,7 @@ module fplotlib_backend_pdf
         real(dp) :: w = 0.0_dp, h = 0.0_dp
     end type pdf_page_t
 
-    type, extends(renderer_t) :: pdf_renderer_t
+    type, extends(encoded_renderer_t) :: pdf_renderer_t
         ! The page content stream. The file itself is assembled in
         ! close_canvas, once the length of this is known.
         type(svg_builder) :: c

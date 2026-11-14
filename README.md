@@ -302,7 +302,7 @@ command semantics.
 `render_report(format, assets, dpi)` returns bytes in memory for notebooks or
 web hosts. It has the same non-destructive behavior as `save`. Callers needing
 several reports can use `fplotlib_report:report_t` directly: its `markdown`,
-`include_frame`, `include_table` and `export` methods are the same implementation
+`include_frame`, `include_table`, `export` and `save` methods are the same implementation
 used by the procedural facade. The explicit `include_frame` accepts a supplied
 frame instead of consulting global plotting state.
 
@@ -365,8 +365,10 @@ into that workspace. Text, equations and plots share the positioned
 those frames without knowing how they were laid out.
 
 ```fortran
-use fplotlib, only: dp, layout_context_t, paged_document_t, frame_t, &
-                    layout_markdown, layout_fragment, save_document
+use fplotlib, only: dp
+use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
+use fplotlib_scene, only: paged_document_t, frame_t
+use fplotlib_document, only: save_document
 
 type(layout_context_t) :: context
 type(paged_document_t) :: document
@@ -380,13 +382,22 @@ call save_document(document, "report.pdf")
 call save_document(document, "report.svg")
 ```
 
-`render_frame(frame)` captures the current plot without serializing an
-image. A frame's `add_frame(child, handle)` imports an owned copy;
+The `fplotlib` module exposes the high-level facade; explicit layout, frame,
+and export APIs are imported from their own modules.
+`fplotlib_draw:render_frame(frame)` captures the current plot without serializing
+an image. A frame's `import_frame(child, handle)` imports an owned copy;
 `place(handle, matrix, clip)` can reuse it at several positions. The six
 matrix entries are `[a,b,c,d,e,f]`, mapping a point to
 `(a*x+c*y+e, b*x+d*y+f)`. The optional rectangular clip is in the child's
 local coordinates. Frames retain a baseline separately from their layout
-size and ink bounds.
+size and ink bounds. `source_text()` concatenates stored glyph-run source in
+drawing order, including TeX for formulas; it is not semantic or accessibility
+text.
+
+`renderer_t` is a drawing target, not a file writer. Only
+`encoded_renderer_t` adds byte serialization for PDF/SVG/PNG/EPS.
+A `recording_renderer_t` produces a frame instead, with no filesystem or
+byte-export requirement.
 
 For report composition, `doc_add_frame(tree, parent, frame)` inserts a
 graphics block into a parsed document, and `md_append(text, tree)` adds

@@ -25,7 +25,7 @@ module fplotlib_backend_svg
 
     integer, parameter :: SCOPE_GROUP = 0, SCOPE_FRAME = 1, SCOPE_CLIPPED_FRAME = 2
 
-    type, extends(renderer_t) :: svg_renderer_t
+    type, extends(encoded_renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
         ! Serial numbers for the ids that <use> and clip-path refer to.
         integer :: n_marker = 0

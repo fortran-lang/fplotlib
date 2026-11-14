@@ -118,7 +118,7 @@ contains
         call ts_begin_par(state, ALIGN_LEFT, 0.0_dp)
         call ts_text(state, source, FACE_REGULAR, 12.0_dp, color=1193046)
         call ts_finish_frame(state, frame)
-        call check(frame%logical_text() == source, "plain UTF-8 retains whitespace and literal markup", nfail)
+        call check(frame%source_text() == source, "plain UTF-8 retains whitespace and literal markup", nfail)
         call check(ts_line_count(state) == 2, "CRLF is one hard line break", nfail)
         call observe(frame, probe)
         call check(probe%n == 2, "plain text paints two lines", nfail)
@@ -140,7 +140,7 @@ contains
         source = "one"//achar(10)//achar(10)//"two"
         call ts_text(state, source, FACE_REGULAR, 10.0_dp)
         call ts_finish_frame(state, frame)
-        call check(frame%logical_text() == source, "centred hard breaks retain blank lines in source", nfail)
+        call check(frame%source_text() == source, "centred hard breaks retain blank lines in source", nfail)
         call observe(frame, probe)
         if (probe%n == 2) then
             call check(probe%text(2)%y - probe%text(1)%y > 20.0_dp, "blank line retains vertical space", nfail)
@@ -152,7 +152,7 @@ contains
         source = "  "//achar(9)
         call ts_text(state, source, FACE_REGULAR, 10.0_dp)
         call ts_finish_frame(state, frame)
-        call check(frame%logical_text() == source, "whitespace-only plain text retains its source", nfail)
+        call check(frame%source_text() == source, "whitespace-only plain text retains its source", nfail)
 
         call ts_reset(state)
         call ts_set_page(state, 40.0_dp, 200.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
@@ -160,7 +160,7 @@ contains
         source = "one two  three four"
         call ts_text(state, source, FACE_REGULAR, 10.0_dp)
         call ts_finish_frame(state, frame)
-        call check(ts_line_count(state) > 1 .and. frame%logical_text() == source, &
+        call check(ts_line_count(state) > 1 .and. frame%source_text() == source, &
                    "wrapping preserves plain source whitespace exactly once", nfail)
     end subroutine plain_text_check
 
@@ -194,7 +194,7 @@ contains
         call check(w == 108.0_dp .and. h == 28.0_dp .and. baseline == h, &
                    "row accommodates both ascents and descents with a bottom baseline", nfail)
         call observe(row, probe)
-        call check(probe%n == 2 .and. row%logical_text() == "Updown", "both cells reach the row", nfail)
+        call check(probe%n == 2 .and. row%source_text() == "Updown", "both cells reach the row", nfail)
         if (probe%n == 2) then
             call check(probe%text(1)%x == 2.0_dp .and. probe%text(2)%x == 46.0_dp .and. &
                        probe%text(1)%y == 14.0_dp .and. probe%text(2)%y == 14.0_dp, &
@@ -214,7 +214,7 @@ contains
         call check(probe%nr == 0, "row decoration is optional", nfail)
         call cells(1)%init(0.0_dp, 0.0_dp)
         call cells(2)%init(0.0_dp, 0.0_dp)
-        call check(row%logical_text() == "Updown", "row owns its imported cells", nfail)
+        call check(row%source_text() == "Updown", "row owns its imported cells", nfail)
     end subroutine row_check
 
     subroutine pages_check(with_header, intro_lines, nfail)
@@ -274,7 +274,7 @@ contains
         header_pages = 0
         do p = 1, np
             call document%page_frame(p, page)
-            source = page%logical_text()
+            source = page%source_text()
             all_text = all_text//source
             page_rows = 0
             do i = 1, rows
@@ -341,8 +341,8 @@ contains
         end do
         call ts_finish_frame(state, frame)
         call frame%metrics(w, h, baseline)
-        call check(occurrences(frame%logical_text(), "HDR") == 1 .and. &
-                   occurrences(frame%logical_text(), "body") == 3 .and. h == 31.0_dp, &
+        call check(occurrences(frame%source_text(), "HDR") == 1 .and. &
+                   occurrences(frame%source_text(), "body") == 3 .and. h == 31.0_dp, &
                    "natural flow has adjoining rows and never synthesizes continuation headers", nfail)
         call ts_finish(state, document)
         call check(document%page_count() == 3, "repeated header reserves its full depth and topskip", nfail)
