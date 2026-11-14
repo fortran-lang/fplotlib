@@ -10,6 +10,7 @@ module fplotlib_docclass
                                face_capheight
     use fplotlib_text, only: text_width
     use fplotlib_doctree
+    use fplotlib_doctemplate
     use fplotlib_markdown, only: md_parse
     use fplotlib_myst_inline, only: md_inlines, md_label
     use fplotlib_myst_metadata, only: decimal_number, author_name_key
@@ -70,7 +71,7 @@ module fplotlib_docclass
         integer :: DOC_ALIGN = ALIGN_JUSTIFY
         logical :: NUMBER_SECTIONS = .false., BOOK = .false., NUMBER_EQS = .false.
         logical :: NUMBER_FIGURES = .true., NUMBER_TABLES = .true.
-        character(len=16) :: TEMPLATE = "article"
+        type(template_t) :: template
         integer :: FIGURE_NO = 0, TABLE_NO = 0, REF_DEPTH = 0
         ! The title block's inlines: nodes of the front matter, 0 for none.
         integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
@@ -215,28 +216,22 @@ contains
     subroutine defaults(state, status)
         type(layout_context_t), intent(inout) :: state
         type(status_t), intent(out) :: status
-        state%BASE = 10.0_dp
-        state%LEAD = 1.2_dp
-        state%PARINDENT = -1.0_dp
-        state%PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
-        state%DOC_ALIGN = ALIGN_JUSTIFY
+        call native_template("article", state%template, status)
+        if (.not. status%ok()) return
+        call template_style(state)
         state%NUMBER_SECTIONS = .false.
         state%NUMBER_EQS = .true.
         state%NUMBER_FIGURES = .true.
         state%NUMBER_TABLES = .true.
-        state%TEMPLATE = "article"
         state%FIGURE_NO = 0
         state%TABLE_NO = 0
         state%REF_DEPTH = 0
-        state%BOOK = .false.
         state%TITLE = 0
         state%SUBTITLE = 0
         state%NAUTHOR = 0
         if (.not. allocated(state%AUTHORS)) allocate (state%AUTHORS(16))
         state%DATE = 0
         state%ABSTRACT = 0
-        state%TEXT_COL = 0
-        state%PAGE_COL = 255
         state%NLAB = 0
         if (.not. allocated(state%label)) allocate (state%label(16))
         if (allocated(state%NODE_TARGET)) deallocate (state%NODE_TARGET)
@@ -248,69 +243,56 @@ contains
         state%PENDING_LABEL = ""
         state%W = ""
         state%SPACE = .false.
-        call ts_set_page(state%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp, status=status)
+        call ts_set_page(state%engine, state%template%body%page_width, state%template%body%page_height, &
+                         state%template%body%margins(1), state%template%body%margins(2), &
+                         state%template%body%margins(3), state%template%body%margins(4), status=status)
         if (.not. status%ok()) return
     end subroutine defaults
+
+    subroutine template_style(state)
+        type(layout_context_t), intent(inout) :: state
+        state%BASE = state%template%body%BASE
+        state%LEAD = state%template%body%LEAD
+        state%PARINDENT = state%template%body%PARINDENT
+        state%PARSKIP_G = state%template%body%PARSKIP_G
+        state%DOC_ALIGN = state%template%body%DOC_ALIGN
+        state%TEXT_COL = state%template%body%TEXT_COL
+        state%PAGE_COL = state%template%body%PAGE_COL
+        state%BOOK = state%template%body%BOOK
+    end subroutine template_style
 
     ! Standard MyST metadata plus declared options of one native print template.
     subroutine settings(state, doc, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer :: i, j
-        character(len=:), allocatable :: key, val
+        character(len=:), allocatable :: key, val, name
         real(dp) :: pw, ph, margins(4), m
         logical :: numbers, flag, have_margin(4), have_indent, have_parskip
         integer, allocatable :: grown(:)
         type(status_t), intent(out) :: status
 
+        name = state%template%name
         do i = 1, doc%nmeta
             if (doc%meta(i)%key == "exports.1.template") then
                 if (doc%meta(i)%kind /= META_STRING) then
                     call status%set(ERROR_ARGUMENT, "MyST: template must be a string")
                     return
                 end if
-                if (len(doc%meta(i)%value) > len(state%TEMPLATE)) then
+                if (len(doc%meta(i)%value) > len(state%template%name)) then
                     call status%set(ERROR_UNSUPPORTED, "MyST: unsupported native template")
                     return
                 end if
-                state%TEMPLATE = doc%meta(i)%value
+                name = doc%meta(i)%value
             end if
         end do
-        pw = 595.2756_dp
-        ph = 841.8898_dp
-        margins = 72.0_dp
-        numbers = .true.
-        select case (trim(state%TEMPLATE))
-        case ("article")
-        case ("book")
-            state%BOOK = .true.
-            pw = 419.5276_dp
-            ph = 595.2756_dp
-            margins = 72.0_dp*1.8_dp/2.54_dp
-            margins(3) = 72.0_dp*2.2_dp/2.54_dp
-        case ("letter")
-            pw = 612.0_dp
-            ph = 792.0_dp
-            margins = 79.2_dp
-            state%BASE = 11.0_dp
-            state%PARINDENT = 0.0_dp
-            state%PARSKIP_G = ts_glue_t(6.0_dp, 1.2_dp, 0.0_dp, 0, 0)
-            numbers = .false.
-        case ("invitation")
-            pw = 360.0_dp
-            ph = 504.0_dp
-            margins = 39.6_dp
-            state%BASE = 12.0_dp
-            state%PARINDENT = 0.0_dp
-            state%PARSKIP_G = ts_glue_t(8.0_dp, 1.6_dp, 0.0_dp, 0, 0)
-            state%DOC_ALIGN = ALIGN_CENTER
-            state%TEXT_COL = [59, 43, 35]
-            state%PAGE_COL = [251, 243, 228]
-            numbers = .false.
-        case default
-            call status%set(ERROR_UNSUPPORTED, "MyST: native template must be article, book, letter or invitation")
-            return
-        end select
+        call native_template(name, state%template, status)
+        if (.not. status%ok()) return
+        call template_style(state)
+        pw = state%template%body%page_width
+        ph = state%template%body%page_height
+        margins = state%template%body%margins
+        numbers = state%template%body%page_numbers
         ! Mapping order does not affect relative lengths.
         do i = 1, doc%nmeta
             if (doc%meta(i)%key /= "exports.1.fontsize") cycle
@@ -609,8 +591,8 @@ contains
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(status_t), intent(out) :: status
-        integer :: i, j, k
-        logical :: supported
+        integer :: i, j, k, part
+        integer, allocatable :: nodes(:)
         do i = 1, doc%nmeta
             k = doc%meta(i)%node
             if (k == 0) cycle
@@ -626,27 +608,18 @@ contains
         end do
         do i = 1, doc%n
             if (doc%nodes(i)%kind /= DOC_PART) cycle
-            supported = .false.
-            select case (trim(state%TEMPLATE))
-            case ("article", "book")
-                supported = doc%nodes(i)%part == "abstract"
-            case ("letter")
-                select case (doc%nodes(i)%part)
-                case ("sender", "recipient", "opening", "closing", "signature")
-                    supported = .true.
-                end select
-            case ("invitation")
-                select case (doc%nodes(i)%part)
-                case ("intro", "ornament", "reply")
-                    supported = .true.
-                end select
-            end select
-            if (.not. supported) then
-                call status%set(ERROR_UNSUPPORTED, "MyST: native template "//trim(state%TEMPLATE)// &
+            if (template_part_index(state%template, doc%nodes(i)%part) == 0) then
+                call status%set(ERROR_UNSUPPORTED, "MyST: native template "//trim(state%template%name)// &
                                 " does not declare part "//doc%nodes(i)%part)
                 return
             end if
-            if (doc%nodes(i)%part == "abstract" .and. state%ABSTRACT == 0) state%ABSTRACT = i
+        end do
+        state%ABSTRACT = 0
+        do i = 1, size(state%template%steps)
+            if (state%template%steps(i)%kind /= STEP_TITLE_BLOCK) cycle
+            part = state%template%steps(i)%part
+            call part_nodes(doc, trim(state%template%parts(part)%name), nodes)
+            if (size(nodes) > 0) state%ABSTRACT = nodes(1)
         end do
     end subroutine validate_parts
 
@@ -656,93 +629,64 @@ contains
         type(ctx_t), intent(in) :: ctx
         type(status_t), intent(out) :: status
         type(style_t) :: title_style
-        select case (trim(state%TEMPLATE))
-        case ("letter")
-            call named_part(state, doc, "sender", ctx, status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "recipient", ctx, status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "opening", ctx, status)
-            if (.not. status%ok()) return
-            call set_blocks(state, doc, 1, ctx, status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "closing", ctx, status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "signature", ctx, status)
-        case ("invitation")
-            call ts_vkeep(state%engine, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0), status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "intro", ctx, status)
-            if (.not. status%ok()) return
-            if (state%TITLE > 0) then
-                title_style = base_style(ctx)
-                title_style%size = 2.488_dp*state%BASE
-                title_style%bold = .true.
-                title_style%color = [139, 26, 26]
-                call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=title_style%size, &
+        type(ctx_t) :: title_context
+        integer :: i, part
+        do i = 1, size(state%template%steps)
+            part = state%template%steps(i)%part
+            select case (state%template%steps(i)%kind)
+            case (STEP_BODY)
+                call set_blocks(state, doc, 1, ctx, status)
+            case (STEP_PART)
+                call named_part(state, doc, part, ctx, status)
+            case (STEP_TITLE_BLOCK)
+                call title_block(state, doc, ctx, part, status)
+            case (STEP_TITLE)
+                if (state%TITLE == 0) cycle
+                title_context = part_context(state%template%title, ctx)
+                title_style = base_style(title_context)
+                call ts_begin_par(state%engine, title_context%align, 0.0_dp, size=title_style%size, &
                                   leading=state%LEAD*title_style%size, status=status)
                 if (.not. status%ok()) return
                 call set_inlines(state, doc, state%TITLE, title_style, status)
                 if (.not. status%ok()) return
                 call ts_end_par(state%engine, status)
-                if (.not. status%ok()) return
-            end if
-            call named_part(state, doc, "ornament", ctx, status)
+            case (STEP_FILL)
+                call ts_vkeep(state%engine, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0), status)
+            end select
             if (.not. status%ok()) return
-            call set_blocks(state, doc, 1, ctx, status)
-            if (.not. status%ok()) return
-            call named_part(state, doc, "reply", ctx, status)
-            if (.not. status%ok()) return
-            call ts_vkeep(state%engine, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0), status)
-        case default
-            call title_block(state, doc, ctx, status)
-            if (.not. status%ok()) return
-            call set_blocks(state, doc, 1, ctx, status)
-        end select
+        end do
     end subroutine template_document
 
-    recursive subroutine named_part(state, doc, name, ctx, status)
+    pure function part_context(style, ctx) result(sub)
+        type(part_style_t), intent(in) :: style
+        type(ctx_t), intent(in) :: ctx
+        type(ctx_t) :: sub
+        sub = ctx
+        sub%size = style%font_scale*ctx%size
+        sub%bold = sub%bold .or. style%bold
+        sub%italic = sub%italic .or. style%italic
+        if (style%align >= 0) sub%align = style%align
+        if (style%indent >= 0) sub%indent = style%indent == 1
+        if (style%has_color) sub%color = style%color
+    end function part_context
+
+    recursive subroutine named_part(state, doc, part, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
-        character(len=*), intent(in) :: name
+        integer, intent(in) :: part
         type(ctx_t), intent(in) :: ctx
         type(status_t), intent(out) :: status
         type(ctx_t) :: sub
+        type(part_style_t) :: style
         integer :: i, node
         integer, allocatable :: parts(:)
         real(dp) :: before, after
-        call part_nodes(doc, name, parts)
+        call part_nodes(doc, trim(state%template%parts(part)%name), parts)
         if (size(parts) == 0) return
-        sub = ctx
-        before = 0.0_dp
-        after = 0.0_dp
-        if (state%TEMPLATE == "letter") then
-            sub%indent = .false.
-            sub%align = ALIGN_LEFT
-            select case (name)
-            case ("sender")
-                sub%align = ALIGN_RIGHT
-                before = state%BASE
-                after = state%BASE
-            case ("opening", "closing")
-                before = 1.2_dp*state%BASE
-            case ("signature")
-                before = 72.0_dp*1.2_dp/2.54_dp
-            end select
-        else if (state%TEMPLATE == "invitation") then
-            sub%indent = .false.
-            select case (name)
-            case ("intro")
-                sub%size = 1.2_dp*state%BASE
-                sub%italic = .true.
-                sub%color = [154, 106, 58]
-            case ("ornament")
-                sub%color = [192, 138, 62]
-            case ("reply")
-                sub%size = 0.9_dp*state%BASE
-                sub%color = [154, 106, 58]
-            end select
-        end if
+        style = state%template%parts(part)%style
+        sub = part_context(style, ctx)
+        before = style%before_fixed + style%before_base*state%BASE
+        after = style%after_fixed + style%after_base*state%BASE
         if (before > 0.0_dp) then
             call ts_vskip(state%engine, ts_glue_t(before, 0.0_dp, 0.0_dp, 0, 0), status)
             if (.not. status%ok()) return
@@ -790,15 +734,16 @@ contains
     end subroutine part_nodes
 
     ! LaTeX's \maketitle and abstract, for the article class.
-    subroutine title_block(state, doc, ctx, status)
+    subroutine title_block(state, doc, ctx, abstract_part, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(ctx_t), intent(in) :: ctx
+        integer, intent(in) :: abstract_part
         type(style_t) :: st
         integer :: i
         type(status_t), intent(out) :: status
         if (state%TITLE == 0) then
-            call abstract_block(state, doc, ctx, status)
+            call abstract_block(state, doc, ctx, abstract_part, status)
             return
         end if
         st = base_style(ctx)
@@ -855,15 +800,16 @@ contains
         if (.not. status%ok()) return
         call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
-        call abstract_block(state, doc, ctx, status)
+        call abstract_block(state, doc, ctx, abstract_part, status)
         if (.not. status%ok()) return
         state%NOINDENT = .false.
     end subroutine title_block
 
-    subroutine abstract_block(state, doc, ctx, status)
+    subroutine abstract_block(state, doc, ctx, part, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(ctx_t), intent(in) :: ctx
+        integer, intent(in) :: part
         type(status_t), intent(out) :: status
         type(style_t) :: heading_style
         type(ctx_t) :: sub
@@ -893,7 +839,7 @@ contains
         saved_leading = state%LEAD
         state%PARINDENT = 1.5_dp*sub%size
         state%LEAD = 11.0_dp/9.0_dp
-        call named_part(state, doc, "abstract", sub, status)
+        call named_part(state, doc, part, sub, status)
         state%PARINDENT = saved_indent
         state%LEAD = saved_leading
         if (.not. status%ok()) return
@@ -2028,9 +1974,7 @@ contains
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(status_t), intent(out) :: status
-        integer :: i
-        character(len=9), parameter :: names(9) = [character(len=9) :: &
-            "abstract", "sender", "recipient", "opening", "intro", "ornament", "closing", "signature", "reply"]
+        integer :: i, part
         state%NLAB = 0
         state%SEC = 0
         state%CHAPTER = 0
@@ -2040,14 +1984,13 @@ contains
         if (allocated(state%NODE_TARGET)) deallocate (state%NODE_TARGET)
         allocate (state%NODE_TARGET(doc%n))
         state%NODE_TARGET = 0
-        do i = 1, 6
-            call collect_part_targets(state, doc, trim(names(i)), status)
-            if (.not. status%ok()) return
-        end do
-        call collect_targets(state, doc, 1, status)
-        if (.not. status%ok()) return
-        do i = 7, size(names)
-            call collect_part_targets(state, doc, trim(names(i)), status)
+        do i = 1, size(state%template%steps)
+            part = state%template%steps(i)%part
+            if (state%template%steps(i)%kind == STEP_BODY) then
+                call collect_targets(state, doc, 1, status)
+            else if (part > 0) then
+                call collect_part_targets(state, doc, trim(state%template%parts(part)%name), status)
+            end if
             if (.not. status%ok()) return
         end do
     end subroutine prepare_labels
