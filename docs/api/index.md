@@ -4,6 +4,7 @@
 :caption: API Reference
 :hidden:
 
+typesetting_api
 fplotlib_artist
 fplotlib_backend_eps
 fplotlib_backend_pdf
@@ -13,23 +14,37 @@ fplotlib_cmap
 fplotlib_colors
 fplotlib_contour
 fplotlib_dates
+fplotlib_docclass
+fplotlib_document
+fplotlib_doctree
 fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_grid
+fplotlib_hyph
+fplotlib_hyph_data
+fplotlib_io
+fplotlib_markdown
 fplotlib_mathsym
 fplotlib_mathtext
 fplotlib_png
 fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
+fplotlib_render_checks
+fplotlib_report
+fplotlib_resources
 fplotlib_scale
+fplotlib_scene
 fplotlib_state
+fplotlib_status
 fplotlib_style
 fplotlib_svg
 fplotlib_text
 fplotlib_ticks
 fplotlib_tri
 fplotlib_type3
+fplotlib_typeset
 fplotlib
 ```

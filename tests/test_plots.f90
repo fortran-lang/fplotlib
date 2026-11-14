@@ -2,8 +2,13 @@ program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
+    use test_typeset, only: para_ref_check
+    use test_typeset_core, only: typeset_core_check
+    use test_frame_backends, only: frame_backend_check
+    use test_grid, only: grid_check
+    use test_report, only: report_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface
+    integer :: fig1, nmath, ndelim, nface, npara, ncore, nframes, ngrid, nreport
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -1566,22 +1571,96 @@ program test_plots
     call fp_check_apng("anim_sine_apng", "tests/out/anim_sine.png")
     print *, "wrote tests/out/anim_sine.png"
 
+    ! Exercise lazy report initialization before the other procedural reports.
+    call report_check(nreport)
+
+    ! A document: Markdown set by TeX's rules over three pages, written in
+    ! every format.
+    call document_case()
+
     print *, "All test plots written."
 
     ! The math layout against XeTeX's; see test_mathref.f90.
     call math_ref_check("tests/math_refs.txt", nmath)
+    ! The line breaking against XeTeX's; see test_typeset.f90.
+    call para_ref_check("tests/para_refs.txt", npara)
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
+    call typeset_core_check(ncore)
+    call frame_backend_check(nframes)
+    call grid_check(ngrid)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
     if (nmath > 0) error stop "math layout differs from XeTeX"
+    if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
+    if (ncore > 0) error stop "typesetting core failed"
+    if (nframes > 0) error stop "frame backends failed"
+    if (ngrid > 0) error stop "grid layout failed"
+    if (nreport > 0) error stop "report API failed"
 
 contains
+
+    subroutine document_case()
+        character(len=90), parameter :: doc(*) = [character(len=90) :: &
+            "---", &
+            "title: A Small Document", &
+            "authors: fplotlib", &
+            "exports:", &
+            "  - format: pdf", &
+            "    template: article", &
+            "    paper: a6", &
+            "    margin: 1.2cm", &
+            "    fontsize: 9pt", &
+            "numbering:", &
+            "  headings: true", &
+            "---", &
+            "", &
+            "# Text", &
+            "", &
+            "A paragraph of *emphasis*, **strong** text, `code`, a [link](https://example.org),", &
+            "an en–dash, an em—dash, “quotes” and a formula $e^{i\pi} + 1 = 0$, broken into", &
+            "lines and hyphenated as TeX does it.", &
+            "", &
+            "- a list item", &
+            "- another, with a nested list:", &
+            "    1. first", &
+            "    2. second", &
+            "", &
+            "> A quotation, set with margins on both sides.", &
+            "", &
+            "(sec:math)=", &
+            "# Mathematics", &
+            "", &
+            "A numbered display, @eq:m, referred to by name:", &
+            "$$ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad", &
+            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} \label{eq:m} $$", &
+            "and an aligned one:", &
+            "$$ \begin{aligned} (a+b)^2 &= a^2 + 2ab + b^2 \\ &\ge 4ab \end{aligned} $$", &
+            "", &
+            "A native MyST document, with no raw layout commands.", &
+            "", &
+            "+++ {""new-page"": true}", &
+            "", &
+            "@sec:math ends on the page before this one."]
+        integer :: k
+        call new_report()
+        call markdown(doc)
+        call save("tests/out/document.png", dpi=100.0_dp)
+        do k = 1, 3
+            call fp_check_png("document_p"//achar(48 + k), &
+                              "tests/out/document-"//achar(48 + k)//".png")
+        end do
+        call save("tests/out/document.svg")
+        call save("tests/out/document.pdf")
+        call save("tests/out/document.eps")
+        call new_report()
+        print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
+    end subroutine document_case
 
     ! A repeatable stand-in for random numbers: the fractional part of a
     ! large sine, summed twice so the result piles up in the middle.

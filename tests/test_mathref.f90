@@ -12,6 +12,8 @@
 ! delimiters by Typst's rule, so it has to choose the same size variants:
 ! the delimiters, from left to right, have the same advance widths.
 module test_mathref
+    use fplotlib_status
+    use test_status
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t
@@ -93,7 +95,9 @@ contains
         logical :: bad, used(MAXG)
         real(dp) :: ry(MAXG)
 
-        call math_layout(formula, SIZE, run, rules, w)
+        type(status_t) :: status
+        call math_layout(formula, SIZE, run, rules, w, status=status)
+        call require_ok(status)
         ! A space is glue, which XeTeX does not write as a glyph.
         j = 0
         do k = 1, run%n
@@ -222,7 +226,9 @@ contains
         integer :: g(MAXG), k, n
         logical :: bad
 
-        call math_layout(formula, SIZE, run, rules, w)
+        type(status_t) :: status
+        call math_layout(formula, SIZE, run, rules, w, status=status)
+        call require_ok(status)
         n = 0
         do k = 1, run%n
             select case (glyph_char(run%gid(k)))
@@ -257,8 +263,10 @@ contains
         type(mrules_t) :: rules
         real(dp) :: w
 
+        type(status_t) :: status
         nfail = 0
-        call math_layout("Bold $x$ bold", SIZE, run, rules, w, FACE_BOLD)
+        call math_layout("Bold $x$ bold", SIZE, run, rules, w, FACE_BOLD, status=status)
+        call require_ok(status)
         if (glyph_face(run%gid(1)) /= FACE_BOLD .or. glyph_face(run%gid(6)) /= FACE_MATH &
             .or. glyph_face(run%gid(run%n)) /= FACE_BOLD) then
             print "(a)", "  text around math does not keep the label's face"

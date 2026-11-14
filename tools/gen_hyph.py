@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+"""Generate src/fplotlib_hyph_data.f90 from the TeX hyphenation patterns.
+
+fplotlib's typesetter hyphenates as TeX does, with Liang's patterns, and
+with the same patterns LaTeX uses for (American) English and Typst's
+hypher uses too: hyph-en-us.tex of the hyph-utf8 project, which is Knuth's
+hyphen.tex together with Gerard Kuiken's additions (ushyphmax), 4938
+patterns and Knuth's 15 exceptions. The file is pinned by commit and
+SHA-256, so the data are reproducible.
+
+A pattern is its letters with a digit between some of them. The patterns
+are stored sorted by their letters and front coded: each is a decimal
+digit giving how many leading letters it shares with the one before (at
+most 9), the rest of its letters, and one character for each of its
+digits, DIGIT_CODES(6 p + d) for digit d before letter p + 1, or ~ and
+p and d as two decimal digits for a pair outside the table. A space and
+the exceptions, with their hyphens, follow.
+
+    pixi exec --spec python=3.12 -- python tools/gen_hyph.py
+
+--patterns names a local copy of hyph-en-us.tex instead of downloading it.
+"""
+
+import argparse
+import hashlib
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "src" / "fplotlib_hyph_data.f90"
+URL = ("https://raw.githubusercontent.com/hyphenation/tex-hyphen/"
+       "dce23b4eb2df218ec6893b851562316d7cf37355/hyph-utf8/tex/generic/"
+       "hyph-utf8/patterns/tex/hyph-en-us.tex")
+SHA256 = "f4ffcd96c5cbc886bdad23f95dcae8edc3cd3620eae62f7946eceda97c4e68f8"
+
+# The characters a digit is coded as; fplotlib_hyph has the same string.
+DIGIT_CODES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%()*+,-/:;<=>?@[]^_`{|}"
+
+
+def read_source(path):
+    if path is None:
+        print(f"downloading {URL}")
+        with urllib.request.urlopen(URL) as r:
+            data = r.read()
+    else:
+        data = Path(path).read_bytes()
+    got = hashlib.sha256(data).hexdigest()
+    if got != SHA256:
+        raise SystemExit(f"hyph-en-us.tex: SHA-256 {got}, expected {SHA256}")
+    return data.decode("ascii")
+
+
+def group(text, command):
+    """The words of \\command{...}, comments dropped."""
+    body = text[text.index("\\" + command + "{") + len(command) + 2:]
+    body = body[:body.index("}")]
+    words = []
+    for line in body.split("\n"):
+        words += line.split("%")[0].split()
+    return words
+
+
+def literal(text, width=127):
+    """The data as rows of a parameter array (no literal may be very long,
+    see gen_glyphs.literal) and blob_text to put them back together."""
+    rows = [text[i:i + width] for i in range(0, len(text), width)]
+    decl = [f"    integer, parameter :: BLOB_LEN = {len(text)}",
+            f"    character(len={width}), parameter :: BLOB_ROWS({len(rows)}) = "
+            f"[character(len={width}) :: &"]
+    for i, row in enumerate(rows):
+        decl.append(f'"{row}"' + ("]" if i == len(rows) - 1 else ", &"))
+    body = [
+        "    ! The data, the rows end to end; s is BLOB_LEN long.",
+        "    subroutine blob_text(s)",
+        "        character(len=*), intent(out) :: s",
+        "        integer :: r, k",
+        "        k = 0",
+        "        do r = 1, size(BLOB_ROWS)",
+        f"            s(k + 1:min(k + {width}, len(s))) = BLOB_ROWS(r)",
+        f"            k = k + {width}",
+        "        end do",
+        "    end subroutine blob_text",
+    ]
+    return decl, body
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--patterns", help="a local copy of hyph-en-us.tex")
+    args = ap.parse_args()
+
+    text = read_source(args.patterns)
+    patterns = group(text, "patterns")
+    exceptions = group(text, "hyphenation")
+    for p in patterns:
+        if not all(c.isdigit() or c == "." or "a" <= c <= "z" for c in p):
+            raise SystemExit(f"unexpected character in pattern {p!r}")
+    split = []
+    for p in patterns:
+        letters, digits = "", [0]
+        for c in p:
+            if c.isdigit():
+                digits[-1] = int(c)
+            else:
+                letters += c
+                digits.append(0)
+        split.append((letters, digits))
+    split.sort()
+    if len({l for l, _ in split}) != len(split):
+        raise SystemExit("two patterns with the same letters")
+
+    coded = []
+    prev = ""
+    for letters, digits in split:
+        k = 0
+        while k < min(len(letters), len(prev), 9) and letters[k] == prev[k]:
+            k += 1
+        rec = str(k) + letters[k:]
+        for pos, d in enumerate(digits):
+            if d == 0:
+                continue
+            c = 6 * pos + d - 1
+            rec += DIGIT_CODES[c] if c < len(DIGIT_CODES) else f"~{pos}{d}"
+        coded.append(rec)
+        prev = letters
+    data = "".join(coded) + " " + " ".join(exceptions)
+
+    header = [
+        "! fplotlib_hyph_data -- the hyphenation patterns, generated by",
+        "! tools/gen_hyph.py; do not edit.",
+        "!",
+        "! They are hyph-en-us.tex of the hyph-utf8 project (the patterns LaTeX",
+        "! and Typst use for English): Knuth's hyphen.tex and the additions of",
+        "! ushyphmax.tex, whose notice is:",
+        "!",
+        "!   Copyright (C) 1990, 2004, 2005 Gerard D.C. Kuiken",
+        "!   Copying and distribution of this file, with or without modification,",
+        "!   are permitted in any medium without royalty provided the copyright",
+        "!   notice and this notice are preserved.",
+        "!",
+        "! The patterns sorted and front coded (see tools/gen_hyph.py), then a",
+        "! space and the exceptions.",
+        "module fplotlib_hyph_data",
+        "    implicit none",
+        "    private",
+        "    public :: BLOB_LEN, blob_text",
+        f"    integer, parameter, public :: N_PATTERNS = {len(patterns)}",
+        f"    integer, parameter, public :: N_EXCEPTIONS = {len(exceptions)}",
+    ]
+    decl, body = literal(data)
+    lines = header + decl + ["contains", ""] + body + ["end module fplotlib_hyph_data", ""]
+    OUT.write_text("\n".join(lines), encoding="ascii", newline="\n")
+    print(f"wrote {OUT}: {len(patterns)} patterns, {len(exceptions)} exceptions, "
+          f"{len(data)} characters of data, {OUT.stat().st_size} bytes of source")
+
+
+if __name__ == "__main__":
+    main()

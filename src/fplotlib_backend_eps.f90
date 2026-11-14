@@ -24,6 +24,8 @@
 ! built from the compiled-in outlines (see fplotlib_type3), defined in the
 ! prolog once the page knows which glyphs it used.
 module fplotlib_backend_eps
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_glyphs, only: glyph_inked
@@ -36,11 +38,12 @@ module fplotlib_backend_eps
 
     public :: eps_renderer_t
 
-    type, extends(renderer_t) :: eps_renderer_t
+    type, extends(encoded_renderer_t) :: eps_renderer_t
         type(svg_builder) :: c
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
+        integer :: n_frame = 0
         ! What a translucent color is composited against.
         integer :: page_rgb(3) = [255, 255, 255]
         ! The glyphs the page has drawn, and the fonts they went into.
@@ -55,6 +58,8 @@ module fplotlib_backend_eps
         procedure :: draw_markers => eps_draw_markers
         procedure :: draw_glyphs => eps_draw_glyphs
         procedure :: draw_image => eps_draw_image
+        procedure :: begin_frame => eps_begin_frame
+        procedure :: end_frame => eps_end_frame
     end type eps_renderer_t
 
 
@@ -173,7 +178,7 @@ contains
         call put(self, "grestore"//new_line("a"))
     end subroutine end_paint
 
-    subroutine eps_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+    subroutine eps_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: width, height
         integer, intent(in), optional :: bg_rgb(3)
@@ -181,12 +186,26 @@ contains
         real(dp), intent(in), optional :: x0, y0
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
+
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status=status)
+        if (.not. status%ok()) return
+        self%has_output = .false.
+        if (self%n_frame /= 0) then
+            call status%set(ERROR_STATE, "eps: unclosed frame at open_canvas")
+            return
+        end if
+        self%width = width
+        self%height = height
+        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
         self%y0 = 0.0_dp
         if (present(x0)) self%x0 = x0
         if (present(y0)) self%y0 = y0
+        self%page_rgb = [255, 255, 255]
+        if (allocated(self%out)) deallocate (self%out)
         call t3_reset(self%t3)
         call builder_init(self%c)
 
@@ -201,9 +220,56 @@ contains
             p%filled = .true.
             p%fill_rgb = bg_rgb
             if (present(bg_alpha)) p%fill_alpha = bg_alpha
-            call eps_draw_rect(self, self%x0, self%y0, width, height, p)
+            call eps_draw_rect(self, self%x0, self%y0, width, height, p, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine eps_open_canvas
+
+    subroutine eps_begin_frame(self, matrix, clip, status)
+        class(eps_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_transform(matrix, clip, status=status)
+        if (.not. status%ok()) return
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "eps: begin_frame outside canvas")
+            return
+        end if
+        call put(self, "gsave"//new_line("a")//"[")
+        do i = 1, 6
+            call put_num(self, matrix(i))
+        end do
+        call put(self, "] concat"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
+        self%n_frame = self%n_frame + 1
+    end subroutine eps_begin_frame
+
+    subroutine eps_end_frame(self, status)
+        class(eps_renderer_t), intent(inout) :: self
+
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_frame == 0) then
+            call status%set(ERROR_STATE, "eps: unmatched end_frame")
+            return
+        end if
+        call put(self, "grestore"//new_line("a"))
+        self%n_frame = self%n_frame - 1
+    end subroutine eps_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(eps_renderer_t), intent(inout) :: self
@@ -238,23 +304,35 @@ contains
         end do
     end subroutine emit_path
 
-    subroutine eps_draw_path(self, x, y, verbs, n_verb, paint)
+    subroutine eps_draw_path(self, x, y, verbs, n_verb, paint, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_path(x, y, verbs, n_verb, paint, status=status)
+        if (.not. status%ok()) return
         if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
         call end_paint(self, paint)
     end subroutine eps_draw_path
 
-    subroutine eps_draw_rect(self, x, y, w, h, paint, radius)
+    subroutine eps_draw_rect(self, x, y, w, h, paint, radius, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(x, y, w, h, paint, radius, status=status)
+        if (.not. status%ok()) return
         call begin_paint(self, paint)
         call put(self, "newpath"//new_line("a"))
         call put_num(self, x)
@@ -271,11 +349,17 @@ contains
         call end_paint(self, paint)
     end subroutine eps_draw_rect
 
-    subroutine eps_draw_circle(self, cx, cy, r, paint)
+    subroutine eps_draw_circle(self, cx, cy, r, paint, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(cx, cy, r, r, paint, status=status)
+        if (.not. status%ok()) return
         call begin_paint(self, paint)
         call put(self, "newpath"//new_line("a"))
         call put_num(self, cx)
@@ -285,15 +369,30 @@ contains
         call end_paint(self, paint)
     end subroutine eps_draw_circle
 
-    subroutine eps_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+    subroutine eps_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         real(dp), intent(in) :: mx(:), my(:)
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (size(x) /= size(y)) then
+            call status%set(ERROR_ARGUMENT, "markers: inconsistent coordinate counts")
+            return
+        end if
+        call check_finite(x, status=status)
+        if (.not. status%ok()) return
+        call check_finite(y, status=status)
+        if (.not. status%ok()) return
+        call check_path(mx, my, mverbs, n_mverb, paint, status=status)
+        if (.not. status%ok()) return
         do i = 1, size(x)
-            call eps_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
+            call eps_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine eps_draw_markers
 
@@ -301,7 +400,7 @@ contains
     ! at one size on one baseline, set in a frame that turns the flipped
     ! page upright and along the text. xshow takes each glyph's advance
     ! from the layout, so kerning costs nothing extra.
-    subroutine eps_draw_glyphs(self, x, y, run, paint, angle)
+    subroutine eps_draw_glyphs(self, x, y, run, paint, angle, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
@@ -311,6 +410,16 @@ contains
         integer :: i, j, k, font, code, font_j, code_j
         character(len=1) :: eol
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, angle], status=status)
+        if (.not. status%ok()) return
+        call check_paint(paint, status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         if (run%n == 0) return
         eol = new_line("a")
         call put(self, "gsave"//eol)
@@ -368,19 +477,32 @@ contains
     ! The samples go into the file as hexadecimal, which every PostScript
     ! interpreter reads and which keeps the file printable. Transparency is
     ! composited against the page here, as everywhere else in this backend.
-    subroutine eps_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+    subroutine eps_draw_image(self, x, y, w, h, rgba, nx, ny, paint, status)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         character(len=*), parameter :: HEX = "0123456789abcdef"
         integer :: i, j, k, c(3)
         character(len=1) :: buf(6)
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_image(x, y, w, h, rgba, nx, ny, paint, status=status)
+        if (.not. status%ok()) return
         if (nx < 1 .or. ny < 1) return
 
         call put(self, "gsave"//new_line("a"))
+        if (paint%clip%on) then
+            call put_num(self, paint%clip%x)
+            call put_num(self, paint%clip%y)
+            call put_num(self, paint%clip%w)
+            call put_num(self, paint%clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
         call put_num(self, x)
         call put_num(self, y + h)
         call put(self, "translate"//new_line("a"))
@@ -417,12 +539,20 @@ contains
     ! Wrap the page in the DSC comments that make it an EPS rather than a
     ! bare PostScript program: the bounding box above all, since that is what
     ! a document that embeds the figure reads.
-    subroutine eps_close_canvas(self)
+    subroutine eps_close_canvas(self, status)
         class(eps_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=1) :: eol
         integer :: i
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_frame /= 0) then
+            call status%set(ERROR_STATE, "eps: unclosed frame at close_canvas")
+            return
+        end if
         eol = new_line("a")
         call builder_init(f)
         call builder_append(f, "%!PS-Adobe-3.0 EPSF-3.0"//eol)
@@ -441,6 +571,8 @@ contains
         call builder_append(f, builder_get(self%c))
         call builder_append(f, "showpage"//eol//"%%EOF"//eol)
         self%out = builder_get(f)
+        self%is_open = .false.
+        self%has_output = .true.
     end subroutine eps_close_canvas
 
     ! One Type 3 font as a PostScript resource. Each glyph is a procedure
@@ -519,9 +651,16 @@ contains
         r = builder_get(b)
     end function font_resource
 
-    function eps_bytes(self) result(s)
+    function eps_bytes(self, status) result(s)
         class(eps_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+        type(status_t), intent(out) :: status
+
+        s = ""
+        if (.not. self%has_output .or. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: no finished encoded output")
+            return
+        end if
         if (allocated(self%out)) then
             s = self%out
         else

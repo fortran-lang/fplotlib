@@ -187,8 +187,10 @@ call suptitle("figure title")
   `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
   `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
   Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
-  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
-  and rule of 83 test formulas, and the layout is checked against it
+  `\quad`, ...); and the alignments `matrix`, `pmatrix`, `bmatrix`,
+  `Bmatrix`, `vmatrix`, `Vmatrix`, `cases`, `array`, `aligned` and
+  `gathered`. `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 92 test formulas, and the layout is checked against it
 - Automatic delimiters, as Typst has them: matched `( )`, `[ ]`, `\{ \}`,
   `| |`, `\| \|`, `\langle \rangle`, `\lfloor \rfloor` and `\lceil \rceil`
   grow to fit what they enclose, so `$(\frac{a}{b})$` needs no `\left` and
@@ -232,6 +234,262 @@ call suptitle("figure title")
 - Colors as CSS4/X11 names, `tab:` names, `#rgb`, `#rrggbb`, `#rrggbbaa`,
   single letters, `C0`-`C9`, or a greyscale fraction such as `"0.5"`
 - SVG defaults aligned with matplotlib (6.4×4.8 in, tab10 colors, subplot margins)
+
+## Documents
+
+The report API is procedural, just like plotting. With `time`, `displacement`
+and a two-column `results` array computed by your program:
+
+```fortran
+call markdown("# Simulation results")
+call markdown("The computed energy is $E=mc^2$.")
+
+call plot(time, displacement)
+call xlabel("Time")
+call ylabel("Displacement")
+call include_figure(caption="Computed trajectory", label="fig:trajectory")
+call include_table(results, columns=["Time", "Norm"], label="tab:results")
+
+call save("report.pdf")
+```
+
+No report object, layout context, TeX installation or intermediate image file
+is needed. The first document operation initializes the current report.
+`figure()` and `table()` retain their plotting meanings; `include_figure()`
+and `include_table()` add content to the report. `savefig()` saves the current
+plot, while `save()` saves the report.
+
+### Immediate-mode philosophy
+
+**Immediate describes the API, not the implementation.** Application code
+describes content in program order instead of maintaining and synchronizing a
+layout tree. This is the same API/implementation distinction made in
+[Dear ImGui's explanation of the IMGUI paradigm](https://github.com/ocornut/imgui/wiki/About-the-IMGUI-paradigm).
+It does not require rendering every operation immediately or rebuilding
+everything on every export.
+
+- `markdown` immediately parses and appends complete Markdown blocks. Separate
+  calls append blocks, rather than fragments of a single paragraph. It accepts
+  a string or an array of lines; front matter goes at the beginning.
+- `plot`, `xlabel` and the other plotting calls update the current figure.
+- `include_figure` immediately captures an owned vector snapshot. It does not
+  clear the plot. Later plotting, style changes or `clf()` cannot change an
+  already included figure. Captions support Markdown/math; optional `width`
+  is in points, constrained to the available report width.
+- `include_table` copies its data immediately. Arrays are `(rows, columns)`,
+  with optional `columns`, `caption` and `label`. Real (`dp`), default-integer
+  and character arrays are accepted. Numeric cells use `G0.6` or `I0`;
+  preformatted character cells give full control over precision and units.
+  Cells are plain text, not Markdown. Columns are measured and wrapped,
+  page breaks occur between rows, and supplied headers repeat on continuation
+  pages. Row/column spans and splitting a single oversized row are not supported.
+- `save` lays out the retained document if it changed, then exports it. Saving
+  is non-destructive; repeated exports reuse the finished layout. Appending
+  more content invalidates that cache. References such as `@fig:trajectory`
+  and `@tab:results` are resolved during layout, so they may precede their targets.
+- `new_report()` explicitly starts a fresh description, without changing the
+  current figure. A long-lived notebook or web host can call it before
+  rerunning report-construction code instead of appending another copy.
+
+The convenience layer owns an implicit current report. Underneath, the
+`fplotlib_report` builder and the layout algorithms receive explicit,
+caller-owned state; they never reach into that default report or current
+figure. The retained content, resources, layout workspace and finished pages
+are separate. The implementation currently caches a complete layout; finer
+incremental layout or preview diffing can be added without changing these
+command semantics.
+
+`render_report(format, assets, dpi)` returns bytes in memory for notebooks or
+web hosts. It has the same non-destructive behavior as `save`. Callers needing
+several reports can use `fplotlib_report:report_t` directly: its `markdown`,
+`include_frame`, `include_table`, `export` and `save` methods are the same implementation
+used by the procedural facade. The explicit `include_frame` accepts a supplied
+frame instead of consulting global plotting state.
+
+Fallible explicit APIs require a `status_t` argument from `fplotlib_status`.
+Check it before using outputs or making another call; there is no hidden
+last-error state. The high-level `fplotlib` facade handles these errors by
+aborting for now. The [report and typesetting API](docs/api/typesetting_api.md)
+lists the complete document-facing surface and its ownership/error contracts.
+
+The end-user frontend is intentionally small: Markdown, equations, basic
+figures/tables, captions and references. Generic measurement, packing,
+pagination and drawing belong to the reusable core. A richer document
+language, macro system, package ecosystem or publishing framework belongs
+in a separate frontend, not in this convenience API.
+
+### Whole-document Markdown
+
+A complete Markdown document uses the same API. Start a fresh report, append
+the source as a string or array of lines, and save it. Mathematics uses `$...$`
+inline and `$$...$$` for displays. PDF holds every page; SVG, PNG and EPS
+produce one file per page:
+
+```fortran
+call new_report()
+call markdown([character(len=80) :: &
+    "---", &
+    "title: Notes", &
+    "numbering:", &
+    "  headings: true", &
+    "---", &
+    "# Energy", &
+    "", &
+    "The energy of a mass at rest is", &
+    "$$ E = mc^2 \label{eq:einstein} $$", &
+    "and @eq:einstein is the best known formula of physics."])
+call save("notes.pdf")
+```
+
+The reader implements a small **MyST Markdown subset**, with standard targets,
+math directives, references, document parts and export/template metadata.
+It has no external parser dependency. The [Markdown reference](docs/api/fplotlib_markdown.md)
+defines the supported profile and its limits; this is not a full MyST publishing system.
+
+The layout follows TeX's algorithms (`fplotlib_typeset`), with LaTeX's parameters and the
+spacing of its article and book classes:
+
+- paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
+  `line_break` with its two passes, badness, demerits and fitness
+  classes, and hyphenated with Liang's algorithm and the patterns LaTeX
+  and Typst use for English (`hyph-en-us`); interword glue is XeTeX's
+  for an OpenType font, and the space factor is `\nonfrenchspacing`'s;
+- lines go onto a vertical list with `\baselineskip`, `\lineskip` and
+  TeX's club, widow and broken penalties, and TeX's page builder cuts it
+  into pages at the breaks of least cost;
+- displays get `\abovedisplayskip` or the short skips, equation numbers
+  at the right margin, and the paragraph goes on after them unindented.
+
+The frontend has explicit **parse → resolve → layout** stages.
+`fplotlib_markdown` reads blocks and inlines into `fplotlib_doctree`.
+`fplotlib_docresolve` prepares an owned copy: typed settings, selected parts,
+numbering, reference displays and equation tags. `fplotlib_docclass` lays out
+that resolved content without parsing Markdown or interpreting raw metadata.
+Native template defaults, part styles and ordering are declared once in
+`fplotlib_doctemplate` and shared by resolution and layout.
+
+`fplotlib_typeset` works at the level of TeX's primitives: words, glue, kerns,
+penalties, paragraphs, formulas, marks and page building. A program can build
+a frontend tree itself, or bypass this small frontend entirely. The resolved
+representation is internal; it is not another public universal document IR.
+
+Layout state is explicit (`layout_context_t`, or `typeset_context_t` for
+the primitive API). The result is an owned `paged_document_t`, not a view
+into that workspace. Text, equations and plots share the positioned
+`frame_t` representation in `fplotlib_scene`; `fplotlib_document` exports
+those frames without knowing how they were laid out.
+
+```fortran
+subroutine write_report(status)
+    use fplotlib, only: dp
+    use fplotlib_status, only: status_t
+    use fplotlib_docclass, only: layout_context_t
+    use fplotlib_report, only: layout_markdown, layout_fragment
+    use fplotlib_scene, only: paged_document_t, frame_t
+    use fplotlib_document, only: save_document
+
+    type(status_t), intent(out) :: status
+    type(layout_context_t) :: context
+    type(paged_document_t) :: document
+    type(frame_t) :: annotation
+
+    call layout_markdown(context, "# Results"//achar(10)//achar(10)// &
+                         "The energy is $E=mc^2$.", document, status)
+    if (.not. status%ok()) return
+    ! Reusing the workspace does not change the finished document.
+    call layout_fragment(context, "A **label** with $x^2$.", 120.0_dp, annotation, status=status)
+    if (.not. status%ok()) return
+    call save_document(document, "report.pdf", status=status)
+    if (.not. status%ok()) return
+    call save_document(document, "report.svg", status=status)
+end subroutine write_report
+```
+
+The `fplotlib` module exposes the high-level facade; explicit layout, frame,
+and export APIs are imported from their own modules.
+The Markdown layout adapters `layout_markdown` and `layout_fragment` belong
+to `fplotlib_report`; parsed-tree layout belongs to `fplotlib_docclass`.
+`fplotlib_draw:render_frame(frame, status=...)` captures the current plot without
+serializing an image. A frame's `import_frame(child, handle, status)` imports an
+owned copy; `place(handle, matrix, clip, status)` can reuse it at several positions. The six
+matrix entries are `[a,b,c,d,e,f]`, mapping a point to
+`(a*x+c*y+e, b*x+d*y+f)`. The optional rectangular clip is in the child's
+local coordinates. Frames retain a baseline separately from their layout
+size and ink bounds. `source_text(status)` concatenates stored glyph-run source in
+drawing order, including TeX for formulas; it is not semantic or accessibility
+text.
+
+`renderer_t` is a drawing target, not a file writer. Only
+`encoded_renderer_t` adds byte serialization for PDF/SVG/PNG/EPS.
+A `recording_renderer_t` produces a frame instead, with no filesystem or
+byte-export requirement.
+
+For report composition, `doc_add_frame(tree, parent, frame, status)` inserts a
+graphics block into a parsed document, and `md_append(text, tree, status=...)` adds
+more Markdown after it. No new Markdown syntax is needed. The
+`plot_hpc_report.f90` gallery example combines Markdown, a vector plot and
+a numerical table through the procedural report API. The
+`plot_frame_composition.f90` advanced example demonstrates explicit contexts
+and a plot annotation that is itself a typeset paragraph and equation.
+
+The low-level modules do not depend on the plotting frontend. A host can
+call `export_document(document, format, assets, dpi, status)` from
+`fplotlib_document` to receive bytes in memory, or replay a frame directly
+to any `renderer_t`. PDF produces one asset; SVG, PNG and EPS produce one
+per page. Pages may have different sizes.
+
+The raw `ts_*` interface is a **prototype, subject to change**. General inline
+frames, horizontal glue/penalty/discretionary constructors, a programmatic math
+tree and an unbounded fragment-layout interface are still work in progress.
+The current engine is not a complete TeX/Typst implementation.
+
+Built-in font and English hyphenation tables are prepared once and then shared
+read-only. Serial entrypoints prepare them automatically; call
+`fplotlib_resources:initialize_resources(status)` serially before starting
+concurrent explicit-context work. This initialization policy is not a blanket
+thread-safety guarantee, and the implicit plotting/report facade is not
+reentrant.
+
+The font provider remains the small compiled-in font set. Glyph runs now
+retain font identity, logical UTF-8 text and glyph-to-source byte ranges;
+math retains its TeX source, explicitly distinguished from ordinary text.
+PDF uses ordinary logical text as `ActualText`. This is not yet a tagged
+PDF or general external-font implementation.
+Independent layout contexts do not make the stateful pylab plotting API
+or lazy initialization elsewhere in the library universally thread-safe.
+
+The native templates are `article`, `book`, `letter` and `invitation`. Select
+one through MyST export metadata:
+
+```yaml
+exports:
+  - format: pdf
+    template: letter
+```
+
+Standard MyST parts such as `+++ {"part": "sender"}` and
+`+++ {"part": "signature"}` carry a letter's content. Invitation parts supply
+the introduction, ornament and reply details; `title` supplies the card title.
+Templates own alignment, colors, type sizes, signature spacing and vertical
+centering. Layout options, when needed, are declared native template options
+on that export entry. `save` still selects the filename and output format.
+The book template sets chapters, running heads and flush bottoms.
+
+Why Markdown and not TeX: TeX as input means TeX's macro language
+(category codes, `\def`, expansion) and LaTeX on top of it, and anything
+less would break on the first document pasted from LaTeX. Markdown is small
+and readable, while the mathematics stays TeX. There are no raw TeX
+document-layout commands or Pandoc-style body styling extensions. A larger
+frontend can supply its own policy using the explicit layout and graphics APIs.
+
+`tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
+lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
+requires the same lines, hyphenated at the same places, with every glyph
+within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
+to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
+fplotlib, with LaTeX (Tectonic) and with Typst, with the same fonts, and puts
+the pages side by side. Its reference input is parsed by upstream MyST;
+Pandoc is used only to write LaTeX/Typst, not to interpret the document.
 
 ## Using fplotlib in your project
 
@@ -345,6 +603,14 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
+               fplotlib_typeset.f90 context-owned paragraph and page layout
+               fplotlib_scene.f90  owned frames, pages and a recording renderer
+               fplotlib_document.f90 export pages to memory, independently of layout
+               fplotlib_grid.f90   column sizing and composition of cell frames
+               fplotlib_report.f90 retained report builder with deferred layout
+               fplotlib_doctree.f90 a document as a tree of blocks and inlines
+               fplotlib_markdown.f90 Markdown into that tree
+               fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
                fplotlib.f90         the plotting API
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
@@ -364,7 +630,11 @@ OFL notice alongside the MIT one, and the plots fplotlib produces carry no
 obligations. Because "Lato" is a Reserved Font Name, the fonts fplotlib
 embeds in PDF and EPS files have names of their own: `FplotlibSans-Regular`,
 `FplotlibSans-Bold`, `FplotlibSans-Italic` and `FplotlibMath`. `tools/gen_glyphs.py` regenerates the file from the pinned font
-files. The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
+files. The hyphenation patterns in `src/fplotlib_hyph_data.f90` are generated by
+`tools/gen_hyph.py` from `hyph-en-us.tex` of the hyph-utf8 project, © Gerard
+D.C. Kuiken, whose licence permits copying and distribution with or without
+modification provided the copyright notice is kept, as it is in the file.
+The colormap tables in `src/fplotlib_cmap.f90` are sampled from matplotlib, which is
 BSD-licensed, and the perceptual maps (viridis, magma, inferno, plasma) are
 released by their authors under CC0.
 
@@ -406,7 +676,7 @@ attaches its own ids and metadata.
 Math is the exception: matplotlib's mathtext is its own approximation of TeX,
 and fplotlib follows TeX itself, so the formulas are checked against XeTeX
 instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
-unicode-math and the same font files) puts every glyph and rule of 83
+unicode-math and the same font files) puts every glyph and rule of 92
 formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
 The automatic delimiters, which TeX does not have, are checked against
 Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,
