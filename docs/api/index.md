@@ -17,14 +17,17 @@ fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
 fplotlib_glyphs_data
+fplotlib_io
 fplotlib_mathsym
 fplotlib_mathtext
 fplotlib_png
 fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
+fplotlib_render_checks
 fplotlib_scale
 fplotlib_state
+fplotlib_status
 fplotlib_style
 fplotlib_svg
 fplotlib_text

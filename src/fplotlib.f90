@@ -21,6 +21,9 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
+    use fplotlib_status, only: status_t
+    use fplotlib_io, only: file_ext, write_bytes
+    use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
 
@@ -6102,23 +6105,6 @@ contains
     ! another come out wrong.
     ! ------------------------------------------------------------------
 
-    ! The extension picks the backend, as it does in matplotlib. A name with
-    ! no extension at all is taken as SVG.
-    function file_ext(filename) result(ext)
-        character(len=*), intent(in) :: filename
-        character(len=:), allocatable :: ext
-        integer :: d, sl
-
-        d = index(filename, ".", back=.true.)
-        sl = max(index(filename, "/", back=.true.), &
-                 index(filename, achar(92), back=.true.))
-        if (d <= sl + 1) then
-            ext = "svg"
-        else
-            ext = lower(filename(d + 1:len_trim(filename)))
-        end if
-    end function file_ext
-
     ! Writing SVG bytes into a .png would produce a file no viewer can open,
     ! so an unsupported extension is a hard error rather than a silent default.
     subroutine reject_ext(filename)
@@ -6160,30 +6146,21 @@ contains
             return
         end select
         fig_dpi = saved_dpi
-        call write_bytes(filename, svg)
+        call save_bytes(filename, svg)
     end subroutine savefig
 
-    subroutine write_bytes(filename, data)
+    ! A file that cannot be written ends the script, as the exception does in
+    ! matplotlib. Code that wants to recover calls fplotlib_io's write_bytes,
+    ! which returns the failure in a status_t.
+    subroutine save_bytes(filename, data)
         character(len=*), intent(in) :: filename, data
-        integer :: u, ios
+        type(status_t) :: status
 
-        open (newunit=u, file=trim(filename), status="replace", action="write", &
-              form="unformatted", access="stream", iostat=ios)
-        if (ios /= 0) then
-            ! fallback formatted
-            open (newunit=u, file=trim(filename), status="replace", action="write", &
-                  form="formatted", iostat=ios)
-            if (ios /= 0) then
-                print *, "fplotlib: failed to open ", trim(filename)
-                return
-            end if
-            write (u, "(A)") data
-            close (u)
-            return
-        end if
-        if (len(data) > 0) write (u) data
-        close (u)
-    end subroutine write_bytes
+        call write_bytes(filename, data, status)
+        if (status%ok()) return
+        write (error_unit, "(a)") "fplotlib: "//status%message
+        error stop 1
+    end subroutine save_bytes
 
     ! ------------------------------------------------------------------
     ! Animation. matplotlib builds an Animation object around a callback;
@@ -6268,12 +6245,12 @@ contains
         ! "as fast as you like", so a frame never asks for less than one.
         delay = max(1, nint(100.0_dp/rate))
         if (file_ext(filename) == "gif") then
-            call write_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
-                                                  anim_pix(1:anim_len), delay, rep))
+            call save_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
+                                                 anim_pix(1:anim_len), delay, rep))
         else
             ! APNG delays are a fraction, so the frame rate is not rounded
             ! to hundredths of a second.
-            call write_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
+            call save_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
                              min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep))
         end if
