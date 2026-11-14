@@ -4,8 +4,10 @@ program test_plots
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
     use test_missing, only: missing_data_check
     use test_contract, only: contract_case, contract_check
+    use test_frame_backends, only: frame_backend_check
+    use test_frames, only: frames_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, nmissing, ncontract
+    integer :: fig1, nmath, ndelim, nface, nmissing, ncontract, nbackend, nframe
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1592,6 +1594,9 @@ program test_plots
     call missing_data_check(nmissing)
     ! Broken preconditions stop with the rule they broke.
     call contract_check(ncontract)
+    ! Owned frames and pages; see test_frames.f90 and test_frame_backends.f90.
+    call frames_check(nframe)
+    call frame_backend_check(nbackend)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1601,6 +1606,8 @@ program test_plots
     if (nface > 0) error stop "text around math lost its face"
     if (nmissing > 0) error stop "missing data reached the output"
     if (ncontract > 0) error stop "a broken precondition did not stop as expected"
+    if (nframe > 0) error stop "owned frames failed"
+    if (nbackend > 0) error stop "frame backends failed"
 
 contains
 

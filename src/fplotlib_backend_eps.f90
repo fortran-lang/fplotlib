@@ -56,6 +56,8 @@ module fplotlib_backend_eps
         procedure :: draw_markers_impl => eps_draw_markers
         procedure :: draw_glyphs_impl => eps_draw_glyphs
         procedure :: draw_image_impl => eps_draw_image
+        procedure :: begin_frame_impl => eps_begin_frame
+        procedure :: end_frame_impl => eps_end_frame
     end type eps_renderer_t
 
 
@@ -196,6 +198,8 @@ contains
         self%y0 = 0.0_dp
         if (present(x0)) self%x0 = x0
         if (present(y0)) self%y0 = y0
+        self%page_rgb = [255, 255, 255]
+        if (allocated(self%out)) deallocate (self%out)
         call t3_reset(self%t3)
         call builder_init(self%c)
 
@@ -213,6 +217,33 @@ contains
             call eps_draw_rect(self, self%x0, self%y0, width, height, p)
         end if
     end subroutine eps_open_canvas
+
+    subroutine eps_begin_frame(self, matrix, clip)
+        class(eps_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        ! renderer_t has checked the call and counts the frame.
+        call put(self, "gsave"//new_line("a")//"[")
+        do i = 1, 6
+            call put_num(self, matrix(i))
+        end do
+        call put(self, "] concat"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
+    end subroutine eps_begin_frame
+
+    subroutine eps_end_frame(self)
+        class(eps_renderer_t), intent(inout) :: self
+
+        call put(self, "grestore"//new_line("a"))
+    end subroutine eps_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(eps_renderer_t), intent(inout) :: self
@@ -388,6 +419,13 @@ contains
         character(len=1) :: buf(6)
 
         call put(self, "gsave"//new_line("a"))
+        if (paint%clip%on) then
+            call put_num(self, paint%clip%x)
+            call put_num(self, paint%clip%y)
+            call put_num(self, paint%clip%w)
+            call put_num(self, paint%clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
         call put_num(self, x)
         call put_num(self, y + h)
         call put(self, "translate"//new_line("a"))

@@ -1,6 +1,6 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract drawing target that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF, EPS and recorders implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
@@ -10,7 +10,7 @@
 !      drawn with, so nothing depends on what was called before it. A backend
 !      may cache the last paint internally to avoid re-emitting attributes,
 !      but that is its own business and cannot be observed through the API.
-!      The canvas lifecycle is explicit.
+!      Canvas lifecycle and transform/clip scopes are explicit.
 !
 !   2. Purely additive, in painter's order. Calls are composited in the order
 !      they arrive; later drawings cover earlier ones. A raster backend can
@@ -61,6 +61,11 @@
 ! backend has a real reason to do them its own way, in which case that is the
 ! backend's own code, or it does not, in which case it belongs to whoever
 ! calls the API rather than to the API.
+!
+! begin_frame_impl and end_frame_impl scope an affine transform and a local
+! clip. Unlike named groups, these change the picture and cannot be ignored:
+! their concrete defaults accept only the identity without a clip, and stop
+! on anything else, so a target that cannot transform says so.
 !
 ! begin_group_impl and end_group_impl are different again: they are concrete
 ! and default to doing nothing, because doing nothing is the correct implementation for a
@@ -192,8 +197,12 @@ module fplotlib_render
     type :: glyphrun_t
         integer :: n = 0
         integer, allocatable :: gid(:)
+        integer, allocatable :: font(:), first(:), last(:)
         real(dp), allocatable :: x(:), y(:), size(:)
         character(len=:), allocatable :: text
+        ! first:last are inclusive UTF-8 byte ranges, zero when unmapped.
+        ! Math source is TeX, not a Unicode replacement for the painted formula.
+        logical :: source_math = .false.
     end type glyphrun_t
 
     type, abstract :: renderer_t
@@ -204,6 +213,10 @@ module fplotlib_render
         logical :: is_open = .false.
         logical :: is_finished = .false.   ! closed since the last open
         integer :: n_group = 0             ! groups begun and not yet ended
+        integer :: n_frame = 0             ! frames begun and not yet ended
+        ! The open groups (G) and frames (F), innermost last: each must end
+        ! inside whatever began after it.
+        character(len=:), allocatable :: scopes
     contains
         ! The contract. Each method checks the call and then hands it to
         ! the backend's implementation below.
@@ -211,6 +224,7 @@ module fplotlib_render
         procedure, non_overridable :: draw_path, draw_rect, draw_circle
         procedure, non_overridable :: draw_markers, draw_glyphs, draw_image
         procedure, non_overridable :: begin_group, end_group
+        procedure, non_overridable :: begin_frame, end_frame
 
         ! Lifecycle.
         procedure(open_canvas_i), deferred :: open_canvas_impl
@@ -229,10 +243,15 @@ module fplotlib_render
         ! for any format without a document tree.
         procedure :: begin_group_impl
         procedure :: end_group_impl
+
+        ! Frames. Concrete, accepting only the identity without a clip; every
+        ! built-in backend overrides them.
+        procedure :: begin_frame_impl
+        procedure :: end_frame_impl
     end type renderer_t
 
-    ! Encoding is separate from drawing: a target that only draws, such as an
-    ! interactive one, need not invent a file format or a bytes method.
+    ! Encoding is separate from drawing: a recorder or an interactive target
+    ! need not invent a file format or implement a meaningless bytes method.
     type, abstract, extends(renderer_t) :: encoded_renderer_t
     contains
         procedure, non_overridable :: bytes
@@ -345,6 +364,25 @@ module fplotlib_render
 
 contains
 
+    ! x' = matrix(1)*x + matrix(3)*y + matrix(5), likewise y with 2,4,6.
+    ! clip is in the new local coordinates. Backends restore both on exit.
+    ! The defaults of a target that cannot transform: the identity without
+    ! a clip is a frame it can draw, and anything else stops rather than
+    ! being drawn wrong.
+    subroutine begin_frame_impl(self, matrix, clip)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+
+        if (clip%on .or. any(matrix /= [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp])) then
+            call contract_error("renderer: this target cannot transform or clip a frame")
+        end if
+    end subroutine begin_frame_impl
+
+    subroutine end_frame_impl(self)
+        class(renderer_t), intent(inout) :: self
+    end subroutine end_frame_impl
+
     ! ------------------------------------------------------------------
     ! Structure.
     !
@@ -400,6 +438,8 @@ contains
         self%is_open = .true.
         self%is_finished = .false.
         self%n_group = 0
+        self%n_frame = 0
+        self%scopes = ""
     end subroutine open_canvas
 
     subroutine close_canvas(self)
@@ -407,6 +447,7 @@ contains
 
         call check_open(self)
         if (self%n_group /= 0) call contract_error("renderer: begin_group without end_group at close_canvas")
+        if (self%n_frame /= 0) call contract_error("renderer: begin_frame without end_frame at close_canvas")
         call self%close_canvas_impl()
         self%is_open = .false.
         self%is_finished = .true.
@@ -512,6 +553,7 @@ contains
 
         call check_open(self)
         self%n_group = self%n_group + 1
+        call push_scope(self, "G")
         call self%begin_group_impl(name)
     end subroutine begin_group
 
@@ -520,9 +562,55 @@ contains
 
         call check_open(self)
         if (self%n_group == 0) call contract_error("renderer: end_group without begin_group")
+        call pop_scope(self, "G", "renderer: end_group inside a frame begun after the group")
         call self%end_group_impl()
         self%n_group = self%n_group - 1
     end subroutine end_group
+
+    ! matrix maps the frame's coordinates to its parent's:
+    ! x' = matrix(1)*x + matrix(3)*y + matrix(5), and y' likewise with
+    ! matrix(2), (4) and (6). clip, when on, is in the frame's coordinates.
+    ! Until end_frame, everything drawn is transformed and clipped so.
+    subroutine begin_frame(self, matrix, clip)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+
+        call check_open(self)
+        call check_finite(matrix, "frame: nonfinite or out-of-range transform")
+        if (clip%on) call check_box(clip%x, clip%y, clip%w, clip%h, "frame clip")
+        self%n_frame = self%n_frame + 1
+        call push_scope(self, "F")
+        call self%begin_frame_impl(matrix, clip)
+    end subroutine begin_frame
+
+    subroutine end_frame(self)
+        class(renderer_t), intent(inout) :: self
+
+        call check_open(self)
+        if (self%n_frame == 0) call contract_error("renderer: end_frame without begin_frame")
+        call pop_scope(self, "F", "renderer: end_frame inside a group begun after the frame")
+        call self%end_frame_impl()
+        self%n_frame = self%n_frame - 1
+    end subroutine end_frame
+
+    subroutine push_scope(self, kind)
+        class(renderer_t), intent(inout) :: self
+        character, intent(in) :: kind
+        if (.not. allocated(self%scopes)) self%scopes = ""
+        self%scopes = self%scopes//kind
+    end subroutine push_scope
+
+    ! Groups and frames nest: the one ended must be the innermost open.
+    subroutine pop_scope(self, kind, message)
+        class(renderer_t), intent(inout) :: self
+        character, intent(in) :: kind
+        character(len=*), intent(in) :: message
+        integer :: n
+        n = len(self%scopes)
+        if (self%scopes(n:n) /= kind) call contract_error(message)
+        self%scopes = self%scopes(1:n - 1)
+    end subroutine pop_scope
 
     function bytes(self) result(b)
         class(encoded_renderer_t), intent(in) :: self
@@ -674,6 +762,17 @@ contains
         call check_finite(run%y(1:n), "glyphs: nonfinite or out-of-range glyph position")
         call check_finite(run%size(1:n), "glyphs: nonfinite or out-of-range font size")
         if (any(run%size(1:n) < 0.0_dp)) call contract_error("glyphs: negative font size")
+        if (allocated(run%font)) then
+            if (size(run%font) < n) call contract_error("glyphs: font array is shorter than the glyph count")
+        end if
+        if (allocated(run%first) .neqv. allocated(run%last)) then
+            call contract_error("glyphs: incomplete source mapping")
+        end if
+        if (allocated(run%first)) then
+            if (min(size(run%first), size(run%last)) < n) then
+                call contract_error("glyphs: source mapping is shorter than the glyph count")
+            end if
+        end if
     end subroutine check_glyphs
 
 end module fplotlib_render

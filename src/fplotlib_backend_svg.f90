@@ -37,6 +37,9 @@ module fplotlib_backend_svg
         ! The glyphs already defined in a <defs>, each of which every later
         ! string that uses it refers back to.
         logical, allocatable :: glyph_defined(:)
+        ! Whether each open frame, the innermost last, opened a clip group
+        ! of its own that end_frame has to close.
+        logical, allocatable :: frame_clipped(:)
     contains
         procedure :: open_canvas_impl => svg_open_canvas
         procedure :: close_canvas_impl => svg_close_canvas
@@ -49,6 +52,8 @@ module fplotlib_backend_svg
         procedure :: draw_image_impl => svg_draw_image
         procedure :: begin_group_impl => svg_begin_group
         procedure :: end_group_impl => svg_end_group
+        procedure :: begin_frame_impl => svg_begin_frame
+        procedure :: end_frame_impl => svg_end_frame
     end type svg_renderer_t
 
 contains
@@ -188,29 +193,36 @@ contains
         end if
 
         if (c%on) then
-            self%n_clip = self%n_clip + 1
-            self%cur_clip_id = self%n_clip
-            call put(self, '<defs><clipPath id="clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, '"><rect x="')
-            call put_num(self, c%x)
-            call put(self, '" y="')
-            call put_num(self, c%y)
-            call put(self, '" width="')
-            call put_num(self, c%w)
-            call put(self, '" height="')
-            call put_num(self, c%h)
-            call put(self, '"/></clipPath></defs>')
-            call put_eol(self)
-            call put(self, '<g clip-path="url(#clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, ')">')
-            call put_eol(self)
+            call open_clip_group(self, c)
             self%in_clip = .true.
         end if
 
         self%cur_clip = c
     end subroutine sync_clip
+
+    subroutine open_clip_group(self, c)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t), intent(in) :: c
+
+        self%n_clip = self%n_clip + 1
+        self%cur_clip_id = self%n_clip
+        call put(self, '<defs><clipPath id="clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, '"><rect x="')
+        call put_num(self, c%x)
+        call put(self, '" y="')
+        call put_num(self, c%y)
+        call put(self, '" width="')
+        call put_num(self, c%w)
+        call put(self, '" height="')
+        call put_num(self, c%h)
+        call put(self, '"/></clipPath></defs>')
+        call put_eol(self)
+        call put(self, '<g clip-path="url(#clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, ')">')
+        call put_eol(self)
+    end subroutine open_clip_group
 
     subroutine svg_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
         class(svg_renderer_t), intent(inout) :: self
@@ -616,5 +628,46 @@ contains
         call put(self, "</g>")
         call put_eol(self)
     end subroutine svg_end_group
+
+    ! A frame is a group with a transform, and when clipped a clip group
+    ! inside it; renderer_t has checked the call and counted the frame.
+    subroutine svg_begin_frame(self, matrix, clip)
+        class(svg_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(clip_t) :: none
+        logical, allocatable :: grown(:)
+        integer :: i
+
+        if (.not. allocated(self%frame_clipped)) allocate (self%frame_clipped(8))
+        if (self%n_frame > size(self%frame_clipped)) then
+            allocate (grown(2*size(self%frame_clipped)))
+            grown(1:size(self%frame_clipped)) = self%frame_clipped
+            call move_alloc(grown, self%frame_clipped)
+        end if
+        self%frame_clipped(self%n_frame) = clip%on
+        call sync_clip(self, none)
+        call put(self, '<g transform="matrix(')
+        do i = 1, 6
+            if (i > 1) call put(self, " ")
+            call put_num(self, matrix(i))
+        end do
+        call put(self, ')">')
+        call put_eol(self)
+        if (clip%on) call open_clip_group(self, clip)
+    end subroutine svg_begin_frame
+
+    subroutine svg_end_frame(self)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t) :: none
+
+        call sync_clip(self, none)
+        if (self%frame_clipped(self%n_frame)) then
+            call put(self, "</g>")
+            call put_eol(self)
+        end if
+        call put(self, "</g>")
+        call put_eol(self)
+    end subroutine svg_end_frame
 
 end module fplotlib_backend_svg

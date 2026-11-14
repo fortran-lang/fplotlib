@@ -2,6 +2,7 @@
 
 The layout keeps no state between calls. An optional `math_context_t` reuses
 scratch storage; otherwise the call owns local scratch.
+`math_frame` returns an independently owned frame.
 
 The input is TeX math source, not a public math-tree API. A programmatic math
 representation, broader shaping/font selection and complete TeX compatibility
