@@ -81,8 +81,17 @@ fplotlib_docclass
 
 The types are `doc_t`, `doc_node_t`, `doc_meta_t`, `doc_table_t` and
 `layout_context_t`. The tree uses `DOC_*` block kinds, `IN_*` inline kinds and
-`REF_PLAIN`, `REF_EQ`, `REF_AT` reference forms. Its validator rejects invalid
-links and cycles without imposing node-allocation order on valid trees.
+`REF_AUTO`, `REF_TITLE`, `REF_EQ` reference forms. Reference display text is
+independent of the reference kind. `DOC_MATH` and `DOC_PART` represent display
+equations and template parts; metadata retains `META_*` scalar/container kinds
+and tables may carry per-column `l`/`c`/`r` alignment. There are no raw-document
+or free-form style-attribute nodes. Its validator rejects invalid links and
+cycles without imposing node-allocation order on valid trees.
+
+This is a prototype **frontend tree**, not the positioned graphics IR or an
+implementation of all MyST AST nodes. The [native MyST profile](fplotlib_markdown.md)
+defines the reader, reference and template contracts. `layout_fragment` rejects
+document-level metadata, parts and page breaks rather than silently ignoring them.
 
 ## Positioned frames, pages and export
 

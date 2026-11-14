@@ -330,20 +330,21 @@ call new_report()
 call markdown([character(len=80) :: &
     "---", &
     "title: Notes", &
-    "numbersections: true", &
+    "numbering:", &
+    "  headings: true", &
     "---", &
     "# Energy", &
     "", &
     "The energy of a mass at rest is", &
-    "$$ E = mc^2 $$ {#eq:einstein}", &
+    "$$ E = mc^2 \label{eq:einstein} $$", &
     "and @eq:einstein is the best known formula of physics."])
 call save("notes.pdf")
 ```
 
-The Markdown reader is currently a **Pandoc-inspired subset**, not a complete
-CommonMark, Pandoc, or MyST implementation. Its syntax is still under review;
-the [Markdown reference](docs/api/fplotlib_markdown.md) distinguishes established
-notation from fplotlib-specific conventions.
+The reader implements a small **MyST Markdown subset**, with standard targets,
+math directives, references, document parts and export/template metadata.
+It has no external parser dependency. The [Markdown reference](docs/api/fplotlib_markdown.md)
+defines the supported profile and its limits; this is not a full MyST publishing system.
 
 The layout follows TeX's algorithms (`fplotlib_typeset`), with LaTeX's parameters and the
 spacing of its article and book classes:
@@ -359,10 +360,10 @@ spacing of its article and book classes:
 - displays get `\abovedisplayskip` or the short skips, equation numbers
   at the right margin, and the paragraph goes on after them unindented.
 
-A document goes through three layers, as in Pandoc and LaTeX: a reader
+A document goes through three layers: a reader
 (`fplotlib_markdown`) reads the text into a tree of blocks and inlines
-(`fplotlib_doctree`, inspired by Pandoc's); a document class (`fplotlib_docclass`) sets
-the tree with LaTeX's styles, numbering sections and equations from a first
+(`fplotlib_doctree`); a native template (`fplotlib_docclass`) sets
+the tree, numbering sections and equations from a first
 pass over it as LaTeX does from its `.aux` file; and the engine
 (`fplotlib_typeset`) works at the level of TeX's primitives: words, glue,
 kerns, penalties, paragraphs, formulas, marks, and the page builder with
@@ -451,30 +452,38 @@ PDF or general external-font implementation.
 Independent layout contexts do not make the stateful pylab plotting API
 or lazy initialization elsewhere in the library universally thread-safe.
 
-The Markdown is Pandoc's: YAML front matter (`title`,
-`author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
-`align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
-headings, emphasis, lists, block quotes, code, rules, links, fenced divs
-and bracketed spans for alignment, size and colour (`::: {.center .Huge
-color=darkred}`), cross references (`$$...$$ {#eq:name}` and `@eq:name`,
-`# Title {#sec:name}` and `@sec:name`, `\label`, `\eqref`, `\ref`), and the
-TeX commands `\newpage`, `\vspace`, `\vspace*{\fill}`, `\bigskip`, `\hfill`
-and `\quad`. The book class sets chapters, running heads and flush bottoms.
-Lengths are PostScript points (1/72 in), as in Typst.
+The native templates are `article`, `book`, `letter` and `invitation`. Select
+one through MyST export metadata:
+
+```yaml
+exports:
+  - format: pdf
+    template: letter
+```
+
+Standard MyST parts such as `+++ {"part": "sender"}` and
+`+++ {"part": "signature"}` carry a letter's content. Invitation parts supply
+the introduction, ornament and reply details; `title` supplies the card title.
+Templates own alignment, colors, type sizes, signature spacing and vertical
+centering. Layout options, when needed, are declared native template options
+on that export entry. `save` still selects the filename and output format.
+The book template sets chapters, running heads and flush bottoms.
 
 Why Markdown and not TeX: TeX as input means TeX's macro language
 (category codes, `\def`, expansion) and LaTeX on top of it, and anything
 less would break on the first document pasted from LaTeX. Markdown is small
-and readable, the mathematics stays TeX, and a handful of TeX commands
-cover the layout Markdown has no words for, as in Pandoc.
+and readable, while the mathematics stays TeX. There are no raw TeX
+document-layout commands or Pandoc-style body styling extensions. A larger
+frontend can supply its own policy using the explicit layout and graphics APIs.
 
 `tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
 lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
 requires the same lines, hyphenated at the same places, with every glyph
 within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
 to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
-fplotlib, with LaTeX (Pandoc and Tectonic) and with Typst, with the same
-fonts, and puts the pages side by side.
+fplotlib, with LaTeX (Tectonic) and with Typst, with the same fonts, and puts
+the pages side by side. Its reference input is parsed by upstream MyST;
+Pandoc is used only to write LaTeX/Typst, not to interpret the document.
 
 ## Using fplotlib in your project
 
