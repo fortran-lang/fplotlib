@@ -21,6 +21,7 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
+    use fplotlib_render_checks
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -48,7 +49,7 @@ module fplotlib_backend_pdf
         character(len=:), allocatable :: alpha
     end type pdf_image_t
 
-    type, extends(renderer_t) :: pdf_renderer_t
+    type, extends(encoded_renderer_t) :: pdf_renderer_t
         ! The page content stream. The file itself is assembled in
         ! close_canvas, once the length of this is known.
         type(svg_builder) :: c
@@ -226,6 +227,11 @@ contains
         real(dp), intent(in), optional :: x0, y0
         type(paint_t) :: p
 
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        self%has_output = .false.
+        self%width = width
+        self%height = height
+        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
@@ -288,6 +294,9 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        call check_path(x, y, verbs, n_verb, paint)
         if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
@@ -300,6 +309,8 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        call check_open(self)
+        call check_rect(x, y, w, h, paint, radius)
         call begin_paint(self, paint)
         ! Rounded corners are rare enough that they go through the general
         ! path; the plain case gets the single "re" operator.
@@ -318,6 +329,8 @@ contains
         real(dp) :: x(13), y(13), k
         integer :: v(6)
 
+        call check_open(self)
+        call check_rect(cx, cy, r, r, paint)
         k = r*0.5522847498307933_dp
         x = [cx + r, cx + r, cx + k, cx, cx - k, cx - r, cx - r, cx - r, &
              cx - k, cx, cx + k, cx + r, cx + r]
@@ -337,6 +350,12 @@ contains
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+
+        call check_open(self)
+        if (size(x) /= size(y)) call contract_error("markers: inconsistent coordinate counts")
+        call check_finite(x)
+        call check_finite(y)
+        call check_path(mx, my, mverbs, n_mverb, paint)
         do i = 1, size(x)
             call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
         end do
@@ -358,6 +377,10 @@ contains
         logical :: open
         character(len=1) :: eol
 
+        call check_open(self)
+        call check_finite([x, y, angle])
+        call check_paint(paint)
+        call check_glyphs(run)
         if (run%n == 0) return
         eol = new_line("a")
         pp = paint
@@ -434,12 +457,14 @@ contains
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         integer, allocatable :: rgb(:), a(:)
         integer :: i, j, k, id
         logical :: opaque
 
+        call check_open(self)
+        call check_image(x, y, w, h, rgba, nx, ny, paint)
         if (nx < 1 .or. ny < 1 .or. self%n_img >= MAX_IMG) return
 
         allocate (rgb(3*nx*ny), a(nx*ny))
@@ -489,6 +514,7 @@ contains
         integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
         character(len=1) :: eol
 
+        call check_open(self)
         eol = new_line("a")
         content = builder_get(self%c)
 
@@ -602,6 +628,8 @@ contains
         call emit(f, pos, "startxref"//eol//int_str(xref_pos)//eol//"%%EOF"//eol)
 
         self%out = builder_get(f)
+        self%is_open = .false.
+        self%has_output = .true.
     end subroutine pdf_close_canvas
 
     ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
@@ -725,6 +753,10 @@ contains
     function pdf_bytes(self) result(s)
         class(pdf_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+
+        if (.not. self%has_output .or. self%is_open) then
+            call contract_error("renderer: no finished encoded output")
+        end if
         if (allocated(self%out)) then
             s = self%out
         else

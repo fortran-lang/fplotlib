@@ -18,11 +18,12 @@
 ! The faces are Lato: regular, bold and italic; bold italic is set in
 ! bold.
 module fplotlib_text
+    use fplotlib_render_checks
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC
+                               FACE_ITALIC, NGLYPH
     implicit none
     private
 
@@ -59,6 +60,8 @@ contains
         integer :: n, k, gid, prev
         real(dp) :: pen
 
+        call check_font(face, size)
+        call check_finite([x0, y0])
         call code_points(s, cps, n)
         pen = x0
         prev = 0
@@ -82,6 +85,7 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, gid, prev
 
+        call check_font(face, size)
         call code_points(s, cps, n)
         w = 0.0_dp
         prev = 0
@@ -143,10 +147,14 @@ contains
         real(dp), allocatable :: t(:)
         integer :: cap
 
+        call check_finite([x, y, fs])
+        if (gid < 0 .or. gid > NGLYPH .or. fs < 0.0_dp) then
+            call contract_error("run_add: invalid glyph or size")
+        end if
         if (.not. allocated(run%gid)) then
             allocate (run%gid(16), run%x(16), run%y(16), run%size(16))
         else if (run%n >= size(run%gid)) then
-            cap = 2*size(run%gid)
+            cap = max(16, 2*size(run%gid))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)

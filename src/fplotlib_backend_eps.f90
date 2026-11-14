@@ -24,6 +24,7 @@
 ! built from the compiled-in outlines (see fplotlib_type3), defined in the
 ! prolog once the page knows which glyphs it used.
 module fplotlib_backend_eps
+    use fplotlib_render_checks
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_glyphs, only: glyph_inked
@@ -36,7 +37,7 @@ module fplotlib_backend_eps
 
     public :: eps_renderer_t
 
-    type, extends(renderer_t) :: eps_renderer_t
+    type, extends(encoded_renderer_t) :: eps_renderer_t
         type(svg_builder) :: c
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp
@@ -181,6 +182,11 @@ contains
         real(dp), intent(in), optional :: x0, y0
         type(paint_t) :: p
 
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        self%has_output = .false.
+        self%width = width
+        self%height = height
+        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
@@ -243,6 +249,9 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        call check_path(x, y, verbs, n_verb, paint)
         if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
@@ -255,6 +264,8 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        call check_open(self)
+        call check_rect(x, y, w, h, paint, radius)
         call begin_paint(self, paint)
         call put(self, "newpath"//new_line("a"))
         call put_num(self, x)
@@ -276,6 +287,8 @@ contains
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
 
+        call check_open(self)
+        call check_rect(cx, cy, r, r, paint)
         call begin_paint(self, paint)
         call put(self, "newpath"//new_line("a"))
         call put_num(self, cx)
@@ -292,6 +305,12 @@ contains
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+
+        call check_open(self)
+        if (size(x) /= size(y)) call contract_error("markers: inconsistent coordinate counts")
+        call check_finite(x)
+        call check_finite(y)
+        call check_path(mx, my, mverbs, n_mverb, paint)
         do i = 1, size(x)
             call eps_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
         end do
@@ -311,6 +330,10 @@ contains
         integer :: i, j, k, font, code, font_j, code_j
         character(len=1) :: eol
 
+        call check_open(self)
+        call check_finite([x, y, angle])
+        call check_paint(paint)
+        call check_glyphs(run)
         if (run%n == 0) return
         eol = new_line("a")
         call put(self, "gsave"//eol)
@@ -372,12 +395,14 @@ contains
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         character(len=*), parameter :: HEX = "0123456789abcdef"
         integer :: i, j, k, c(3)
         character(len=1) :: buf(6)
 
+        call check_open(self)
+        call check_image(x, y, w, h, rgba, nx, ny, paint)
         if (nx < 1 .or. ny < 1) return
 
         call put(self, "gsave"//new_line("a"))
@@ -423,6 +448,7 @@ contains
         character(len=1) :: eol
         integer :: i
 
+        call check_open(self)
         eol = new_line("a")
         call builder_init(f)
         call builder_append(f, "%!PS-Adobe-3.0 EPSF-3.0"//eol)
@@ -441,6 +467,8 @@ contains
         call builder_append(f, builder_get(self%c))
         call builder_append(f, "showpage"//eol//"%%EOF"//eol)
         self%out = builder_get(f)
+        self%is_open = .false.
+        self%has_output = .true.
     end subroutine eps_close_canvas
 
     ! One Type 3 font as a PostScript resource. Each glyph is a procedure
@@ -522,6 +550,10 @@ contains
     function eps_bytes(self) result(s)
         class(eps_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+
+        if (.not. self%has_output .or. self%is_open) then
+            call contract_error("renderer: no finished encoded output")
+        end if
         if (allocated(self%out)) then
             s = self%out
         else

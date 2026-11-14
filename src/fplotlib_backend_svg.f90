@@ -12,6 +12,7 @@
 ! depending on which helper emitted it, which made the output harder to diff
 ! than it needed to be.
 module fplotlib_backend_svg
+    use fplotlib_render_checks
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -23,7 +24,9 @@ module fplotlib_backend_svg
 
     public :: svg_renderer_t
 
-    type, extends(renderer_t) :: svg_renderer_t
+    integer, parameter :: SCOPE_GROUP = 0
+
+    type, extends(encoded_renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
         ! Serial numbers for the ids that <use> and clip-path refer to.
         integer :: n_marker = 0
@@ -34,6 +37,8 @@ module fplotlib_backend_svg
         type(clip_t) :: cur_clip
         integer :: cur_clip_id = 0
         logical :: in_clip = .false.
+        integer :: n_scope = 0
+        integer, allocatable :: scopes(:)
         ! The glyphs already defined in a <defs>, each of which every later
         ! string that uses it refers back to.
         logical, allocatable :: glyph_defined(:)
@@ -220,6 +225,16 @@ contains
         real(dp), intent(in), optional :: x0, y0
         real(dp) :: ox, oy
 
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        self%has_output = .false.
+        self%width = width
+        self%height = height
+        self%is_open = .true.
+        self%n_marker = 0
+        self%n_clip = 0
+        self%cur_clip_id = 0
+        self%cur_clip = clip_t()
+        self%in_clip = .false.
         ox = 0.0_dp
         oy = 0.0_dp
         if (present(x0)) ox = x0
@@ -274,14 +289,23 @@ contains
     subroutine svg_close_canvas(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
+        call check_open(self)
+        if (self%n_scope /= 0) call contract_error("svg: unclosed scope at close_canvas")
         call sync_clip(self, none)
         call put(self, "</svg>")
         call put_eol(self)
+        self%is_open = .false.
+        self%has_output = .true.
     end subroutine svg_close_canvas
 
     function svg_bytes(self) result(s)
         class(svg_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+
+        if (.not. self%has_output .or. self%is_open) then
+            call contract_error("renderer: no finished encoded output")
+        end if
         s = builder_get(self%b)
     end function svg_bytes
 
@@ -333,6 +357,8 @@ contains
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
+        call check_open(self)
+        call check_path(x, y, verbs, n_verb, paint)
         if (n_verb <= 0) return
         call sync_clip(self, paint%clip)
         call put(self, '<path d="')
@@ -349,6 +375,8 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        call check_open(self)
+        call check_rect(x, y, w, h, paint, radius)
         call sync_clip(self, paint%clip)
         call put(self, '<rect x="')
         call put_num(self, x)
@@ -376,6 +404,8 @@ contains
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
 
+        call check_open(self)
+        call check_rect(cx, cy, r, r, paint)
         call sync_clip(self, paint%clip)
         call put(self, '<circle cx="')
         call put_num(self, cx)
@@ -400,6 +430,11 @@ contains
         type(paint_t), intent(in) :: paint
         integer :: i
 
+        call check_open(self)
+        if (size(x) /= size(y)) call contract_error("markers: inconsistent coordinate counts")
+        call check_finite(x)
+        call check_finite(y)
+        call check_path(mx, my, mverbs, n_mverb, paint)
         if (size(x) <= 0 .or. n_mverb <= 0) return
         call sync_clip(self, paint%clip)
 
@@ -443,6 +478,10 @@ contains
         logical :: opened
         real(dp) :: ca, sa, k
 
+        call check_open(self)
+        call check_finite([x, y, angle])
+        call check_paint(paint)
+        call check_glyphs(run)
         if (run%n == 0) return
         call sync_clip(self, paint%clip)
 
@@ -532,9 +571,11 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
 
+        call check_open(self)
+        call check_image(x, y, w, h, rgba, nx, ny, paint)
         if (nx < 1 .or. ny < 1) return
         call sync_clip(self, paint%clip)
         call put(self, '<image x="')
@@ -595,6 +636,11 @@ contains
     subroutine svg_begin_group(self, name)
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+        type(clip_t) :: none
+
+        call check_open(self)
+        call push_scope(self, SCOPE_GROUP)
+        call sync_clip(self, none)
         call put(self, '<g id="')
         call put(self, name)
         call put(self, '">')
@@ -604,10 +650,28 @@ contains
     subroutine svg_end_group(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
+        call check_open(self)
+        if (self%n_scope == 0) call contract_error("svg: unmatched end_group")
         ! A clip must not outlive the group that contains it.
         call sync_clip(self, none)
         call put(self, "</g>")
         call put_eol(self)
+        self%n_scope = self%n_scope - 1
     end subroutine svg_end_group
 
+    subroutine push_scope(self, scope)
+        class(svg_renderer_t), intent(inout) :: self
+        integer, intent(in) :: scope
+        integer, allocatable :: grown(:)
+
+        if (.not. allocated(self%scopes)) allocate (self%scopes(8))
+        if (self%n_scope == size(self%scopes)) then
+            allocate (grown(2*self%n_scope))
+            grown(1:self%n_scope) = self%scopes(1:self%n_scope)
+            call move_alloc(grown, self%scopes)
+        end if
+        self%n_scope = self%n_scope + 1
+        self%scopes(self%n_scope) = scope
+    end subroutine push_scope
 end module fplotlib_backend_svg

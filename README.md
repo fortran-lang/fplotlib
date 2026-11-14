@@ -253,6 +253,16 @@ fpm build --compiler flang
 fpm build --compiler lfortran
 ```
 
+Below the plotting API, a call that breaks a documented precondition, such
+as drawing on a canvas that is not open or passing a nonfinite coordinate,
+stops the program with a message naming the rule. Only failures that a
+correct program can still meet, such as an output file that cannot be
+written, are returned, through a required `status_t` from `fplotlib_status`.
+
+`fplotlib_render:renderer_t` is a drawing target, not a file writer; only
+`encoded_renderer_t`, which the SVG, PNG, PDF and EPS backends extend, adds
+`bytes`.
+
 The pixi tasks below are for developing fplotlib itself, with pinned compilers.
 
 ## Build
@@ -346,6 +356,7 @@ src/           library modules
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib.f90         the plotting API
+               fplotlib_status.f90  the status_t of calls that can fail at run time
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
 ```

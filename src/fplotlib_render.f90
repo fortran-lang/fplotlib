@@ -1,15 +1,16 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract renderer that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF and EPS each implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
 ! Four rules keep the API from leaking any one format's habits:
 !
-!   1. No state machine. Every drawing call carries the paint it should be
+!   1. No hidden paint state. Every drawing call carries the paint it should be
 !      drawn with, so nothing depends on what was called before it. A backend
 !      may cache the last paint internally to avoid re-emitting attributes,
 !      but that is its own business and cannot be observed through the API.
+!      The canvas lifecycle is explicit.
 !
 !   2. Purely additive, in painter's order. Calls are composited in the order
 !      they arrive; later drawings cover earlier ones. A raster backend can
@@ -63,20 +64,26 @@
 ! begin_group and end_group are different again: they are concrete and default
 ! to doing nothing, because doing nothing is the correct implementation for a
 ! format without a document tree, not a lazy one. See the note on groups.
+!
+! Errors
+! ------
+! Nothing in this contract returns an error. A call that breaks it, such as
+! drawing before open_canvas or passing a nonfinite coordinate, is a bug in
+! the caller, and a backend stops on it with a message naming the rule (see
+! fplotlib_render_checks). A correct sequence of calls always succeeds.
 
 module fplotlib_render
     use fplotlib_style, only: dp
     implicit none
     private
 
-    public :: renderer_t, paint_t, font_t, clip_t, glyphrun_t
+    public :: renderer_t, encoded_renderer_t, paint_t, font_t, clip_t, glyphrun_t
     public :: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     public :: CAP_BUTT, CAP_ROUND, CAP_SQUARE
     public :: JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
     public :: FILL_NONZERO, FILL_EVENODD
     public :: ANCHOR_START, ANCHOR_MIDDLE, ANCHOR_END
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
-    public :: FAMILY_SANS, FAMILY_SERIF, FAMILY_MONO
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
     public :: MAX_DASH
 
@@ -96,10 +103,8 @@ module fplotlib_render
     integer, parameter :: BASE_ALPHABETIC = 0, BASE_MIDDLE = 1
     integer, parameter :: BASE_TOP = 2, BASE_BOTTOM = 3
 
-    ! A closed set, not a font name string. Every backend draws from the
-    ! compiled-in outlines, which are one sans family, so the family is
-    ! carried for the caller's sake and draws the same whatever it says.
-    integer, parameter :: FAMILY_SANS = 0, FAMILY_SERIF = 1, FAMILY_MONO = 2
+    ! Styles of the built-in sans family. Font selection is carried by glyph
+    ! IDs in a finished run, not by an unsupported family preference.
     integer, parameter :: WEIGHT_NORMAL = 0, WEIGHT_BOLD = 1
     integer, parameter :: SLANT_ROMAN = 0, SLANT_ITALIC = 1
 
@@ -144,7 +149,6 @@ module fplotlib_render
 
     type :: font_t
         real(dp) :: size = 10.0_dp
-        integer :: family = FAMILY_SANS
         integer :: weight = WEIGHT_NORMAL
         integer :: slant = SLANT_ROMAN
     end type font_t
@@ -171,7 +175,6 @@ module fplotlib_render
         ! Lifecycle.
         procedure(open_canvas_i), deferred :: open_canvas
         procedure(close_canvas_i), deferred :: close_canvas
-        procedure(bytes_i), deferred :: bytes
 
         ! The primitives. Every one is a decision a backend has to make for
         ! itself, which is why none of them has a default.
@@ -187,6 +190,14 @@ module fplotlib_render
         procedure :: begin_group
         procedure :: end_group
     end type renderer_t
+
+    ! Encoding is separate from drawing: a target that only draws, such as an
+    ! interactive one, need not invent a file format or a bytes method.
+    type, abstract, extends(renderer_t) :: encoded_renderer_t
+        logical :: has_output = .false.
+    contains
+        procedure(bytes_i), deferred :: bytes
+    end type encoded_renderer_t
 
     abstract interface
 
@@ -218,8 +229,8 @@ module fplotlib_render
         ! file type, so binary formats can return raw bytes and callers can
         ! write a file or hand it to a notebook without a temporary file.
         function bytes_i(self) result(b)
-            import :: renderer_t
-            class(renderer_t), intent(in) :: self
+            import :: encoded_renderer_t
+            class(encoded_renderer_t), intent(in) :: self
             character(len=:), allocatable :: b
         end function bytes_i
 
@@ -286,7 +297,7 @@ module fplotlib_render
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y, w, h
             integer, intent(in) :: nx, ny
-            integer, intent(in) :: rgba(4, nx, ny)
+            integer, intent(in) :: rgba(:, :, :)
             type(paint_t), intent(in) :: paint
         end subroutine draw_image_i
 
@@ -317,10 +328,14 @@ contains
     subroutine begin_group(self, name)
         class(renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+
+        if (.not. self%is_open) error stop "fplotlib: renderer: canvas is not open"
     end subroutine begin_group
 
     subroutine end_group(self)
         class(renderer_t), intent(inout) :: self
+
+        if (.not. self%is_open) error stop "fplotlib: renderer: canvas is not open"
     end subroutine end_group
 
 end module fplotlib_render
