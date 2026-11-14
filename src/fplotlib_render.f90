@@ -1,6 +1,6 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract drawing target that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF, EPS and recorders implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
@@ -10,7 +10,7 @@
 !      drawn with, so nothing depends on what was called before it. A backend
 !      may cache the last paint internally to avoid re-emitting attributes,
 !      but that is its own business and cannot be observed through the API.
-!      The canvas lifecycle is explicit.
+!      Canvas lifecycle and transform/clip scopes are explicit.
 !
 !   2. Purely additive, in painter's order. Calls are composited in the order
 !      they arrive; later drawings cover earlier ones. A raster backend can
@@ -60,6 +60,9 @@
 ! backend has a real reason to do them its own way, in which case that is the
 ! backend's own code, or it does not, in which case it belongs to whoever
 ! calls the API rather than to the API.
+!
+! begin_frame/end_frame scope an affine transform and a local clip. Unlike
+! named groups, these change the picture and cannot be ignored.
 !
 ! begin_group and end_group are different again: they are concrete and default
 ! to doing nothing, because doing nothing is the correct implementation for a
@@ -157,8 +160,12 @@ module fplotlib_render
     type :: glyphrun_t
         integer :: n = 0
         integer, allocatable :: gid(:)
+        integer, allocatable :: font(:), first(:), last(:)
         real(dp), allocatable :: x(:), y(:), size(:)
         character(len=:), allocatable :: text
+        ! first:last are inclusive UTF-8 byte ranges, zero when unmapped.
+        ! Math source is TeX, not a Unicode replacement for the painted formula.
+        logical :: source_math = .false.
     end type glyphrun_t
 
     type, abstract :: renderer_t
@@ -183,10 +190,12 @@ module fplotlib_render
         ! for any format without a document tree.
         procedure :: begin_group
         procedure :: end_group
+        procedure :: begin_frame
+        procedure :: end_frame
     end type renderer_t
 
-    ! Encoding is separate from drawing: a target that only draws, such as an
-    ! interactive one, need not invent a file format or a bytes method.
+    ! Encoding is separate from drawing: a recorder or an interactive target
+    ! need not invent a file format or implement a meaningless bytes method.
     type, abstract, extends(renderer_t) :: encoded_renderer_t
         logical :: has_output = .false.
     contains
@@ -316,6 +325,34 @@ module fplotlib_render
     end interface
 
 contains
+
+    ! x' = matrix(1)*x + matrix(3)*y + matrix(5), likewise y with 2,4,6.
+    ! clip is in the new local coordinates. Backends restore both on exit.
+    subroutine begin_frame(self, matrix, clip, status)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
+        if (clip%on .or. any(matrix /= [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp])) then
+            call status%set(ERROR_UNSUPPORTED, "renderer: transformed frames are not supported")
+            return
+        end if
+    end subroutine begin_frame
+
+    subroutine end_frame(self, status)
+        class(renderer_t), intent(inout) :: self
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
+    end subroutine end_frame
 
     ! ------------------------------------------------------------------
     ! Structure.

@@ -9,8 +9,8 @@ module fplotlib_render_checks
     implicit none
     private
     public :: check_open, check_canvas, check_paint, check_path, check_rect
-    public :: check_glyphs, check_image, check_clip, check_font, check_rgb
-    public :: check_finite
+    public :: check_glyphs, check_image, check_clip, check_transform, check_font, check_rgb
+    public :: check_frame_size, check_finite
 
 contains
 
@@ -31,6 +31,20 @@ contains
         type(status_t), intent(out) :: status
         if (.not. all(ieee_is_finite(values))) call status%set(ERROR_ARGUMENT, "geometry: nonfinite coordinate")
     end subroutine check_finite
+
+    subroutine check_frame_size(width, height, baseline, status)
+        real(dp), intent(in) :: width, height
+        real(dp), intent(in), optional :: baseline
+        type(status_t), intent(out) :: status
+        if (.not. all(ieee_is_finite([width, height])) .or. width < 0.0_dp .or. height < 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "frame: size must be finite and nonnegative")
+            return
+        end if
+        if (present(baseline)) then
+            call check_finite([baseline], status)
+            if (.not. status%ok()) return
+        end if
+    end subroutine check_frame_size
 
     subroutine check_canvas(renderer, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(renderer_t), intent(in) :: renderer
@@ -80,6 +94,18 @@ contains
             clip%w < 0.0_dp .or. clip%h < 0.0_dp) &
             call status%set(ERROR_ARGUMENT, "clip: expected finite coordinates and nonnegative size")
     end subroutine check_clip
+
+    subroutine check_transform(matrix, clip, status)
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(status_t), intent(out) :: status
+        if (.not. all(ieee_is_finite(matrix))) then
+            call status%set(ERROR_ARGUMENT, "frame: nonfinite transform")
+            return
+        end if
+        call check_clip(clip, status)
+        if (.not. status%ok()) return
+    end subroutine check_transform
 
     subroutine check_paint(paint, status)
         type(paint_t), intent(in) :: paint
@@ -218,6 +244,22 @@ contains
             .not. all(ieee_is_finite(run%size(1:n))) .or. any(run%size(1:n) < 0.0_dp)) then
             call status%set(ERROR_ARGUMENT, "glyph run: invalid position or font size")
             return
+        end if
+        if (allocated(run%font)) then
+            if (size(run%font) < n) then
+                call status%set(ERROR_ARGUMENT, "glyph run: truncated font array")
+                return
+            end if
+        end if
+        if (allocated(run%first) .neqv. allocated(run%last)) then
+            call status%set(ERROR_ARGUMENT, "glyph run: incomplete source mapping")
+            return
+        end if
+        if (allocated(run%first)) then
+            if (min(size(run%first), size(run%last)) < n) then
+                call status%set(ERROR_ARGUMENT, "glyph run: truncated source mapping")
+                return
+            end if
         end if
     end subroutine check_glyphs
 
