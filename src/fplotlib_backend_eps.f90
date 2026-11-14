@@ -42,6 +42,7 @@ module fplotlib_backend_eps
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
+        integer :: n_frame = 0
         ! What a translucent color is composited against.
         integer :: page_rgb(3) = [255, 255, 255]
         ! The glyphs the page has drawn, and the fonts they went into.
@@ -56,6 +57,8 @@ module fplotlib_backend_eps
         procedure :: draw_markers => eps_draw_markers
         procedure :: draw_glyphs => eps_draw_glyphs
         procedure :: draw_image => eps_draw_image
+        procedure :: begin_frame => eps_begin_frame
+        procedure :: end_frame => eps_end_frame
     end type eps_renderer_t
 
 
@@ -193,6 +196,8 @@ contains
         self%y0 = 0.0_dp
         if (present(x0)) self%x0 = x0
         if (present(y0)) self%y0 = y0
+        self%page_rgb = [255, 255, 255]
+        if (allocated(self%out)) deallocate (self%out)
         call t3_reset(self%t3)
         call builder_init(self%c)
 
@@ -210,6 +215,38 @@ contains
             call eps_draw_rect(self, self%x0, self%y0, width, height, p)
         end if
     end subroutine eps_open_canvas
+
+    subroutine eps_begin_frame(self, matrix, clip)
+        class(eps_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        call check_open(self)
+        call check_transform(matrix, clip)
+        call put(self, "gsave"//new_line("a")//"[")
+        do i = 1, 6
+            call put_num(self, matrix(i))
+        end do
+        call put(self, "] concat"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
+        self%n_frame = self%n_frame + 1
+    end subroutine eps_begin_frame
+
+    subroutine eps_end_frame(self)
+        class(eps_renderer_t), intent(inout) :: self
+
+        call check_open(self)
+        if (self%n_frame == 0) call contract_error("eps: unmatched end_frame")
+        call put(self, "grestore"//new_line("a"))
+        self%n_frame = self%n_frame - 1
+    end subroutine eps_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(eps_renderer_t), intent(inout) :: self
@@ -406,6 +443,13 @@ contains
         if (nx < 1 .or. ny < 1) return
 
         call put(self, "gsave"//new_line("a"))
+        if (paint%clip%on) then
+            call put_num(self, paint%clip%x)
+            call put_num(self, paint%clip%y)
+            call put_num(self, paint%clip%w)
+            call put_num(self, paint%clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
         call put_num(self, x)
         call put_num(self, y + h)
         call put(self, "translate"//new_line("a"))
@@ -449,6 +493,7 @@ contains
         integer :: i
 
         call check_open(self)
+        if (self%n_frame /= 0) call contract_error("eps: unclosed frame at close_canvas")
         eol = new_line("a")
         call builder_init(f)
         call builder_append(f, "%!PS-Adobe-3.0 EPSF-3.0"//eol)
