@@ -6,6 +6,7 @@
 ! here changes what is plotted, which is what keeps this apart from the
 ! plotting API in fplotlib.f90.
 module fplotlib_draw
+    use fplotlib_status
     use fplotlib_colors
     use fplotlib_style
     use fplotlib_scale
@@ -241,12 +242,17 @@ contains
         end do
     end subroutine layout_grid
 
-    subroutine tight_layout(pad)
+    subroutine tight_layout(pad, status)
         real(dp), intent(in), optional :: pad
         real(dp) :: p, W, H, need_l, need_b, need_t, need_r, inner_l, inner_b
         real(dp) :: inner_t, gp
         integer :: i
 
+        type(status_t), intent(out) :: status
+        real(dp) :: decor_left_value1
+        real(dp) :: decor_bottom_value1
+        real(dp) :: decor_left_value2
+        real(dp) :: decor_bottom_value2
         call ensure_fig()
         p = 1.08_dp * TICK_FONT
         ! constrained_layout pads by a flat 1/24 inch instead.
@@ -264,14 +270,25 @@ contains
         do i = 1, n_ax
             ! An axes the caller placed itself is not the grid's business.
             if (ax(i)%fixed_pos .or. ax(i)%inset_of > 0) cycle
-            need_l = max(need_l, decor_left(ax(i)))
-            need_b = max(need_b, decor_bottom(ax(i), W, H))
+            decor_left_value1 = decor_left(ax(i), status=status)
+            if (.not. status%ok()) return
+            need_l = max(need_l, decor_left_value1)
+            decor_bottom_value1 = decor_bottom(ax(i), W, H, status=status)
+            if (.not. status%ok()) return
+            need_b = max(need_b, decor_bottom_value1)
             need_t = max(need_t, decor_top(ax(i)))
             ! Only axes away from the left column and the bottom row put
             ! decorations into the gaps between subplots.
-            if (ax(i)%g_col > 0) inner_l = max(inner_l, decor_left(ax(i)))
-            if (ax(i)%g_row + ax(i)%g_rowspan < grid_m) &
-                inner_b = max(inner_b, decor_bottom(ax(i), W, H))
+            if (ax(i)%g_col > 0) then
+                decor_left_value2 = decor_left(ax(i), status=status)
+                if (.not. status%ok()) return
+                inner_l = max(inner_l, decor_left_value2)
+            end if
+            if (ax(i)%g_row + ax(i)%g_rowspan < grid_m) then
+                decor_bottom_value2 = decor_bottom(ax(i), W, H, status=status)
+                if (.not. status%ok()) return
+                inner_b = max(inner_b, decor_bottom_value2)
+            end if
             ! and the row below puts its title into the same gap.
             if (ax(i)%g_row > 0) inner_t = max(inner_t, decor_top(ax(i)))
         end do
@@ -306,14 +323,24 @@ contains
     end function spacing_for
 
     ! Point widths and heights of the decorations outside each axes edge.
-    function decor_left(a) result(v)
+    function decor_left(a, status) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = TICK_LEN + TICK_PAD + tick_label_width(a)
+        type(status_t), intent(out) :: status
+        real(dp) :: tick_label_width_value1
+        real(dp) :: ylabel_out_value1
+
+        v = 0.0_dp
+        tick_label_width_value1 = tick_label_width(a, status=status)
+        if (.not. status%ok()) return
+        v = TICK_LEN + TICK_PAD + tick_label_width_value1
         ! The label hangs off the tick labels, and its ascent, which faces
         ! out, is the last thing on the left.
-        if (len_trim(a%ylabel) > 0) &
-            v = ylabel_out(a) + text_ascent(a%ylabel_size)
+        if (len_trim(a%ylabel) > 0) then
+            ylabel_out_value1 = ylabel_out(a, status=status)
+            if (.not. status%ok()) return
+            v = ylabel_out_value1 + text_ascent(a%ylabel_size)
+        end if
     end function decor_left
 
     ! Baseline of the y label, in points outside the axes. matplotlib
@@ -321,17 +348,27 @@ contains
     ! carries its label much closer in than one reading -1.00 to 1.00.
     ! The label reads upwards, so its descent is the side that faces the
     ! tick labels.
-    function ylabel_out(a) result(v)
+    function ylabel_out(a, status) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = TICK_LEN + TICK_PAD + tick_label_width(a) + a%ylabel_pad &
+        type(status_t), intent(out) :: status
+        real(dp) :: tick_label_width_value1
+
+        v = 0.0_dp
+        tick_label_width_value1 = tick_label_width(a, status=status)
+        if (.not. status%ok()) return
+        v = TICK_LEN + TICK_PAD + tick_label_width_value1 + a%ylabel_pad &
             + text_descent(a%ylabel_size)
     end function ylabel_out
 
-    function decor_bottom(a, W, H) result(v)
+    function decor_bottom(a, W, H, status) result(v)
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: W, H
         real(dp) :: v, bx, by, bw, bh
+        type(status_t), intent(out) :: status
+        real(dp) :: tick_label_width_value1
+
+        v = 0.0_dp
         v = xtick_gap(a) + text_descent(a%xtick_size)
         ! A horizontal colorbar hangs below the axes, with tick labels of
         ! its own under that.
@@ -342,8 +379,12 @@ contains
             if (len_trim(a%cbar_label) > 0) v = v + LABEL_PAD &
                 + text_ascent(a%xlabel_size) + text_descent(a%xlabel_size)
         end if
-        if (a%xtick_rot /= 0.0_dp) v = v + tick_label_width(a) * &
+        if (a%xtick_rot /= 0.0_dp) then
+            tick_label_width_value1 = tick_label_width(a, status=status)
+            if (.not. status%ok()) return
+            v = v + tick_label_width_value1 * &
                                         abs(sin(a%xtick_rot * PI / 180.0_dp))
+        end if
         if (len_trim(a%xlabel) > 0) &
             v = v + a%xlabel_pad + text_ascent(a%xlabel_size) &
                 + text_descent(a%xlabel_size)
@@ -370,20 +411,27 @@ contains
     ! Bounding box of everything actually drawn, in canvas points. This is
     ! what savefig(bbox_inches="tight") crops to, and it is built from the
     ! same decoration estimates that tight_layout uses.
-    subroutine drawn_bbox(W, H, x0, y0, x1, y1)
+    subroutine drawn_bbox(W, H, x0, y0, x1, y1, status)
         real(dp), intent(in) :: W, H
         real(dp), intent(out) :: x0, y0, x1, y1
         integer :: i
         real(dp) :: l, r, t, bt
+        type(status_t), intent(out) :: status
+        real(dp) :: decor_left_value1
+        real(dp) :: decor_bottom_value1
         x0 = W
         y0 = H
         x1 = 0.0_dp
         y1 = 0.0_dp
         do i = 1, n_ax
-            l = ax(i)%left * W - decor_left(ax(i))
+            decor_left_value1 = decor_left(ax(i), status=status)
+            if (.not. status%ok()) return
+            l = ax(i)%left * W - decor_left_value1
             r = ax(i)%right * W + decor_right(ax(i), W, H)
             t = (1.0_dp - ax(i)%top) * H - decor_top(ax(i))
-            bt = (1.0_dp - ax(i)%bottom) * H + decor_bottom(ax(i), W, H)
+            decor_bottom_value1 = decor_bottom(ax(i), W, H, status=status)
+            if (.not. status%ok()) return
+            bt = (1.0_dp - ax(i)%bottom) * H + decor_bottom_value1
             x0 = min(x0, l)
             x1 = max(x1, r)
             y0 = min(y0, t)
@@ -426,12 +474,16 @@ contains
 
     ! Widest tick label an axes will draw, in points, measured as it will
     ! be set.
-    function tick_label_width(a) result(v)
+    function tick_label_width(a, status) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v, xmin, xmax, ymin, ymax
         real(dp) :: t(MAX_TICKS)
         character(len=64) :: lbl
         integer :: nt, i, ln, du
+        type(status_t), intent(out) :: status
+        real(dp) :: str_width_value1
+
+        v = 0.0_dp
         v = 0.0_dp
         call compute_limits(a, xmin, xmax, ymin, ymax)
         call axis_ticks(a%n_yticks, a%ytick_pos, min(ymin, ymax), max(ymin, ymax), &
@@ -441,7 +493,9 @@ contains
             call tick_label(a%ytick_labeled, a%ytick_lab, i, t(i), a%ysc, &
                             axis_fmt(t, nt, a, .false., min(ymin, ymax), &
                                      max(ymin, ymax)), du, lbl, ln)
-            v = max(v, str_width(lbl(1:ln), a%ytick_size))
+            str_width_value1 = str_width(lbl(1:ln), a%ytick_size, status=status)
+            if (.not. status%ok()) return
+            v = max(v, str_width_value1)
         end do
     end function tick_label_width
 
@@ -1094,13 +1148,14 @@ contains
 
     ! A shaded band: one pair of coordinates is data, the other a fraction
     ! of the axes box.
-    subroutine append_span(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_span(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
         type(scale_t), intent(in) :: xsc, ysc
         real(dp) :: xa, xb, ya, yb
 
+        type(status_t), intent(out) :: status
         if (s%kind == SERIES_HSPAN) then
             xa = ax_l + s%x(1)*ax_w
             xb = ax_l + s%x(2)*ax_w
@@ -1113,11 +1168,12 @@ contains
             yb = ax_b - s%y(2)*ax_h
         end if
         call append_rect(b, min(xa, xb), min(ya, yb), abs(xb - xa), &
-                         abs(yb - ya), trim(s%color), s%alpha)
+                         abs(yb - ya), trim(s%color), s%alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine append_span
 
     ! One bar of a bar/hist series, drawn from the y = 0 baseline.
-    subroutine append_bar(b, s, j, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_bar(b, s, j, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         integer, intent(in) :: j
@@ -1125,6 +1181,7 @@ contains
         type(scale_t), intent(in) :: xsc, ysc
         real(dp) :: xa, xb, ya, yb, hw
 
+        type(status_t), intent(out) :: status
         hw = 0.5_dp * s%width
         if (allocated(s%bwidth)) hw = 0.5_dp * s%bwidth(j)
         if (s%kind == SERIES_BARH) then
@@ -1144,22 +1201,32 @@ contains
         if (s%edgewidth > 0.0_dp) then
             call append_rect(b, min(xa, xb), min(ya, yb), abs(xb - xa), &
                              abs(yb - ya), point_color(s, j), s%alpha, &
-                             trim(s%edgecolor), s%edgewidth)
+                             trim(s%edgecolor), s%edgewidth, status=status)
+            if (.not. status%ok()) return
         else
             call append_rect(b, min(xa, xb), min(ya, yb), abs(xb - xa), &
-                             abs(yb - ya), point_color(s, j), s%alpha)
+                             abs(yb - ya), point_color(s, j), s%alpha, status=status)
+            if (.not. status%ok()) return
         end if
-        if (len_trim(s%hatch) > 0) &
+        if (len_trim(s%hatch) > 0) then
             call append_hatch(b, [xa, xb, xb, xa], [ya, ya, yb, yb], 4, &
-                              trim(s%hatch), trim(s%hcolor), s%alpha)
-        if (s%bar_labels) call append_bar_label(b, s, j, xa, xb, ya, yb)
-        if (allocated(s%eyhi)) call append_bar_err(b, s, j, ymin, ymax, ax_b, &
-                                                   ax_h, ysc, 0.5_dp*(xa + xb))
+                              trim(s%hatch), trim(s%hcolor), s%alpha, status=status)
+            if (.not. status%ok()) return
+        end if
+        if (s%bar_labels) then
+            call append_bar_label(b, s, j, xa, xb, ya, yb, status=status)
+            if (.not. status%ok()) return
+        end if
+        if (allocated(s%eyhi)) then
+            call append_bar_err(b, s, j, ymin, ymax, ax_b, &
+                                                   ax_h, ysc, 0.5_dp*(xa + xb), status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine append_bar
 
     ! The error bar on top of a bar. It is centred on the end of the bar,
     ! which is where the value is, not on the value axis origin.
-    subroutine append_bar_err(b, s, j, ymin, ymax, ax_b, ax_h, ysc, px)
+    subroutine append_bar_err(b, s, j, ymin, ymax, ax_b, ax_h, ysc, px, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         integer, intent(in) :: j
@@ -1167,16 +1234,20 @@ contains
         type(scale_t), intent(in) :: ysc
         real(dp) :: top, plo, phi, cap
 
+        type(status_t), intent(out) :: status
         top = bar_base(s, j) + s%y(j)
         plo = map_y(top - arm(s%eylo, j), ymin, ymax, ax_b, ax_h, ysc)
         phi = map_y(top + arm(s%eyhi, j), ymin, ymax, ax_b, ax_h, ysc)
-        call append_line(b, px, plo, px, phi, trim(s%ecolor), s%elw, LINE_SOLID, 1.0_dp)
+        call append_line(b, px, plo, px, phi, trim(s%ecolor), s%elw, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
         cap = s%ecap
         if (cap <= 0.0_dp) return
         call append_line(b, px - cap, plo, px + cap, plo, trim(s%ecolor), &
-                         s%elw, LINE_SOLID, 1.0_dp)
+                         s%elw, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
         call append_line(b, px - cap, phi, px + cap, phi, trim(s%ecolor), &
-                         s%elw, LINE_SOLID, 1.0_dp)
+                         s%elw, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine append_bar_err
 
     ! Where a bar starts: y = 0 unless the series was stacked on another.
@@ -1190,7 +1261,7 @@ contains
 
     ! The value written at the end of a bar. The padding is in points, which
     ! is why this waits until the bar has been placed on the canvas.
-    subroutine append_bar_label(b, s, j, xa, xb, ya, yb)
+    subroutine append_bar_label(b, s, j, xa, xb, ya, yb, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         integer, intent(in) :: j
@@ -1199,6 +1270,7 @@ contains
         real(dp) :: tx, ty, fs
         integer :: tn
 
+        type(status_t), intent(out) :: status
         txt = ""
         fs = s%bar_label_size
         if (len_trim(s%bar_fmt) > 0) then
@@ -1212,9 +1284,11 @@ contains
             if (xb < xa) tx = xb - s%bar_pad - 1.0_dp
             ty = 0.5_dp*(ya + yb) + text_mid(fs)
             if (xb < xa) then
-                call append_text(b, tx, ty, trim(adjustl(txt)), "right", fs, rc_text_color)
+                call append_text(b, tx, ty, trim(adjustl(txt)), "right", fs, rc_text_color, status=status)
+                if (.not. status%ok()) return
             else
-                call append_text(b, tx, ty, trim(adjustl(txt)), "left", fs, rc_text_color)
+                call append_text(b, tx, ty, trim(adjustl(txt)), "left", fs, rc_text_color, status=status)
+                if (.not. status%ok()) return
             end if
         else
             ! Above the top of the bar, or below it for a bar that hangs
@@ -1223,14 +1297,15 @@ contains
             ty = min(ya, yb) - s%bar_pad - text_descent(fs)
             if (yb > ya) ty = max(ya, yb) + s%bar_pad + text_ascent(fs)
             tx = 0.5_dp*(xa + xb)
-            call append_text(b, tx, ty, trim(adjustl(txt)), "center", fs, rc_text_color)
+            call append_text(b, tx, ty, trim(adjustl(txt)), "center", fs, rc_text_color, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine append_bar_label
 
     ! Shaded region between y and y2, as a single closed polygon.
     ! A patch: filled first, then outlined, so the outline sits on top of
     ! its own fill exactly as it does in matplotlib.
-    subroutine append_patch(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_patch(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -1239,6 +1314,7 @@ contains
         type(paint_t) :: p
         integer :: j
 
+        type(status_t), intent(out) :: status
         if (allocated(s%pverb)) then
             do j = 1, s%n
                 px(j) = map_x(s%x(j), xmin, xmax, ax_l, ax_w, xsc)
@@ -1246,11 +1322,13 @@ contains
             end do
             if (s%patch_fill) then
                 p = brush(trim(s%color), s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p, status=status)
+                if (.not. status%ok()) return
             end if
             if (len_trim(s%edgecolor) > 0) then
                 p = pen(trim(s%edgecolor), s%edgewidth, s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p, status=status)
+                if (.not. status%ok()) return
             end if
             return
         end if
@@ -1262,13 +1340,20 @@ contains
         end do
         px(s%n + 1) = px(1)
         py(s%n + 1) = py(1)
-        if (s%patch_fill) call append_polygon(b, px, py, s%n, trim(s%color), &
-                                              s%alpha, seal=s%patch_seal)
-        if (len_trim(s%hatch) > 0) &
-            call append_hatch(b, px, py, s%n, trim(s%hatch), trim(s%hcolor), s%alpha)
-        if (len_trim(s%edgecolor) > 0) &
+        if (s%patch_fill) then
+            call append_polygon(b, px, py, s%n, trim(s%color), &
+                                              s%alpha, seal=s%patch_seal, status=status)
+            if (.not. status%ok()) return
+        end if
+        if (len_trim(s%hatch) > 0) then
+            call append_hatch(b, px, py, s%n, trim(s%hatch), trim(s%hcolor), s%alpha, status=status)
+            if (.not. status%ok()) return
+        end if
+        if (len_trim(s%edgecolor) > 0) then
             call append_stroke_path(b, px, py, s%n + 1, trim(s%edgecolor), &
-                                    s%edgewidth, s%alpha)
+                                    s%edgewidth, s%alpha, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine append_patch
 
     ! One filled polygon per arrow, shaped exactly as matplotlib shapes it:
@@ -1276,7 +1361,7 @@ contains
     ! reach back four and a half w. Everything is measured in shaft widths
     ! and then scaled, which is why the arrows keep their proportions
     ! however long they are.
-    subroutine append_quiver(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_quiver(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -1284,13 +1369,15 @@ contains
         real(dp) :: w, sc
         integer :: j
 
+        type(status_t), intent(out) :: status
         if (s%n <= 0) return
         call quiver_scale(s, ax_w, w, sc)
         do j = 1, s%n
             call quiver_arrow(b, map_x(s%x(j), xmin, xmax, ax_l, ax_w, xsc), &
                               map_y(s%y(j), ymin, ymax, ax_b, ax_h, ysc), &
                               s%qu(j), s%qv(j), w, sc, ax_w, 0.0_dp, &
-                              trim(s%color), s%alpha)
+                              trim(s%color), s%alpha, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine append_quiver
 
@@ -1324,7 +1411,7 @@ contains
     ! pixels. pivot is the fraction of the arrow's length that lies behind
     ! the anchor: 0 puts the tail there, 0.5 the middle and 1 the tip, as
     ! matplotlib's pivot "tail", "middle" and "tip" do.
-    subroutine quiver_arrow(b, x0, y0, u, v, w, sc, ax_w, pivot, color, alpha)
+    subroutine quiver_arrow(b, x0, y0, u, v, w, sc, ax_w, pivot, color, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x0, y0, u, v, w, sc, ax_w, pivot, alpha
         character(len=*), intent(in) :: color
@@ -1332,6 +1419,7 @@ contains
         real(dp) :: mag, ln, ct, st, px(8), py(8), qx(8), qy(8)
         integer :: k
 
+        type(status_t), intent(out) :: status
         mag = hypot(u, v)
         if (mag <= 0.0_dp) return
         ! Arrow length in shaft widths, so the outline below is pure
@@ -1353,13 +1441,15 @@ contains
             px(k) = x0 + w*(qx(k)*ct - qy(k)*st)
             py(k) = y0 - w*(qx(k)*st + qy(k)*ct)
         end do
-        call append_polygon(b, px, py, 7, color, alpha)
+        call append_polygon(b, px, py, 7, color, alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine quiver_arrow
 
     ! The keys of the quivers in this axes, drawn after the clip is lifted
     ! since matplotlib does not clip them either. Canvas is W by H.
     subroutine append_quiverkeys(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, &
-                                 xsc, ysc, W, H)
+                                 xsc, ysc, W, H, &
+        status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, W, H
@@ -1369,6 +1459,7 @@ contains
         real(dp) :: w_px, sc, px, py, sep, pivot
         integer :: i
 
+        type(status_t), intent(out) :: status
         do i = 1, a%n_series
             associate (s => a%series(i))
                 if (s%kind /= SERIES_QUIVER .or. .not. s%qk_on) cycle
@@ -1423,13 +1514,16 @@ contains
                 if (len_trim(s%qk_color) > 0) then
                     call quiver_arrow(b, px, py, s%qk_u*cos(s%qk_angle*DEG), &
                                       s%qk_u*sin(s%qk_angle*DEG), w_px, sc, ax_w, pivot, &
-                                      trim(s%qk_color), s%alpha)
+                                      trim(s%qk_color), s%alpha, status=status)
+                    if (.not. status%ok()) return
                 else
                     call quiver_arrow(b, px, py, s%qk_u*cos(s%qk_angle*DEG), &
                                       s%qk_u*sin(s%qk_angle*DEG), w_px, sc, ax_w, pivot, &
-                                      trim(s%color), s%alpha)
+                                      trim(s%color), s%alpha, status=status)
+                    if (.not. status%ok()) return
                 end if
-                call append_annotation(b, t, t%x, t%y)
+                call append_annotation(b, t, t%x, t%y, status=status)
+                if (.not. status%ok()) return
             end associate
         end do
     end subroutine append_quiverkeys
@@ -1440,7 +1534,7 @@ contains
     ! Draw the table. Cells are a fixed 1.2 line heights tall, the text is
     ! right aligned in the body, left in the row labels and centered in the
     ! column headings, each a tenth of a cell in from its edge.
-    subroutine render_table(b, a, ax_l, ax_w, ax_b, ax_h)
+    subroutine render_table(b, a, ax_l, ax_w, ax_b, ax_h, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: ax_l, ax_w, ax_b, ax_h
@@ -1450,6 +1544,8 @@ contains
         integer :: nr, nc, nrows, i, j, r
         character(len=32) :: txt
 
+        type(status_t), intent(out) :: status
+        real(dp) :: math_width_value1
         if (.not. a%has_table) return
         nr = size(a%tbl_cells, 1)
         nc = size(a%tbl_cells, 2)
@@ -1467,7 +1563,9 @@ contains
         rlw = 0.0_dp
         if (allocated(a%tbl_row)) then
             do i = 1, nr
-                rlw = max(rlw, math_width(trim(a%tbl_row(i)), fs)*(1.0_dp + 2.0_dp*PAD))
+                math_width_value1 = math_width(trim(a%tbl_row(i)), fs, status=status)
+                if (.not. status%ok()) return
+                rlw = max(rlw, math_width_value1*(1.0_dp + 2.0_dp*PAD))
             end do
         end if
 
@@ -1486,16 +1584,19 @@ contains
             cx = x0
             if (allocated(a%tbl_row) .and. r > nrows - nr) then
                 call table_cell(b, cx - rlw, cy, rlw, ch, &
-                                trim(a%tbl_row(r - (nrows - nr))), "left", fs, PAD)
+                                trim(a%tbl_row(r - (nrows - nr))), "left", fs, PAD, status=status)
+                if (.not. status%ok()) return
             end if
             do j = 1, nc
                 if (r == 1 .and. allocated(a%tbl_col)) then
                     txt = a%tbl_col(j)
-                    call table_cell(b, cx, cy, cw(j), ch, trim(txt), "center", fs, PAD)
+                    call table_cell(b, cx, cy, cw(j), ch, trim(txt), "center", fs, PAD, status=status)
+                    if (.not. status%ok()) return
                 else
                     i = r - (nrows - nr)
                     txt = a%tbl_cells(i, j)
-                    call table_cell(b, cx, cy, cw(j), ch, trim(txt), "right", fs, PAD)
+                    call table_cell(b, cx, cy, cw(j), ch, trim(txt), "right", fs, PAD, status=status)
+                    if (.not. status%ok()) return
                 end if
                 cx = cx + cw(j)
             end do
@@ -1503,17 +1604,20 @@ contains
     end subroutine render_table
 
     ! One cell: a white box with a black edge, and its text placed by loc.
-    subroutine table_cell(b, x, y, w, h, s, loc, fs, pad)
+    subroutine table_cell(b, x, y, w, h, s, loc, fs, pad, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, w, h, fs, pad
         character(len=*), intent(in) :: s, loc
         real(dp) :: xs(5), ys(5), tx
 
+        type(status_t), intent(out) :: status
         if (w <= 0.0_dp) return
         xs = [x, x + w, x + w, x, x]
         ys = [y, y, y + h, y + h, y]
-        call append_polygon(b, xs, ys, 4, "#ffffff", 1.0_dp)
-        call append_stroke_path(b, xs, ys, 5, "#000000", 1.0_dp, 1.0_dp)
+        call append_polygon(b, xs, ys, 4, "#ffffff", 1.0_dp, status=status)
+        if (.not. status%ok()) return
+        call append_stroke_path(b, xs, ys, 5, "#000000", 1.0_dp, 1.0_dp, status=status)
+        if (.not. status%ok()) return
         if (len_trim(s) == 0) return
         select case (loc)
         case ("left")
@@ -1523,10 +1627,11 @@ contains
         case default
             tx = x + (1.0_dp - pad)*w
         end select
-        call append_text(b, tx, y + 0.5_dp*h + text_mid(fs), s, loc, fs, "#000000")
+        call append_text(b, tx, y + 0.5_dp*h + text_mid(fs), s, loc, fs, "#000000", status=status)
+        if (.not. status%ok()) return
     end subroutine table_cell
 
-    subroutine append_arrowheads(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_arrowheads(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -1539,6 +1644,7 @@ contains
         real(dp) :: dist, cs, sn, d, lw
         integer :: j
 
+        type(status_t), intent(out) :: status
         dist = hypot(HEAD_L, HEAD_W)
         cs = HEAD_L/dist
         sn = HEAD_W/dist
@@ -1568,12 +1674,14 @@ contains
             py(3) = y0 - d*(cs*st - sn*ct)
             px(4) = px(1)
             py(4) = py(1)
-            call append_polygon(b, px, py, 3, trim(s%color), s%alpha)
-            call append_stroke_path(b, px, py, 4, trim(s%color), lw, s%alpha)
+            call append_polygon(b, px, py, 3, trim(s%color), s%alpha, status=status)
+            if (.not. status%ok()) return
+            call append_stroke_path(b, px, py, 4, trim(s%color), lw, s%alpha, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine append_arrowheads
 
-    subroutine append_fill(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_fill(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -1584,6 +1692,7 @@ contains
 
         ! Missing data cuts the band in two, as it does in matplotlib: each
         ! unbroken run of points becomes a polygon of its own.
+        type(status_t), intent(out) :: status
         allocate (ok(s%n), px(2 * s%n), py(2 * s%n))
         do j = 1, s%n
             ok(j) = finite(s%x(j)) .and. finite(s%y(j)) .and. finite(s%y2(j))
@@ -1616,10 +1725,13 @@ contains
                         py(2*np - j + 1) = map_y(s%y2(j0 + j - 1), ymin, ymax, ax_b, ax_h, ysc)
                     end if
                 end do
-                call append_polygon(b, px, py, 2 * np, trim(s%color), s%alpha)
-                if (len_trim(s%hatch) > 0) &
+                call append_polygon(b, px, py, 2 * np, trim(s%color), s%alpha, status=status)
+                if (.not. status%ok()) return
+                if (len_trim(s%hatch) > 0) then
                     call append_hatch(b, px, py, 2 * np, trim(s%hatch), &
-                                      trim(s%hcolor), s%alpha)
+                                      trim(s%hcolor), s%alpha, status=status)
+                    if (.not. status%ok()) return
+                end if
             end if
             j0 = j1 + 1
         end do
@@ -1628,13 +1740,14 @@ contains
     ! An endless line, clipped to the axes rectangle in pixels by Liang and
     ! Barsky's parameter test, which needs no special case for a line that
     ! happens to be vertical or horizontal.
-    subroutine append_axline(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_axline(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
         type(scale_t), intent(in) :: xsc, ysc
         real(dp) :: x1, y1, x2, y2, dx, dy, t0, t1
 
+        type(status_t), intent(out) :: status
         x1 = map_x(s%x(1), xmin, xmax, ax_l, ax_w, xsc)
         y1 = map_y(s%y(1), ymin, ymax, ax_b, ax_h, ysc)
         x2 = map_x(s%x(2), xmin, xmax, ax_l, ax_w, xsc)
@@ -1651,7 +1764,8 @@ contains
         call slab(dy, ax_b - y1, t0, t1)
         if (t0 > t1) return
         call append_line(b, x1 + t0*dx, y1 + t0*dy, x1 + t1*dx, y1 + t1*dy, &
-                         trim(s%color), s%linewidth, s%linestyle, s%alpha)
+                         trim(s%color), s%linewidth, s%linestyle, s%alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine append_axline
 
     ! One edge of the clipping rectangle: p is the outward component of the
@@ -1678,7 +1792,7 @@ contains
     end subroutine slab
 
     ! Vertical error bar with caps for point j.
-    subroutine append_errorbar(b, s, j, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_errorbar(b, s, j, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         integer, intent(in) :: j
@@ -1687,6 +1801,7 @@ contains
         real(dp) :: px, py, plo, phi, cap, elw
         character(len=7) :: ec
 
+        type(status_t), intent(out) :: status
         px = map_x(s%x(j), xmin, xmax, ax_l, ax_w, xsc)
         py = map_y(s%y(j), ymin, ymax, ax_b, ax_h, ysc)
         cap = s%width
@@ -1697,24 +1812,30 @@ contains
         if (allocated(s%eylo) .or. allocated(s%eyhi)) then
             plo = map_y(s%y(j) - arm(s%eylo, j), ymin, ymax, ax_b, ax_h, ysc)
             phi = map_y(s%y(j) + arm(s%eyhi, j), ymin, ymax, ax_b, ax_h, ysc)
-            call append_line(b, px, plo, px, phi, trim(ec), elw, LINE_SOLID, s%alpha)
+            call append_line(b, px, plo, px, phi, trim(ec), elw, LINE_SOLID, s%alpha, status=status)
+            if (.not. status%ok()) return
             if (cap > 0.0_dp) then
                 call append_line(b, px - cap, plo, px + cap, plo, trim(ec), &
-                                 elw, LINE_SOLID, s%alpha)
+                                 elw, LINE_SOLID, s%alpha, status=status)
+                if (.not. status%ok()) return
                 call append_line(b, px - cap, phi, px + cap, phi, trim(ec), &
-                                 elw, LINE_SOLID, s%alpha)
+                                 elw, LINE_SOLID, s%alpha, status=status)
+                if (.not. status%ok()) return
             end if
         end if
 
         if (allocated(s%exlo) .or. allocated(s%exhi)) then
             plo = map_x(s%x(j) - arm(s%exlo, j), xmin, xmax, ax_l, ax_w, xsc)
             phi = map_x(s%x(j) + arm(s%exhi, j), xmin, xmax, ax_l, ax_w, xsc)
-            call append_line(b, plo, py, phi, py, trim(ec), elw, LINE_SOLID, s%alpha)
+            call append_line(b, plo, py, phi, py, trim(ec), elw, LINE_SOLID, s%alpha, status=status)
+            if (.not. status%ok()) return
             if (cap > 0.0_dp) then
                 call append_line(b, plo, py - cap, plo, py + cap, trim(ec), &
-                                 elw, LINE_SOLID, s%alpha)
+                                 elw, LINE_SOLID, s%alpha, status=status)
+                if (.not. status%ok()) return
                 call append_line(b, phi, py - cap, phi, py + cap, trim(ec), &
-                                 elw, LINE_SOLID, s%alpha)
+                                 elw, LINE_SOLID, s%alpha, status=status)
+                if (.not. status%ok()) return
             end if
         end if
     end subroutine append_errorbar
@@ -1851,7 +1972,7 @@ contains
 
     ! Box, median, whiskers at 1.5 IQR clipped to the data, and the outliers
     ! beyond them as open circles.
-    subroutine append_box(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_box(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -1861,6 +1982,7 @@ contains
         real(dp) :: lo_c, hi_c, ctr, nlo_c, nhi_c, mlo, mhi
         integer :: j, np
 
+        type(status_t), intent(out) :: status
         q1 = quantile(s%y(1:s%n), 0.25_dp)
         q2 = quantile(s%y(1:s%n), 0.5_dp)
         q3 = quantile(s%y(1:s%n), 0.75_dp)
@@ -1923,32 +2045,43 @@ contains
             np = 5
         end if
 
-        if (s%box_fill) call append_polygon(b, bx(1:np - 1), by(1:np - 1), np - 1, &
-                                            trim(s%hcolor), s%alpha)
-        call append_stroke_path(b, bx(1:np), by(1:np), np, trim(s%color), 1.0_dp, s%alpha)
+        if (s%box_fill) then
+            call append_polygon(b, bx(1:np - 1), by(1:np - 1), np - 1, &
+                                            trim(s%hcolor), s%alpha, status=status)
+            if (.not. status%ok()) return
+        end if
+        call append_stroke_path(b, bx(1:np), by(1:np), np, trim(s%color), 1.0_dp, s%alpha, status=status)
+        if (.not. status%ok()) return
 
         ! Whiskers along the centre line, with a cap on each.
         call box_seg(b, s, ctr, q1, ctr, wlo, trim(s%color), xmin, xmax, ymin, ymax, &
-                     ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                     ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+        if (.not. status%ok()) return
         call box_seg(b, s, ctr, q3, ctr, whi, trim(s%color), xmin, xmax, ymin, ymax, &
-                     ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                     ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+        if (.not. status%ok()) return
         call box_seg(b, s, nlo_c, wlo, nhi_c, wlo, trim(s%color), xmin, xmax, ymin, ymax, &
-                     ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                     ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+        if (.not. status%ok()) return
         call box_seg(b, s, nlo_c, whi, nhi_c, whi, trim(s%color), xmin, xmax, ymin, ymax, &
-                     ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                     ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+        if (.not. status%ok()) return
         ! The median, drawn between the waist of a notched box.
         if (s%box_notch) then
             call box_seg(b, s, nlo_c, q2, nhi_c, q2, "#ff7f0e", xmin, xmax, ymin, ymax, &
-                         ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                         ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
         else
             call box_seg(b, s, lo_c, q2, hi_c, q2, "#ff7f0e", xmin, xmax, ymin, ymax, &
-                         ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                         ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
         end if
 
         do j = 1, s%n
             if (s%y(j) >= wlo .and. s%y(j) <= whi) cycle
             call box_pt(s, ctr, s%y(j), bx, by, 1, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
-            call append_open_circle(b, bx(1), by(1), 3.0_dp, trim(s%color))
+            call append_open_circle(b, bx(1), by(1), 3.0_dp, trim(s%color), status=status)
+            if (.not. status%ok()) return
         end do
 
         ! matplotlib marks the mean with a green triangle.
@@ -1957,7 +2090,8 @@ contains
             call box_pt(s, ctr, mean, bx, by, 1, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
             px = bx(1)
             py = by(1)
-            call append_markers(b, MARKER_TRI_UP, [px], [py], 1, 6.0_dp, "#2ca02c", s%alpha)
+            call append_markers(b, MARKER_TRI_UP, [px], [py], 1, 6.0_dp, "#2ca02c", s%alpha, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine append_box
 
@@ -1995,7 +2129,8 @@ contains
     ! One straight piece of box furniture, from a category/value pair to
     ! another.
     subroutine box_seg(b, s, c0, v0, c1, v1, color, xmin, xmax, ymin, ymax, &
-                       ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                       ax_l, ax_w, ax_b, ax_h, xsc, ysc, &
+        status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: c0, v0, c1, v1
@@ -2004,14 +2139,16 @@ contains
         type(scale_t), intent(in) :: xsc, ysc
         real(dp) :: bx(2), by(2)
 
+        type(status_t), intent(out) :: status
         call box_pt(s, c0, v0, bx, by, 1, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
         call box_pt(s, c1, v1, bx, by, 2, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
-        call append_line(b, bx(1), by(1), bx(2), by(2), color, 1.0_dp, LINE_SOLID, s%alpha)
+        call append_line(b, bx(1), by(1), bx(2), by(2), color, 1.0_dp, LINE_SOLID, s%alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine box_seg
 
     ! Mirrored Gaussian kernel density estimate, plus the min/max/range bars
     ! matplotlib draws over it.
-    subroutine append_violin(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_violin(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -2023,6 +2160,7 @@ contains
         real(dp) :: c_lo, c_hi, ctr
         integer :: i, j
 
+        type(status_t), intent(out) :: status
         lo = s%y(1)
         hi = s%y(s%n)
         if (hi <= lo) return
@@ -2055,7 +2193,8 @@ contains
                         g(i), px, py, 2*NK + 1 - i, xmin, xmax, ymin, ymax, &
                         ax_l, ax_w, ax_b, ax_h, xsc, ysc)
         end do
-        call append_polygon(b, px, py, 2*NK, trim(s%color), 0.3_dp)
+        call append_polygon(b, px, py, 2*NK, trim(s%color), 0.3_dp, status=status)
+        if (.not. status%ok()) return
 
         c_lo = pos_coord(s, s%pos - cw, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
         c_hi = pos_coord(s, s%pos + cw, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
@@ -2064,26 +2203,33 @@ contains
         ! box_fill stands for "the extrema were turned off" on a violin.
         if (.not. s%box_fill) then
             call violin_bar(b, s, ctr, lo, ctr, hi, xmin, xmax, ymin, ymax, &
-                            ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                            ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
             call violin_bar(b, s, c_lo, lo, c_hi, lo, xmin, xmax, ymin, ymax, &
-                            ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                            ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
             call violin_bar(b, s, c_lo, hi, c_hi, hi, xmin, xmax, ymin, ymax, &
-                            ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                            ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
         end if
-        if (s%box_mean) &
+        if (s%box_mean) then
             call violin_bar(b, s, c_lo, mu, c_hi, mu, xmin, xmax, ymin, ymax, &
-                            ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                            ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
+        end if
         ! box_notch stands for "show the median" on a violin.
         if (s%box_notch) then
             med = quantile(s%y(1:s%n), 0.5_dp)
             call violin_bar(b, s, c_lo, med, c_hi, med, xmin, xmax, ymin, ymax, &
-                            ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                            ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine append_violin
 
     ! One bar of violin furniture, in the violin's own colour and weight.
     subroutine violin_bar(b, s, c0, v0, c1, v1, xmin, xmax, ymin, ymax, &
-                          ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                          ax_l, ax_w, ax_b, ax_h, xsc, ysc, &
+        status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: c0, v0, c1, v1
@@ -2091,19 +2237,22 @@ contains
         type(scale_t), intent(in) :: xsc, ysc
         real(dp) :: bx(2), by(2)
 
+        type(status_t), intent(out) :: status
         call box_pt(s, c0, v0, bx, by, 1, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
         call box_pt(s, c1, v1, bx, by, 2, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
-        call append_line(b, bx(1), by(1), bx(2), by(2), trim(s%color), 1.5_dp, LINE_SOLID, 1.0_dp)
+        call append_line(b, bx(1), by(1), bx(2), by(2), trim(s%color), 1.5_dp, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine violin_bar
 
     ! One <path> per wedge: a radius out, the arc, and back to the centre.
-    subroutine append_pie(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h)
+    subroutine append_pie(b, s, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
         integer :: i
         real(dp) :: tot, a0, a1, cx, cy, rx, ry, dir, off, mid
 
+        type(status_t), intent(out) :: status
         tot = sum(s%y(1:s%n))
         if (tot <= 0.0_dp) return
         cx = map_x(0.0_dp, xmin, xmax, ax_l, ax_w, linear_scale)
@@ -2126,7 +2275,8 @@ contains
             call append_wedge(b, cx + off*ax_w/(xmax - xmin)*cos(mid), &
                               cy - off*ax_h/(ymax - ymin)*sin(mid), rx, ry, &
                               a0, a1, trim(s%pcolor(i)), s%alpha, &
-                              edge=trim(s%hcolor), ewidth=s%linewidth)
+                              edge=trim(s%hcolor), ewidth=s%linewidth, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine append_pie
 
@@ -2134,7 +2284,7 @@ contains
     ! segments, so they are first chained end to end into whole contours:
     ! a contour has to be a single line before a label can be dropped into
     ! the middle of it and the line broken to make room.
-    subroutine append_contour_lines(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_contour_lines(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -2147,6 +2297,8 @@ contains
         character(len=32) :: lbl
         integer :: nl, dec
 
+        type(status_t), intent(out) :: status
+        real(dp) :: str_width_value1
         nr = size(a%cz, 1)
         nc = size(a%cz, 2)
         nlev = size(a%clev)
@@ -2182,7 +2334,9 @@ contains
             t = real(k - 1, dp)/real(max(nlev - 1, 1), dp)
             call format_tick_fixed(a%clev(k), dec, lbl, nl)
             call fix_minus(lbl, nl)
-            halfw = 0.5_dp*str_width(lbl(1:nl), a%clab_size) + 3.0_dp
+            str_width_value1 = str_width(lbl(1:nl), a%clab_size, status=status)
+            if (.not. status%ok()) return
+            halfw = 0.5_dp*str_width_value1 + 3.0_dp
 
             used(1:ns) = .false.
             do
@@ -2198,15 +2352,19 @@ contains
                 if (a%cont_labels) call label_window(lx, ly, nv, halfw, i0, i1, cx, cy, ang)
                 if (i0 > 0) then
                     call append_stroke_path(b, lx(1:i0), ly(1:i0), i0, &
-                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp)
+                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp, status=status)
+                    if (.not. status%ok()) return
                     call append_stroke_path(b, lx(i1:nv), ly(i1:nv), nv - i1 + 1, &
-                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp)
+                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp, status=status)
+                    if (.not. status%ok()) return
                     call append_text(b, cx, cy + text_mid(a%clab_size), lbl(1:nl), &
                                      "middle", a%clab_size, &
-                                     cmap_color(a%cont_cmap, t), ang)
+                                     cmap_color(a%cont_cmap, t), ang, status=status)
+                    if (.not. status%ok()) return
                 else
                     call append_stroke_path(b, lx(1:nv), ly(1:nv), nv, &
-                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp)
+                                            cmap_color(a%cont_cmap, t), 1.5_dp, 1.0_dp, status=status)
+                    if (.not. status%ok()) return
                 end if
             end do
         end do
@@ -2356,7 +2514,7 @@ contains
     end subroutine label_window
 
     ! Walk every cell as two triangles, emitting filled bands or level lines.
-    subroutine append_contour(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_contour(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -2369,6 +2527,7 @@ contains
         real(dp) :: px(MAX_POLY), py(MAX_POLY)
         real(dp) :: lo, hi, t
 
+        type(status_t), intent(out) :: status
         nr = size(a%cz, 1)
         nc = size(a%cz, 2)
         nlev = size(a%clev)
@@ -2377,7 +2536,8 @@ contains
 
         if (.not. a%cont_filled) then
             call append_contour_lines(b, a, xmin, xmax, ymin, ymax, &
-                                      ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                      ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
             return
         end if
 
@@ -2403,7 +2563,8 @@ contains
                             end do
                             t = (real(k, dp) - 0.5_dp) / real(nlev - 1, dp)
                             call append_polygon(b, px, py, nq, &
-                                                cmap_color(a%cont_cmap, t), 1.0_dp, seal=.true.)
+                                                cmap_color(a%cont_cmap, t), 1.0_dp, seal=.true., status=status)
+                            if (.not. status%ok()) return
                         end do
                     end if
                 end do
@@ -2434,7 +2595,7 @@ contains
     ! A blit assumes the samples are evenly spaced on the canvas, which is
     ! true only while both axes are linear, so a log axis keeps the per-cell
     ! path below.
-    subroutine append_image(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_image(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -2445,9 +2606,11 @@ contains
         type(paint_t) :: p
         logical :: flip_x, flip_y
 
+        type(status_t), intent(out) :: status
         if (a%has_mesh .or. xsc%kind /= SCALE_LINEAR .or. ysc%kind /= SCALE_LINEAR) then
             call append_image_cells(b, a, xmin, xmax, ymin, ymax, &
-                                    ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                    ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
             return
         end if
 
@@ -2473,7 +2636,8 @@ contains
         ! blur. Repeating each sample a whole number of times is exactly
         ! nearest neighbour, so no value is invented by doing it.
         if (a%img_bilinear) then
-            call append_image_smooth(b, a, px0, px1, py0, py1, flip_x, flip_y)
+            call append_image_smooth(b, a, px0, px1, py0, py1, flip_x, flip_y, status=status)
+            if (.not. status%ok()) return
             return
         end if
 
@@ -2494,7 +2658,8 @@ contains
 
         p%clip = g_clip
         call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
-                          abs(py1 - py0), rgba, nc*fx, nr*fy, p)
+                          abs(py1 - py0), rgba, nc*fx, nr*fy, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_image
 
     ! interpolation="bilinear": the raster is built at the size the image
@@ -2502,7 +2667,7 @@ contains
     ! the picture comes out smooth rather than blocked. The samples sit at
     ! the middles of their cells, which is what puts the outermost half
     ! cell at a flat color rather than running off the data.
-    subroutine append_image_smooth(b, a, px0, px1, py0, py1, flip_x, flip_y)
+    subroutine append_image_smooth(b, a, px0, px1, py0, py1, flip_x, flip_y, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: px0, px1, py0, py1
@@ -2513,6 +2678,7 @@ contains
         real(dp) :: u, v, fu, fv, val, t
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         nr = size(a%img, 1)
         nc = size(a%img, 2)
         ow = max(1, min(MAX_SIDE, nint(abs(px1 - px0))))
@@ -2544,7 +2710,8 @@ contains
 
         p%clip = g_clip
         call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
-                          abs(py1 - py0), rgba, ow, oh, p)
+                          abs(py1 - py0), rgba, ow, oh, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_image_smooth
 
     ! How many times to repeat each sample so the raster covers the space it
@@ -2563,7 +2730,7 @@ contains
     ! One rectangle per sample. Correct whatever the axes do to the spacing,
     ! and so the answer when a scale is not linear and a blit would put the
     ! samples in the wrong places.
-    subroutine append_image_cells(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+    subroutine append_image_cells(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
@@ -2571,6 +2738,7 @@ contains
         integer :: nr, nc, i, j
         real(dp) :: xe0, xe1, ye0, ye1, px0, px1, py0, py1, t, dxc, dyc
 
+        type(status_t), intent(out) :: status
         nr = size(a%img, 1)
         nc = size(a%img, 2)
         dxc = (a%img_ext(2) - a%img_ext(1)) / real(nc, dp)
@@ -2599,7 +2767,8 @@ contains
                 if (img_bad_hidden(a, a%img(i, j))) cycle
                 call append_cell(b, min(px0, px1), min(py0, py1), &
                                  abs(px1 - px0), abs(py1 - py0), &
-                                 img_hex(a, i, j))
+                                 img_hex(a, i, j), status=status)
+                if (.not. status%ok()) return
             end do
         end do
     end subroutine append_image_cells
@@ -2608,7 +2777,8 @@ contains
     ! because that is where matplotlib's axes.axisbelow="line" puts them.
     subroutine append_grid(b, a, xt, nxt, yt, nyt, xm, nxm, ym, nym, &
                            xmin, xmax, ymin, ymax, &
-                           ax_l, ax_r, ax_t, ax_b, ax_w, ax_h, xsc, ysc)
+                           ax_l, ax_r, ax_t, ax_b, ax_w, ax_h, xsc, ysc, &
+        status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xt(:), yt(:), xm(:), ym(:)
@@ -2620,6 +2790,7 @@ contains
         real(dp) :: p, lw, alpha, a2
         integer :: i, ls
 
+        type(status_t), intent(out) :: status
         if (.not. a%grid_on) return
         col = rc_grid_color
         alpha = 1.0_dp
@@ -2630,26 +2801,31 @@ contains
         if (a%grid_ls >= 0) ls = a%grid_ls
         if (a%grid_alpha >= 0.0_dp) alpha = a%grid_alpha
         if (grid_does(a, "major")) then
-            call grid_lines(b, xt, nxt, yt, nyt)
+            call grid_lines(b, xt, nxt, yt, nyt, status=status)
+            if (.not. status%ok()) return
         end if
         if (grid_does(a, "minor")) then
-            call grid_lines(b, xm, nxm, ym, nym)
+            call grid_lines(b, xm, nxm, ym, nym, status=status)
+            if (.not. status%ok()) return
         end if
     contains
-        subroutine grid_lines(bb, gx, ngx, gy, ngy)
+        subroutine grid_lines(bb, gx, ngx, gy, ngy, status)
             class(renderer_t), intent(inout) :: bb
             real(dp), intent(in) :: gx(:), gy(:)
             integer, intent(in) :: ngx, ngy
+            type(status_t), intent(out) :: status
             if (a%grid_axis /= "y") then
                 do i = 1, ngx
                     p = map_x(gx(i), xmin, xmax, ax_l, ax_w, xsc)
-                    call append_line(bb, p, ax_t, p, ax_b, col, lw, ls, alpha)
+                    call append_line(bb, p, ax_t, p, ax_b, col, lw, ls, alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
             end if
             if (a%grid_axis /= "x") then
                 do i = 1, ngy
                     p = map_y(gy(i), ymin, ymax, ax_b, ax_h, ysc)
-                    call append_line(bb, ax_l, p, ax_r, p, col, lw, ls, alpha)
+                    call append_line(bb, ax_l, p, ax_r, p, col, lw, ls, alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
             end if
         end subroutine grid_lines
@@ -2670,7 +2846,7 @@ contains
     end function wants_minor
 
     ! Vertical gradient strip plus its own frame, ticks and labels.
-    subroutine append_colorbar(b, a, idx, W, H)
+    subroutine append_colorbar(b, a, idx, W, H, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         integer, intent(in) :: idx
@@ -2681,6 +2857,7 @@ contains
         character(len=64) :: lbl
         character(len=512) :: esc
 
+        type(status_t), intent(out) :: status
         call cbar_box(a, W, H, bx, bt, bw, bh)
         bb = bt + bh
 
@@ -2696,7 +2873,8 @@ contains
                 y1 = (a%img_bounds(i + 1) - lo) / (hi - lo)
                 v = 0.5_dp * (a%img_bounds(i) + a%img_bounds(i + 1))
                 call cbar_band(b, a%cbar_horiz, bx, bt, bw, bh, y0, y1, &
-                               img_color(a, v))
+                               img_color(a, v), status=status)
+                if (.not. status%ok()) return
             end do
         else
             do i = 1, CBAR_SLICES
@@ -2704,12 +2882,14 @@ contains
                 y1 = real(i, dp) / real(CBAR_SLICES, dp)
                 t = (real(i, dp) - 0.5_dp) / real(CBAR_SLICES, dp)
                 call cbar_band(b, a%cbar_horiz, bx, bt, bw, bh, y0, y1, &
-                               map_color(a, t))
+                               map_color(a, t), status=status)
+                if (.not. status%ok()) return
             end do
         end if
         call clear_clip()
 
-        call b%draw_rect(bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw))
+        call b%draw_rect(bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw), status=status)
+        if (.not. status%ok()) return
 
         lo = a%img_vmin
         hi = a%img_vmax
@@ -2744,14 +2924,18 @@ contains
             call fix_minus(lbl, ln)
             if (a%cbar_horiz) then
                 px = bx + t * bw
-                call append_tick(b, px, bb, px, bb + 3.5_dp)
+                call append_tick(b, px, bb, px, bb + 3.5_dp, status=status)
+                if (.not. status%ok()) return
                 call append_text(b, px, bb + xtick_gap(a), lbl(1:ln), &
-                                 "middle", a%xtick_size, rc_text_color)
+                                 "middle", a%xtick_size, rc_text_color, status=status)
+                if (.not. status%ok()) return
             else
                 py = bb - t * bh
-                call append_tick(b, bx + bw, py, bx + bw + 3.5_dp, py)
+                call append_tick(b, bx + bw, py, bx + bw + 3.5_dp, py, status=status)
+                if (.not. status%ok()) return
                 call append_text(b, bx + bw + 7.0_dp, py + 3.5_dp, lbl(1:ln), &
-                                 "left", a%ytick_size, rc_text_color)
+                                 "left", a%ytick_size, rc_text_color, status=status)
+                if (.not. status%ok()) return
             end if
         end do
 
@@ -2760,11 +2944,13 @@ contains
                 call append_text(b, bx + 0.5_dp * bw, bb + xtick_gap(a) &
                                  + text_descent(a%xtick_size) + LABEL_PAD &
                                  + text_ascent(a%xlabel_size), trim(a%cbar_label), &
-                                 "middle", a%xlabel_size, rc_text_color)
+                                 "middle", a%xlabel_size, rc_text_color, status=status)
+                if (.not. status%ok()) return
             else
                 call append_text(b, bx + bw + 34.0_dp, 0.5_dp * (bt + bb), &
                                  trim(a%cbar_label), "center", a%ylabel_size, &
-                                 rc_text_color, 90.0_dp)
+                                 rc_text_color, 90.0_dp, status=status)
+                if (.not. status%ok()) return
             end if
         end if
     end subroutine append_colorbar
@@ -2772,15 +2958,18 @@ contains
     ! One slice of the bar, covering the fractions u0 to u1 of its length.
     ! A vertical bar runs from the bottom up, a horizontal one left to
     ! right, which is all that separates the two.
-    subroutine cbar_band(b, horiz, bx, by, bw, bh, u0, u1, col)
+    subroutine cbar_band(b, horiz, bx, by, bw, bh, u0, u1, col, status)
         class(renderer_t), intent(inout) :: b
         logical, intent(in) :: horiz
         real(dp), intent(in) :: bx, by, bw, bh, u0, u1
         character(len=*), intent(in) :: col
+        type(status_t), intent(out) :: status
         if (horiz) then
-            call append_cell(b, bx + u0 * bw, by, (u1 - u0) * bw, bh, col)
+            call append_cell(b, bx + u0 * bw, by, (u1 - u0) * bw, bh, col, status=status)
+            if (.not. status%ok()) return
         else
-            call append_cell(b, bx, by + (1.0_dp - u1) * bh, bw, (u1 - u0) * bh, col)
+            call append_cell(b, bx, by + (1.0_dp - u1) * bh, bw, (u1 - u0) * bh, col, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine cbar_band
 
@@ -3188,7 +3377,7 @@ contains
     ! runs anticlockwise from the right and the radius from the middle out,
     ! so the whole of the drawing is one change of coordinates away from
     ! everything else here.
-    subroutine render_polar(b, a, ax_l, ax_r, ax_b, ax_t)
+    subroutine render_polar(b, a, ax_l, ax_r, ax_b, ax_t, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: ax_l, ax_r, ax_b, ax_t
@@ -3199,6 +3388,7 @@ contains
         character(len=64) :: lbl
         integer :: nt, i, j, k, n, unit, dec
 
+        type(status_t), intent(out) :: status
         cx = 0.5_dp*(ax_l + ax_r)
         cy = 0.5_dp*(ax_t + ax_b)
         R = 0.5_dp*min(ax_r - ax_l, ax_b - ax_t)
@@ -3223,13 +3413,15 @@ contains
             do k = 1, nt
                 if (t(k) <= 0.0_dp .or. t(k) > rmax) cycle
                 call polar_circle(cx, cy, R*t(k)/rmax, cxs, cys)
-                call append_stroke_path(b, cxs, cys, NC + 1, rc_grid_color, 0.8_dp, 1.0_dp)
+                call append_stroke_path(b, cxs, cys, NC + 1, rc_grid_color, 0.8_dp, 1.0_dp, status=status)
+                if (.not. status%ok()) return
             end do
             do k = 0, 7
                 ang = real(k, dp)*PI/4.0_dp
                 call append_stroke_path(b, [cx, cx + R*cos(ang)], &
                                         [cy, cy - R*sin(ang)], 2, &
-                                        rc_grid_color, 0.8_dp, 1.0_dp)
+                                        rc_grid_color, 0.8_dp, 1.0_dp, status=status)
+                if (.not. status%ok()) return
             end do
         end if
 
@@ -3243,19 +3435,24 @@ contains
                 px(j) = cx + rr*cos(a%series(i)%x(j))
                 py(j) = cy - rr*sin(a%series(i)%x(j))
             end do
-            if (a%series(i)%linestyle /= LINE_NONE .and. n >= 2) &
+            if (a%series(i)%linestyle /= LINE_NONE .and. n >= 2) then
                 call append_stroke_path(b, px, py, n, trim(a%series(i)%color), &
-                                        a%series(i)%linewidth, a%series(i)%alpha)
-            if (a%series(i)%marker /= MARKER_NONE) &
+                                        a%series(i)%linewidth, a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
+            end if
+            if (a%series(i)%marker /= MARKER_NONE) then
                 call append_markers(b, a%series(i)%marker, px, py, n, &
                                     a%series(i)%markersize, trim(a%series(i)%color), &
-                                    a%series(i)%alpha)
+                                    a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
+            end if
             deallocate (px, py)
         end do
 
         ! The outer circle is the whole of the frame a polar axes has.
         call polar_circle(cx, cy, R, cxs, cys)
-        call append_stroke_path(b, cxs, cys, NC + 1, rc_spine_color, 0.8_dp, 1.0_dp)
+        call append_stroke_path(b, cxs, cys, NC + 1, rc_spine_color, 0.8_dp, 1.0_dp, status=status)
+        if (.not. status%ok()) return
 
         ! Angles are labelled outside the circle, radii along the 22.5
         ! degree line, which is where matplotlib puts them.
@@ -3266,7 +3463,8 @@ contains
             write (lbl, "(I0,A)") k*45, achar(176)
             lx = cx + (R + 4.0_dp + 0.5_dp*a%xtick_size)*cos(ang)
             ly = cy - (R + 4.0_dp + 0.5_dp*a%xtick_size)*sin(ang) + text_mid(a%xtick_size)
-            call append_text(b, lx, ly, trim(lbl), "middle", a%xtick_size, rc_text_color)
+            call append_text(b, lx, ly, trim(lbl), "middle", a%xtick_size, rc_text_color, status=status)
+            if (.not. status%ok()) return
         end do
         do k = 1, nt
             if (t(k) <= 0.0_dp .or. t(k) > rmax) cycle
@@ -3275,15 +3473,18 @@ contains
             rr = R*t(k)/rmax
             lx = cx + rr*cos(22.5_dp*PI/180.0_dp)
             ly = cy - rr*sin(22.5_dp*PI/180.0_dp) + text_mid(a%ytick_size)
-            call append_text(b, lx, ly, lbl(1:n), "middle", a%ytick_size, rc_text_color)
+            call append_text(b, lx, ly, lbl(1:n), "middle", a%ytick_size, rc_text_color, status=status)
+            if (.not. status%ok()) return
         end do
 
         ! The title clears the angle label above the circle rather than
         ! sitting on the box, which would run straight through it.
-        if (len_trim(a%title) > 0) &
+        if (len_trim(a%title) > 0) then
             call append_text(b, cx, cy - R - 4.0_dp - 1.6_dp*a%xtick_size &
                              - 0.5_dp*a%title_size, trim(a%title), &
-                             "center", a%title_size, rc_text_color)
+                             "center", a%title_size, rc_text_color, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine render_polar
 
     ! Data bounds, then matplotlib's 3D margins: five percent in x and y,
@@ -3420,7 +3621,7 @@ contains
         end do
     end subroutine order_far_first
 
-    subroutine render_axes3d(b, a, ax_l, ax_r, ax_b, ax_t)
+    subroutine render_axes3d(b, a, ax_l, ax_r, ax_b, ax_t, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: ax_l, ax_r, ax_b, ax_t
@@ -3452,6 +3653,7 @@ contains
 
         ! mplot3d squares the axes box before drawing, so that the picture
         ! does not stretch when the figure does.
+        type(status_t), intent(out) :: status
         side = min(ax_r - ax_l, ax_b - ax_t)
         bl = 0.5_dp*(ax_l + ax_r) - 0.5_dp*side
         bt = 0.5_dp*(ax_t + ax_b) - 0.5_dp*side
@@ -3489,7 +3691,8 @@ contains
             pl = 2*i - 1
             if (highs(i)) pl = 2*i
             call append_polygon(b, dx(PLANES(:, pl)), dy(PLANES(:, pl)), 4, &
-                                PANE(i), 0.5_dp, .true.)
+                                PANE(i), 0.5_dp, .true., status=status)
+            if (.not. status%ok()) return
         end do
 
         ! x and y run across the picture and z up it, so x and y are spaced
@@ -3523,7 +3726,8 @@ contains
                     q = p
                     q(j2) = maxmin(j2)
                     call dev3(M, bl, bt, side, q(1), q(2), q(3), gx(3), gy(3), gd(3))
-                    call append_stroke_path(b, gx, gy, 3, rc_grid_color, rc_grid_lw, 1.0_dp)
+                    call append_stroke_path(b, gx, gy, 3, rc_grid_color, rc_grid_lw, 1.0_dp, status=status)
+                    if (.not. status%ok()) return
                 end do
             end do
         end if
@@ -3543,7 +3747,8 @@ contains
             e2(JUG(2, i)) = maxmin(JUG(2, i))
             call dev3(M, bl, bt, side, e1(1), e1(2), e1(3), ex(1), ey(1), td2)
             call dev3(M, bl, bt, side, e2(1), e2(2), e2(3), ex(2), ey(2), td2)
-            call append_stroke_path(b, ex, ey, 2, rc_spine_color, rc_spine_lw, 1.0_dp)
+            call append_stroke_path(b, ex, ey, 2, rc_spine_color, rc_spine_lw, 1.0_dp, status=status)
+            if (.not. status%ok()) return
 
             td = TICKDIR(i)
             tdel = deltas(td)
@@ -3559,7 +3764,8 @@ contains
                 call dev3(M, bl, bt, side, q(1), q(2), q(3), tx(1), ty(1), td2)
                 q(td) = t_in
                 call dev3(M, bl, bt, side, q(1), q(2), q(3), tx(2), ty(2), td2)
-                call append_stroke_path(b, tx, ty, 2, rc_spine_color, 0.8_dp, 1.0_dp)
+                call append_stroke_path(b, tx, ty, 2, rc_spine_color, 0.8_dp, 1.0_dp, status=status)
+                if (.not. status%ok()) return
 
                 q(td) = e1(td)
                 q = move_out(q, centers, tick_d, i)
@@ -3569,7 +3775,8 @@ contains
                 call format_tick_fixed(tk(k, i), dec(i), lbl, ln)
                 call fix_minus(lbl, ln)
                 call append_text(b, tx(1), ty(1) + text_ascent(fs), lbl(1:ln), &
-                                 "center", fs, rc_text_color)
+                                 "center", fs, rc_text_color, status=status)
+                if (.not. status%ok()) return
             end do
 
             axl = ""
@@ -3584,17 +3791,21 @@ contains
             ang = 0.0_dp
             if (len_trim(axl) > 4) ang = atan2(ey(1) - ey(2), ex(2) - ex(1))*180.0_dp/PI
             call append_text(b, tx(1), ty(1) + text_mid(a%xlabel_size), trim(axl), &
-                             "center", a%xlabel_size, rc_text_color, ang)
+                             "center", a%xlabel_size, rc_text_color, ang, status=status)
+            if (.not. status%ok()) return
         end do
 
-        call render_series3d(b, a, M, bl, bt, side)
+        call render_series3d(b, a, M, bl, bt, side, status=status)
+        if (.not. status%ok()) return
 
-        if (len_trim(a%title) > 0) &
+        if (len_trim(a%title) > 0) then
             call append_text(b, bl + 0.5_dp*side, bt - 0.5_dp*a%title_size, &
-                             trim(a%title), "center", a%title_size, rc_text_color)
+                             trim(a%title), "center", a%title_size, rc_text_color, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine render_axes3d
 
-    subroutine render_series3d(b, a, M, bl, bt, side)
+    subroutine render_series3d(b, a, M, bl, bt, side, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: M(4, 4), bl, bt, side
@@ -3604,6 +3815,7 @@ contains
         integer :: i, k, n
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         do i = 1, a%n_series
             n = a%series(i)%n
             select case (a%series(i)%kind)
@@ -3616,11 +3828,13 @@ contains
                 if (a%series(i)%linestyle /= LINE_NONE) then
                     p = pen(a%series(i)%color, a%series(i)%linewidth, &
                             a%series(i)%alpha, a%series(i)%linestyle)
-                    call b%draw_path(px, py, line_verbs(n), n, p)
+                    call b%draw_path(px, py, line_verbs(n), n, p, status=status)
+                    if (.not. status%ok()) return
                 end if
                 call append_markers(b, a%series(i)%marker, px, py, n, &
                                     a%series(i)%markersize, a%series(i)%color, &
-                                    a%series(i)%alpha)
+                                    a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
                 deallocate (px, py, pd)
             case (SERIES_SCATTER3D)
                 allocate (px(n), py(n), pd(n), idx(n))
@@ -3642,22 +3856,26 @@ contains
                     oney(1) = py(idx(k))
                     call append_markers(b, a%series(i)%marker, one, oney, 1, &
                                         a%series(i)%markersize, a%series(i)%color, &
-                                        a%series(i)%alpha*sat)
+                                        a%series(i)%alpha*sat, status=status)
+                    if (.not. status%ok()) return
                 end do
                 deallocate (px, py, pd, idx)
             case (SERIES_SURFACE)
-                call render_surface(b, a%series(i), M, bl, bt, side)
+                call render_surface(b, a%series(i), M, bl, bt, side, status=status)
+                if (.not. status%ok()) return
             case (SERIES_TRISURF)
-                call render_trisurf(b, a%series(i), M, bl, bt, side)
+                call render_trisurf(b, a%series(i), M, bl, bt, side, status=status)
+                if (.not. status%ok()) return
             case (SERIES_BAR3D)
-                call render_bar3d(b, a%series(i), M, bl, bt, side)
+                call render_bar3d(b, a%series(i), M, bl, bt, side, status=status)
+                if (.not. status%ok()) return
             end select
         end do
     end subroutine render_series3d
 
     ! One quadrilateral per cell of the grid, lit by matplotlib's default
     ! light source and painted back to front.
-    subroutine render_surface(b, s, M, bl, bt, side)
+    subroutine render_surface(b, s, M, bl, bt, side, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: M(4, 4), bl, bt, side
@@ -3668,12 +3886,14 @@ contains
         integer :: nx, ny, nf, f, i, j, c, rgb(3)
         character(len=7) :: col
 
+        type(status_t), intent(out) :: status
         nx = size(s%x)
         ny = size(s%y)
         nf = (nx - 1)*(ny - 1)
         if (nf <= 0) return
         if (s%wire) then
-            call render_wireframe(b, s, M, bl, bt, side)
+            call render_wireframe(b, s, M, bl, bt, side, status=status)
+            if (.not. status%ok()) return
             return
         end if
         allocate (fx(4, nf), fy(4, nf), depth(nf), idx(nf))
@@ -3729,14 +3949,15 @@ contains
             col = "#"//hex_pair(nint(rgb(1)*depth(idx(f)))) &
                   //hex_pair(nint(rgb(2)*depth(idx(f)))) &
                   //hex_pair(nint(rgb(3)*depth(idx(f))))
-            call append_polygon(b, fx(:, idx(f)), fy(:, idx(f)), 4, col, s%alpha, .true.)
+            call append_polygon(b, fx(:, idx(f)), fy(:, idx(f)), 4, col, s%alpha, .true., status=status)
+            if (.not. status%ok()) return
         end do
         deallocate (fx, fy, depth, idx)
     end subroutine render_surface
 
     ! One lit facet per triangle, painted back to front. The lighting is
     ! the surface's, so the two agree where they overlap.
-    subroutine render_trisurf(b, s, M, bl, bt, side)
+    subroutine render_trisurf(b, s, M, bl, bt, side, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: M(4, 4), bl, bt, side
@@ -3746,6 +3967,7 @@ contains
         integer :: n, nt, i, k, v(3), rgb(3)
         character(len=7) :: col
 
+        type(status_t), intent(out) :: status
         n = s%n
         nt = size(s%tri, 2)
         if (nt < 1) return
@@ -3773,7 +3995,8 @@ contains
             end if
             col = "#"//hex_pair(nint(rgb(1)*shade))//hex_pair(nint(rgb(2)*shade)) &
                   //hex_pair(nint(rgb(3)*shade))
-            call append_polygon(b, tx, ty, 3, col, s%alpha, .true.)
+            call append_polygon(b, tx, ty, 3, col, s%alpha, .true., status=status)
+            if (.not. status%ok()) return
         end do
         deallocate (px, py, pz, depth, idx)
     end subroutine render_trisurf
@@ -3801,7 +4024,7 @@ contains
     ! Six faces per box, all of them wound anticlockwise seen from outside
     ! so that the light falls on them the way mplot3d's does, and the whole
     ! lot painted back to front together.
-    subroutine render_bar3d(b, s, M, bl, bt, side)
+    subroutine render_bar3d(b, s, M, bl, bt, side, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: M(4, 4), bl, bt, side
@@ -3819,6 +4042,7 @@ contains
         integer :: nf, f, i, k, c, rgb(3)
         character(len=7) :: col
 
+        type(status_t), intent(out) :: status
         nf = 6*s%n
         if (nf < 1) return
         allocate (fx(4, nf), fy(4, nf), depth(nf), light(nf), idx(nf))
@@ -3848,14 +4072,15 @@ contains
             col = "#"//hex_pair(nint(rgb(1)*light(idx(f)))) &
                   //hex_pair(nint(rgb(2)*light(idx(f)))) &
                   //hex_pair(nint(rgb(3)*light(idx(f))))
-            call append_polygon(b, fx(:, idx(f)), fy(:, idx(f)), 4, col, s%alpha, .true.)
+            call append_polygon(b, fx(:, idx(f)), fy(:, idx(f)), 4, col, s%alpha, .true., status=status)
+            if (.not. status%ok()) return
         end do
         deallocate (fx, fy, depth, light, idx)
     end subroutine render_bar3d
 
     ! Every line of the mesh, in front and behind alike: matplotlib hides
     ! nothing in a wireframe either.
-    subroutine render_wireframe(b, s, M, bl, bt, side)
+    subroutine render_wireframe(b, s, M, bl, bt, side, status)
         class(renderer_t), intent(inout) :: b
         type(series_t), intent(in) :: s
         real(dp), intent(in) :: M(4, 4), bl, bt, side
@@ -3863,6 +4088,7 @@ contains
         real(dp) :: uz
         integer :: nx, ny, i, j
 
+        type(status_t), intent(out) :: status
         nx = size(s%x)
         ny = size(s%y)
         allocate (gx(ny, nx), gy(ny, nx))
@@ -3874,11 +4100,13 @@ contains
         end do
         do j = 1, ny
             call append_stroke_path(b, gx(j, :), gy(j, :), nx, s%color, s%linewidth, &
-                                    s%alpha)
+                                    s%alpha, status=status)
+            if (.not. status%ok()) return
         end do
         do i = 1, nx
             call append_stroke_path(b, gx(:, i), gy(:, i), ny, s%color, s%linewidth, &
-                                    s%alpha)
+                                    s%alpha, status=status)
+            if (.not. status%ok()) return
         end do
         deallocate (gx, gy)
     end subroutine render_wireframe
@@ -3897,7 +4125,7 @@ contains
         end do
     end subroutine polar_circle
 
-    subroutine render_axes(b, a, idx, W, H, clear)
+    subroutine render_axes(b, a, idx, W, H, clear, status)
         class(renderer_t), intent(inout) :: b
         type(axes_t), intent(in) :: a
         integer, intent(in) :: idx
@@ -3931,6 +4159,9 @@ contains
         integer :: k0, k1, ii
         type(paint_t) :: pnt
 
+        type(status_t), intent(out) :: status
+        real(dp) :: ylabel_out_value1
+        real(dp) :: str_width_value1
         ax_l = a%left * W
         ax_r = a%right * W
         ax_b = (1.0_dp - a%bottom) * H
@@ -3939,12 +4170,14 @@ contains
         ax_h = ax_b - ax_t
 
         if (a%polar) then
-            call render_polar(b, a, ax_l, ax_r, ax_b, ax_t)
+            call render_polar(b, a, ax_l, ax_r, ax_b, ax_t, status=status)
+            if (.not. status%ok()) return
             return
         end if
 
         if (a%is3d) then
-            call render_axes3d(b, a, ax_l, ax_r, ax_b, ax_t)
+            call render_axes3d(b, a, ax_l, ax_r, ax_b, ax_t, status=status)
+            if (.not. status%ok()) return
             return
         end if
 
@@ -4020,18 +4253,24 @@ contains
         if (.not. clear .and. .not. a%patch_off) then
             if (len_trim(a%facecolor) > 0) then
                 call append_rect(b, ax_l, ax_t, ax_w, ax_h, trim(a%facecolor), &
-                                 a%face_alpha)
+                                 a%face_alpha, status=status)
+                if (.not. status%ok()) return
             else
-                call append_rect(b, ax_l, ax_t, ax_w, ax_h, rc_axes_face)
+                call append_rect(b, ax_l, ax_t, ax_w, ax_h, rc_axes_face, status=status)
+                if (.not. status%ok()) return
             end if
         end if
 
         if (a%has_img .or. a%has_cont) then
             call set_clip(ax_l, ax_t, ax_w, ax_h)
-            if (a%has_img) &
-                call append_image(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
-            if (a%has_cont) &
-                call append_contour(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+            if (a%has_img) then
+                call append_image(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
+            end if
+            if (a%has_cont) then
+                call append_contour(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
+            end if
             call clear_clip()
         end if
 
@@ -4061,7 +4300,8 @@ contains
                 call append_grid(b, a, xticks, nxt, yticks, nyt, xminor, nxm, &
                                  yminor, nym, xmin, xmax, &
                                  ymin, ymax, ax_l, ax_r, ax_t, ax_b, ax_w, ax_h, &
-                                 xsc, ysc)
+                                 xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 grid_done = .true.
             end if
             n = a%series(i)%n
@@ -4076,15 +4316,18 @@ contains
             select case (a%series(i)%kind)
             case (SERIES_BOX)
                 call append_box(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_VIOLIN)
                 call append_violin(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_PIE)
                 call append_pie(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                ax_l, ax_w, ax_b, ax_h)
+                                ax_l, ax_w, ax_b, ax_h, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_STEM)
                 ! Stalk from the baseline to each sample, then the baseline
@@ -4095,46 +4338,54 @@ contains
                     call append_line(b, px, py, px, &
                                      map_y(a%series(i)%y(j), ymin, ymax, ax_b, ax_h, ysc), &
                                      trim(a%series(i)%color), a%series(i)%linewidth, &
-                                     LINE_SOLID, a%series(i)%alpha)
+                                     LINE_SOLID, a%series(i)%alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
                 call append_line(b, &
                                  map_x(a%series(i)%x(1), xmin, xmax, ax_l, ax_w, xsc), py, &
                                  map_x(a%series(i)%x(n), xmin, xmax, ax_l, ax_w, xsc), py, &
                                  "#d62728", a%series(i)%linewidth, LINE_SOLID, &
-                                 a%series(i)%alpha)
+                                 a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
                 do j = 1, n
                     call append_marker(b, MARKER_CIRCLE, &
                                        map_x(a%series(i)%x(j), xmin, xmax, ax_l, ax_w, xsc), &
                                        map_y(a%series(i)%y(j), ymin, ymax, ax_b, ax_h, ysc), &
                                        a%series(i)%markersize, trim(a%series(i)%color), &
-                                       a%series(i)%alpha)
+                                       a%series(i)%alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
                 cycle
             case (SERIES_BAR, SERIES_BARH)
                 do j = 1, n
                     call append_bar(b, a%series(i), j, xmin, xmax, ymin, ymax, &
-                                    ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                    ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                    if (.not. status%ok()) return
                 end do
                 cycle
             case (SERIES_FILL)
                 call append_fill(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                 ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                 ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_HLINE)
                 py = map_y(a%series(i)%y(1), ymin, ymax, ax_b, ax_h, ysc)
                 call append_line(b, ax_l, py, ax_l + ax_w, py, &
                                  trim(a%series(i)%color), a%series(i)%linewidth, &
-                                 a%series(i)%linestyle, a%series(i)%alpha)
+                                 a%series(i)%linestyle, a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_VLINE)
                 px = map_x(a%series(i)%x(1), xmin, xmax, ax_l, ax_w, xsc)
                 call append_line(b, px, ax_b, px, ax_b - ax_h, &
                                  trim(a%series(i)%color), a%series(i)%linewidth, &
-                                 a%series(i)%linestyle, a%series(i)%alpha)
+                                 a%series(i)%linestyle, a%series(i)%alpha, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_AXLINE)
                 call append_axline(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_HLINES)
                 do j = 1, n
@@ -4143,7 +4394,8 @@ contains
                         map_x(a%series(i)%x(j), xmin, xmax, ax_l, ax_w, xsc), py, &
                         map_x(a%series(i)%y2(j), xmin, xmax, ax_l, ax_w, xsc), py, &
                         trim(a%series(i)%color), a%series(i)%linewidth, &
-                        a%series(i)%linestyle, a%series(i)%alpha)
+                        a%series(i)%linestyle, a%series(i)%alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
                 cycle
             case (SERIES_VLINES)
@@ -4153,29 +4405,35 @@ contains
                         map_y(a%series(i)%y(j), ymin, ymax, ax_b, ax_h, ysc), px, &
                         map_y(a%series(i)%y2(j), ymin, ymax, ax_b, ax_h, ysc), &
                         trim(a%series(i)%color), a%series(i)%linewidth, &
-                        a%series(i)%linestyle, a%series(i)%alpha)
+                        a%series(i)%linestyle, a%series(i)%alpha, status=status)
+                    if (.not. status%ok()) return
                 end do
                 cycle
             case (SERIES_PATCH)
                 call append_patch(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                  ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                  ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_QUIVER)
                 call append_quiver(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                   ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_ARROWHEAD)
                 call append_arrowheads(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                       ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                       ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_HSPAN, SERIES_VSPAN)
                 call append_span(b, a%series(i), xmin, xmax, ymin, ymax, &
-                                 ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                 ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                if (.not. status%ok()) return
                 cycle
             case (SERIES_ERRORBAR)
                 do j = 1, n
                     call append_errorbar(b, a%series(i), j, xmin, xmax, ymin, ymax, &
-                                         ax_l, ax_w, ax_b, ax_h, xsc, ysc)
+                                         ax_l, ax_w, ax_b, ax_h, xsc, ysc, status=status)
+                    if (.not. status%ok()) return
                 end do
             end select
 
@@ -4218,9 +4476,11 @@ contains
                         if (lstart(k1)) exit
                         k1 = k1 + 1
                     end do
-                    if (k1 - k0 >= 2) &
+                    if (k1 - k0 >= 2) then
                         call b%draw_path(lx(k0:k1 - 1), ly(k0:k1 - 1), &
-                                         line_verbs(k1 - k0), k1 - k0, pnt)
+                                         line_verbs(k1 - k0), k1 - k0, pnt, status=status)
+                        if (.not. status%ok()) return
+                    end if
                     k0 = k1
                 end do
             end if
@@ -4234,7 +4494,8 @@ contains
                         if (allocated(a%series(i)%psize)) ms = a%series(i)%psize(j)
                         call append_marker(b, a%series(i)%marker, lx(j), ly(j), ms, &
                                            point_color(a%series(i), j), &
-                                           a%series(i)%alpha)
+                                           a%series(i)%alpha, status=status)
+                        if (.not. status%ok()) return
                     end do
                 else
                     ! markevery thins the points; the line keeps all of them.
@@ -4249,14 +4510,17 @@ contains
                                         trim(a%series(i)%color), a%series(i)%alpha, &
                                         face=trim(a%series(i)%mfc), &
                                         edge=trim(a%series(i)%mec), &
-                                        ewidth=a%series(i)%mew)
+                                        ewidth=a%series(i)%mew, status=status)
+                    if (.not. status%ok()) return
                 end if
             end if
         end do
-        if (.not. grid_done) &
+        if (.not. grid_done) then
             call append_grid(b, a, xticks, nxt, yticks, nyt, xminor, nxm, &
                                  yminor, nym, xmin, xmax, &
-                             ymin, ymax, ax_l, ax_r, ax_t, ax_b, ax_w, ax_h, xsc, ysc)
+                             ymin, ymax, ax_l, ax_r, ax_t, ax_b, ax_w, ax_h, xsc, ysc, status=status)
+            if (.not. status%ok()) return
+        end if
         ! annotations, in data coordinates
         do i = 1, a%n_texts
             ! figtext is placed on the canvas, so it waits until the clip
@@ -4269,34 +4533,52 @@ contains
                 px = map_x(a%texts(i)%x, xmin, xmax, ax_l, ax_w, xsc)
                 py = map_y(a%texts(i)%y, ymin, ymax, ax_b, ax_h, ysc)
             end if
-            if (a%texts(i)%has_arrow) &
+            if (a%texts(i)%has_arrow) then
                 call append_arrow(b, a%texts(i), px, py, &
                                   map_x(a%texts(i)%xtail, xmin, xmax, ax_l, ax_w, xsc), &
-                                  map_y(a%texts(i)%ytail, ymin, ymax, ax_b, ax_h, ysc))
-            call append_annotation(b, a%texts(i), px, py)
+                                  map_y(a%texts(i)%ytail, ymin, ymax, ax_b, ax_h, ysc), status=status)
+                if (.not. status%ok()) return
+            end if
+            call append_annotation(b, a%texts(i), px, py, status=status)
+            if (.not. status%ok()) return
         end do
 
         call clear_clip()
 
         call append_quiverkeys(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, &
-                               xsc, ysc, W, H)
+                               xsc, ysc, W, H, status=status)
+        if (.not. status%ok()) return
 
         do i = 1, a%n_texts
             if (.not. a%texts(i)%in_fig) cycle
             call append_annotation(b, a%texts(i), a%texts(i)%x*W, &
-                                   (1.0_dp - a%texts(i)%y)*H)
+                                   (1.0_dp - a%texts(i)%y)*H, status=status)
+            if (.not. status%ok()) return
         end do
 
         ! spines. All four still go out as one <rect>, so a plot that leaves
         ! them alone renders exactly as it did before they could be hidden.
         if (.not. a%frame_off) then
             if (all(a%spine)) then
-                call b%draw_rect(ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw))
+                call b%draw_rect(ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw), status=status)
+                if (.not. status%ok()) return
             else
-                if (a%spine(SPINE_LEFT)) call append_spine(b, ax_l, ax_t, ax_l, ax_b)
-                if (a%spine(SPINE_RIGHT)) call append_spine(b, ax_r, ax_t, ax_r, ax_b)
-                if (a%spine(SPINE_BOTTOM)) call append_spine(b, ax_l, ax_b, ax_r, ax_b)
-                if (a%spine(SPINE_TOP)) call append_spine(b, ax_l, ax_t, ax_r, ax_t)
+                if (a%spine(SPINE_LEFT)) then
+                    call append_spine(b, ax_l, ax_t, ax_l, ax_b, status=status)
+                    if (.not. status%ok()) return
+                end if
+                if (a%spine(SPINE_RIGHT)) then
+                    call append_spine(b, ax_r, ax_t, ax_r, ax_b, status=status)
+                    if (.not. status%ok()) return
+                end if
+                if (a%spine(SPINE_BOTTOM)) then
+                    call append_spine(b, ax_l, ax_b, ax_r, ax_b, status=status)
+                    if (.not. status%ok()) return
+                end if
+                if (a%spine(SPINE_TOP)) then
+                    call append_spine(b, ax_l, ax_t, ax_r, ax_t, status=status)
+                    if (.not. status%ok()) return
+                end if
             end if
         end if
 
@@ -4317,25 +4599,30 @@ contains
 
         do i = 1, nxt
             px = map_x(xticks(i), xmin, xmax, ax_l, ax_w, xsc)
-            call append_tick_at(b, px, x_edge, 0.0_dp, x_out, a%xtick_dir, a%xtick_len)
+            call append_tick_at(b, px, x_edge, 0.0_dp, x_out, a%xtick_dir, a%xtick_len, status=status)
+            if (.not. status%ok()) return
             if (.not. a%xticklabels_off) then
                 call tick_label(a%xtick_labeled, a%xtick_lab, i, xticks(i), xsc, &
                                 xfmt, x_unit, lbl, ln)
                 call append_tick_text(b, px, xtick_base(a, x_edge), lbl(1:ln), &
-                                      "center", a%xtick_size, a%xtick_rot)
+                                      "center", a%xtick_size, a%xtick_rot, status=status)
+                if (.not. status%ok()) return
             end if
         end do
         do i = 1, nxm
             px = map_x(xminor(i), xmin, xmax, ax_l, ax_w, xsc)
             call append_tick_at(b, px, x_edge, 0.0_dp, x_out, a%xtick_dir, &
-                                MINOR_FRAC * a%xtick_len)
+                                MINOR_FRAC * a%xtick_len, status=status)
+            if (.not. status%ok()) return
             ! A log axis spanning a decade or less has too few decades to
             ! label, so matplotlib labels the multiples between them.
             if (a%xticklabels_off) cycle
             call log_minor_label(xminor(i), xsc, xmin, xmax, lbl, ln)
-            if (ln > 0) &
+            if (ln > 0) then
                 call append_tick_text(b, px, xtick_base(a, x_edge), lbl(1:ln), &
-                                      "center", a%xtick_size, a%xtick_rot)
+                                      "center", a%xtick_size, a%xtick_rot, status=status)
+                if (.not. status%ok()) return
+            end if
         end do
 
         ! y ticks, on the left unless this is a twinx
@@ -4349,27 +4636,32 @@ contains
 
         do i = 1, nyt
             py = map_y(yticks(i), ymin, ymax, ax_b, ax_h, ysc)
-            call append_tick_at(b, y_edge, py, y_out, 0.0_dp, a%ytick_dir, a%ytick_len)
+            call append_tick_at(b, y_edge, py, y_out, 0.0_dp, a%ytick_dir, a%ytick_len, status=status)
+            if (.not. status%ok()) return
             if (.not. a%yticklabels_off) then
                 call tick_label(a%ytick_labeled, a%ytick_lab, i, yticks(i), ysc, &
                                 yfmt, y_unit, lbl, ln)
                 call append_tick_text(b, y_edge + y_out*(TICK_LEN + TICK_PAD), &
                                       py + 0.5_dp*text_ascent(a%ytick_size), lbl(1:ln), &
                                       merge("left ", "right", a%y_right), &
-                                      a%ytick_size, a%ytick_rot)
+                                      a%ytick_size, a%ytick_rot, status=status)
+                if (.not. status%ok()) return
             end if
         end do
         do i = 1, nym
             py = map_y(yminor(i), ymin, ymax, ax_b, ax_h, ysc)
             call append_tick_at(b, y_edge, py, y_out, 0.0_dp, a%ytick_dir, &
-                                MINOR_FRAC * a%ytick_len)
+                                MINOR_FRAC * a%ytick_len, status=status)
+            if (.not. status%ok()) return
             if (a%yticklabels_off) cycle
             call log_minor_label(yminor(i), ysc, ymin, ymax, lbl, ln)
-            if (ln > 0) &
+            if (ln > 0) then
                 call append_tick_text(b, y_edge + y_out*(TICK_LEN + TICK_PAD), &
                                       py + 0.5_dp*text_ascent(a%ytick_size), lbl(1:ln), &
                                       merge("left ", "right", a%y_right), &
-                                      a%ytick_size, a%ytick_rot)
+                                      a%ytick_size, a%ytick_rot, status=status)
+                if (.not. status%ok()) return
+            end if
         end do
 
         ! What the labels left out, written once at the end of the axis:
@@ -4378,18 +4670,22 @@ contains
         if (nxt > 0 .and. .not. a%xticklabels_off) then
             call format_offset_text(xfmt%off, xfmt%oom, lbl, ln)
             call fix_minus(lbl, ln)
-            if (ln > 0) &
+            if (ln > 0) then
                 call append_text(b, ax_r, ax_b + xtick_gap(a) + text_descent(a%xtick_size) &
                                  + 3.0_dp + text_ascent(a%xtick_size), lbl(1:ln), "right", &
-                                 a%xtick_size, rc_text_color)
+                                 a%xtick_size, rc_text_color, status=status)
+                if (.not. status%ok()) return
+            end if
         end if
         if (nyt > 0 .and. .not. a%yticklabels_off) then
             call format_offset_text(yfmt%off, yfmt%oom, lbl, ln)
             call fix_minus(lbl, ln)
-            if (ln > 0) &
+            if (ln > 0) then
                 call append_text(b, y_edge, ax_t - 3.0_dp, lbl(1:ln), &
                                  merge("right", "left ", a%y_right), &
-                                 a%ytick_size, rc_text_color)
+                                 a%ytick_size, rc_text_color, status=status)
+                if (.not. status%ok()) return
+            end if
         end if
 
         if (len_trim(a%xlabel) > 0) then
@@ -4397,17 +4693,21 @@ contains
                              ax_b + xtick_gap(a) + text_descent(a%xtick_size) &
                              + a%xlabel_pad + text_ascent(a%xlabel_size), trim(a%xlabel), &
                              "center", a%xlabel_size, rc_text_color, &
-                             weight=a%xlabel_w, slant=a%xlabel_sl)
+                             weight=a%xlabel_w, slant=a%xlabel_sl, status=status)
+            if (.not. status%ok()) return
         end if
 
         if (len_trim(a%ylabel) > 0) then
             ! The right-hand label of a twinx faces the other way, so that it
             ! reads from outside the axes just as the left-hand one does.
-            mid = y_edge + y_out * ylabel_out(a)
+            ylabel_out_value1 = ylabel_out(a, status=status)
+            if (.not. status%ok()) return
+            mid = y_edge + y_out * ylabel_out_value1
             call append_text(b, mid, 0.5_dp*(ax_t + ax_b), trim(a%ylabel), &
                              "center", a%ylabel_size, rc_text_color, &
                              merge(-90.0_dp, 90.0_dp, a%y_right), &
-                             weight=a%ylabel_w, slant=a%ylabel_sl)
+                             weight=a%ylabel_w, slant=a%ylabel_sl, status=status)
+            if (.not. status%ok()) return
         end if
 
         ! title, centred over the axes unless it was asked to sit against
@@ -4417,16 +4717,19 @@ contains
             case ("left")
                 call append_text(b, ax_l, ax_t - title_gap(a), &
                                  trim(a%title), "left", a%title_size, &
-                                 rc_text_color, weight=a%title_w, slant=a%title_sl)
+                                 rc_text_color, weight=a%title_w, slant=a%title_sl, status=status)
+                if (.not. status%ok()) return
             case ("right")
                 call append_text(b, ax_r, ax_t - title_gap(a), &
                                  trim(a%title), "right", a%title_size, &
-                                 rc_text_color, weight=a%title_w, slant=a%title_sl)
+                                 rc_text_color, weight=a%title_w, slant=a%title_sl, status=status)
+                if (.not. status%ok()) return
             case default
                 call append_text(b, 0.5_dp*(ax_l + ax_r), &
                                  ax_t - title_gap(a), trim(a%title), &
                                  "center", a%title_size, rc_text_color, &
-                                 weight=a%title_w, slant=a%title_sl)
+                                 weight=a%title_w, slant=a%title_sl, status=status)
+                if (.not. status%ok()) return
             end select
         end if
 
@@ -4437,8 +4740,10 @@ contains
             do i = 1, a%n_series
                 if (in_legend(a%series(i))) then
                     n_leg = n_leg + 1
-                    lbl_w = max(lbl_w, str_width(trim(a%series(i)%label), &
-                                                 a%legend_size))
+                    str_width_value1 = str_width(trim(a%series(i)%label), &
+                                                 a%legend_size, status=status)
+                    if (.not. status%ok()) return
+                    lbl_w = max(lbl_w, str_width_value1)
                 end if
             end do
             if (n_leg > 0) then
@@ -4469,14 +4774,16 @@ contains
                     call append_text(b, leg_x + 0.5_dp * leg_w, &
                                      leg_y + 4.0_dp + 0.5_dp * row_h + 3.5_dp, &
                                      trim(a%legend_title), "center", &
-                                     a%legend_size, rc_text_color)
+                                     a%legend_size, rc_text_color, status=status)
+                    if (.not. status%ok()) return
                 end if
                 if (a%legend_frame) then
                     pnt = brush(rc_legend_face)
                     pnt%stroked = .true.
                     pnt%stroke_rgb = hex_rgb(rc_legend_edge)
                     pnt%line_width = 0.8_dp
-                    call b%draw_rect(leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp)
+                    call b%draw_rect(leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp, status=status)
+                    if (.not. status%ok()) return
                 end if
                 leg_x0 = leg_x
                 k = 0
@@ -4494,33 +4801,38 @@ contains
                                          py - 0.35_dp*a%legend_size, 20.0_dp, &
                                          0.7_dp*a%legend_size, &
                                          point_color(a%series(i), 1), &
-                                         a%series(i)%alpha)
+                                         a%series(i)%alpha, status=status)
+                        if (.not. status%ok()) return
                     else if (a%series(i)%linestyle /= LINE_NONE) then
                         call append_line(b, leg_x + 8.0_dp, py, leg_x + 28.0_dp, py, &
                                          trim(a%series(i)%color), &
                                          a%series(i)%linewidth, &
-                                         a%series(i)%linestyle, 1.0_dp)
+                                         a%series(i)%linestyle, 1.0_dp, status=status)
+                        if (.not. status%ok()) return
                     end if
                     mid = leg_x + 18.0_dp
                     if (a%series(i)%marker /= MARKER_NONE) then
                         call append_marker(b, a%series(i)%marker, mid, py, &
                                            a%series(i)%markersize, &
-                                           trim(a%series(i)%color), a%series(i)%alpha)
+                                           trim(a%series(i)%color), a%series(i)%alpha, status=status)
+                        if (.not. status%ok()) return
                     end if
                     call append_text(b, leg_x + 34.0_dp, py + 3.5_dp, &
                                      trim(a%series(i)%label), &
-                                     "left", a%legend_size, rc_text_color)
+                                     "left", a%legend_size, rc_text_color, status=status)
+                    if (.not. status%ok()) return
                 end do
             end if
         end if
 
-        call render_table(b, a, ax_l, ax_w, ax_b, ax_h)
+        call render_table(b, a, ax_l, ax_w, ax_b, ax_h, status=status)
+        if (.not. status%ok()) return
     end subroutine render_axes
 
     ! Draw the whole figure into any backend. Everything above this point is
     ! format independent; the only thing render_svg and its PDF and PNG
     ! counterparts add is the choice of renderer.
-    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches)
+    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches, status)
         class(renderer_t), intent(inout) :: b
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
@@ -4531,10 +4843,14 @@ contains
         logical :: clear
         integer :: i, en, n_grp
 
+        type(status_t), intent(out) :: status
         call ensure_fig()
         ! constrained_layout fits the decorations just before the drawing
         ! goes out, when every label the figure will carry is known.
-        if (fig_constrained) call tight_layout()
+        if (fig_constrained) then
+            call tight_layout(status=status)
+            if (.not. status%ok()) return
+        end if
         clear = .false.
         if (present(transparent)) clear = transparent
         face = resolve_color(facecolor)
@@ -4554,21 +4870,25 @@ contains
                 bpad = bpad*PT_PER_IN
                 ! Cropping moves the window onto the drawing, so the drawing
                 ! itself needs no translation.
-                call drawn_bbox(W, H, vx, vy, vw, vh)
+                call drawn_bbox(W, H, vx, vy, vw, vh, status=status)
+                if (.not. status%ok()) return
                 vx = vx - bpad
                 vy = vy - bpad
                 vw = vw - vx + bpad
                 vh = vh - vy + bpad
             else if (len_trim(bbox_inches) > 0) then
-                error stop "fplotlib: bbox_inches must be 'tight'"
+                call status%set(ERROR_ARGUMENT, "fplotlib: bbox_inches must be 'tight'")
+                return
             end if
         end if
 
         ! transparent drops the figure patch entirely
         if (clear) then
-            call b%open_canvas(vw, vh, x0=vx, y0=vy)
+            call b%open_canvas(vw, vh, x0=vx, y0=vy, status=status)
+            if (.not. status%ok()) return
         else
-            call b%open_canvas(vw, vh, bg_rgb=hex_rgb(face), x0=vx, y0=vy)
+            call b%open_canvas(vw, vh, bg_rgb=hex_rgb(face), x0=vx, y0=vy, status=status)
+            if (.not. status%ok()) return
         end if
 
         ! matplotlib counts a colorbar as an axes in its own right, and it is
@@ -4576,14 +4896,20 @@ contains
         n_grp = 0
         do i = 1, n_ax
             n_grp = n_grp + 1
-            call b%begin_group("axes_"//int_to_str(n_grp))
-            call render_axes(b, ax(i), i, W, H, clear)
-            call b%end_group()
+            call b%begin_group("axes_"//int_to_str(n_grp), status=status)
+            if (.not. status%ok()) return
+            call render_axes(b, ax(i), i, W, H, clear, status=status)
+            if (.not. status%ok()) return
+            call b%end_group(status=status)
+            if (.not. status%ok()) return
             if (ax(i)%cbar_on) then
                 n_grp = n_grp + 1
-                call b%begin_group("axes_"//int_to_str(n_grp))
-                call append_colorbar(b, ax(i), i, W, H)
-                call b%end_group()
+                call b%begin_group("axes_"//int_to_str(n_grp), status=status)
+                if (.not. status%ok()) return
+                call append_colorbar(b, ax(i), i, W, H, status=status)
+                if (.not. status%ok()) return
+                call b%end_group(status=status)
+                if (.not. status%ok()) return
             end if
         end do
 
@@ -4594,63 +4920,89 @@ contains
                              + text_ascent(fig_suptitle_size), &
                              trim(fig_suptitle), "center", fig_suptitle_size, &
                              rc_text_color, weight=fig_suptitle_w, &
-                             slant=fig_suptitle_sl)
+                             slant=fig_suptitle_sl, status=status)
+            if (.not. status%ok()) return
         end if
 
-        call b%close_canvas()
+        call b%close_canvas(status=status)
+        if (.not. status%ok()) return
     end subroutine render_figure
 
-    subroutine render_frame(frame, facecolor, transparent, bbox_inches, pad_inches)
+    subroutine render_frame(frame, facecolor, transparent, bbox_inches, pad_inches, status)
         type(frame_t), intent(out) :: frame
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
         type(recording_renderer_t) :: recorder
-        call render_figure(recorder, facecolor, transparent, bbox_inches, pad_inches)
-        call recorder%take(frame)
+        type(status_t), intent(out) :: status
+        call render_figure(recorder, facecolor, transparent, bbox_inches, pad_inches, status=status)
+        if (.not. status%ok()) return
+        call recorder%take(frame, status=status)
+        if (.not. status%ok()) return
     end subroutine render_frame
 
-    function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(svg)
+    function render_svg(facecolor, transparent, bbox_inches, pad_inches, status) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
         character(len=:), allocatable :: svg
         type(svg_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
-        svg = r%bytes()
+        type(status_t), intent(out) :: status
+
+        svg = ""
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status=status)
+        if (.not. status%ok()) return
+        svg = r%bytes(status=status)
+        if (.not. status%ok()) return
     end function render_svg
 
-    function render_pdf(facecolor, transparent, bbox_inches, pad_inches) result(pdf)
+    function render_pdf(facecolor, transparent, bbox_inches, pad_inches, status) result(pdf)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
         character(len=:), allocatable :: pdf
         type(pdf_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
-        pdf = r%bytes()
+        type(status_t), intent(out) :: status
+
+        pdf = ""
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status=status)
+        if (.not. status%ok()) return
+        pdf = r%bytes(status=status)
+        if (.not. status%ok()) return
     end function render_pdf
 
     ! Unlike the vector formats, dpi is not decorative here: it is what
     ! decides how many pixels the figure is rasterized into.
-    function render_eps(facecolor, transparent, bbox_inches, pad_inches) result(eps)
+    function render_eps(facecolor, transparent, bbox_inches, pad_inches, status) result(eps)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
         character(len=:), allocatable :: eps
         type(eps_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
-        eps = r%bytes()
+        type(status_t), intent(out) :: status
+
+        eps = ""
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status=status)
+        if (.not. status%ok()) return
+        eps = r%bytes(status=status)
+        if (.not. status%ok()) return
     end function render_eps
 
-    function render_png(facecolor, transparent, bbox_inches, pad_inches) result(png)
+    function render_png(facecolor, transparent, bbox_inches, pad_inches, status) result(png)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
         character(len=:), allocatable :: png
         type(png_renderer_t) :: r
-        call r%set_dpi(fig_dpi)
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
-        png = r%bytes()
+        type(status_t), intent(out) :: status
+
+        png = ""
+        call r%set_dpi(fig_dpi, status=status)
+        if (.not. status%ok()) return
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status=status)
+        if (.not. status%ok()) return
+        png = r%bytes(status=status)
+        if (.not. status%ok()) return
     end function render_png
 
     pure function lower(s) result(t)

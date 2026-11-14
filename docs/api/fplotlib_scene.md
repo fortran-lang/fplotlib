@@ -13,10 +13,15 @@ matrix is `[a,b,c,d,e,f]`; an optional clip is in the child's coordinates.
 `paged_document_t` owns its pages and all captured drawing data. Built-in
 font data is shared read-only rather than copied into each document.
 
-`source_text()` concatenates stored glyph-run source in drawing order.
+`source_text(status)` concatenates stored glyph-run source in drawing order.
 It includes raw TeX, so it is neither plain-text extraction nor an accessibility
 representation. Importing a frame does not place it; `place` controls each
 occurrence in the drawing order.
+
+Fallible methods require `status_t`. Invalid handles, sizes, scope operations
+and drawing requests return errors, not `error stop`. Frame replay stops at the
+first backend error; an unfinished drawing target should be discarded after a
+drawing failure. Finished input frames remain owned and independent.
 
 ```{f:module} fplotlib_scene
 ```

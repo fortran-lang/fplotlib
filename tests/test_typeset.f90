@@ -10,6 +10,8 @@
 ! which moves a glyph by up to 0.0125 bp and, through the spacing of a
 ! justified line, the glyphs after it by up to about 0.065 bp.
 module test_typeset
+    use fplotlib_status
+    use test_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_typeset, only: typeset_context_t, ts_reset, ts_set_page, ts_set_font, ts_begin_par, &
                                 ts_end_par, ts_word, ts_space, ts_line_count, &
@@ -91,10 +93,15 @@ contains
         type(typeset_context_t) :: state
         character(len=64) :: what
 
-        call ts_reset(state)
-        call ts_set_page(state, width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
-        call ts_set_font(state, SIZE)
-        call ts_begin_par(state, ALIGN_JUSTIFY, indent)
+        type(status_t) :: status
+        call ts_reset(state, status=status)
+        call require_ok(status)
+        call ts_set_page(state, width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, status=status)
+        call require_ok(status)
+        call ts_set_font(state, SIZE, status=status)
+        call require_ok(status)
+        call ts_begin_par(state, ALIGN_JUSTIFY, indent, status=status)
+        call require_ok(status)
         i = 1
         do while (i <= len(text))
             j = index(text(i:), " ")
@@ -103,11 +110,18 @@ contains
             else
                 j = i + j - 1
             end if
-            if (j > i) call ts_word(state, text(i:j - 1), FACE_REGULAR, SIZE)
-            if (j <= len(text)) call ts_space(state, FACE_REGULAR, SIZE)
+            if (j > i) then
+                call ts_word(state, text(i:j - 1), FACE_REGULAR, SIZE, status=status)
+                call require_ok(status)
+            end if
+            if (j <= len(text)) then
+                call ts_space(state, FACE_REGULAR, SIZE, status=status)
+                call require_ok(status)
+            end if
             i = j + 1
         end do
-        call ts_end_par(state)
+        call ts_end_par(state, status=status)
+        call require_ok(status)
 
         bad = .false.
         worst = 0.0_dp
@@ -117,7 +131,8 @@ contains
             write (what, "(a,i0,a,i0)") "lines ", ts_line_count(state), " vs ", nl
         else
             do l = 1, nl
-                call ts_line_info(state, l, gids, xs, n)
+                call ts_line_info(state, l, gids, xs, n, status=status)
+                call require_ok(status)
                 nr = 0
                 read (lx(l), *, iostat=k) (rx(j), j=1, count_words(lx(l)))
                 nr = count_words(lx(l))

@@ -7,8 +7,10 @@
 !       tools/dump_glyphs.f90 "$(find build -name libfplotlib.a | head -1)" -o dump_glyphs
 !   ./dump_glyphs > glyphs_dump.txt
 program dump_glyphs
+    use fplotlib_status
     use fplotlib_glyphs
     use fplotlib_style, only: dp
+    use fplotlib_resources, only: initialize_resources
     implicit none
     integer :: g, f, i, nv, np, cp, g2, n, c
     integer, allocatable :: v(:), gs(:)
@@ -17,6 +19,9 @@ program dump_glyphs
     real(dp) :: x0, y0, x1, y1, it, k
     character(len=*), parameter :: E = "(es24.16)"
 
+    type(status_t) :: status
+    call initialize_resources(status=status)
+    call require_ok(status)
     do g = 1, NGLYPH
         call glyph_outline(g, v, nv, x, y, np)
         call glyph_bbox(g, x0, y0, x1, y1)
@@ -53,4 +58,14 @@ program dump_glyphs
         end do
     end do
     write (*, "(a,*(1x,es24.16))") "X", (math_const(i), i = 1, 56)
+
+contains
+
+    subroutine require_ok(status)
+        type(status_t), intent(in) :: status
+        if (status%ok()) return
+        print "(a)", status%message
+        error stop 1
+    end subroutine require_ok
+
 end program dump_glyphs

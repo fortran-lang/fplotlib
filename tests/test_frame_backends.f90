@@ -1,4 +1,6 @@
 module test_frame_backends
+    use fplotlib_status
+    use test_status
     use fplotlib_style, only: dp
     use fplotlib_render, only: paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
                               FILL_EVENODD, FILL_NONZERO
@@ -36,19 +38,25 @@ contains
         character(len=:), allocatable :: document, key
         logical :: images_present, alphas_present
 
-        call pdf%open_canvas(100.0_dp, 100.0_dp)
+        type(status_t) :: status
+        call pdf%open_canvas(100.0_dp, 100.0_dp, status=status)
+        call require_ok(status)
         do i = 1, NIMAGE
             rgba(:, 1, 1) = [7*i, 255 - 5*i, 3*i, 255]
             if (mod(i, 3) == 0) rgba(4, 1, 1) = 128
-            call pdf%draw_image(real(4*i, dp), 0.0_dp, 3.0_dp, 3.0_dp, rgba, 1, 1, paint)
+            call pdf%draw_image(real(4*i, dp), 0.0_dp, 3.0_dp, 3.0_dp, rgba, 1, 1, paint, status=status)
+            call require_ok(status)
         end do
         paint%filled = .true.
         do i = 1, NALPHA
             paint%fill_alpha = real(i, dp)/100.0_dp
-            call pdf%draw_rect(real(i, dp), 10.0_dp, 1.0_dp, 20.0_dp, paint)
+            call pdf%draw_rect(real(i, dp), 10.0_dp, 1.0_dp, 20.0_dp, paint, status=status)
+            call require_ok(status)
         end do
-        call pdf%close_canvas()
-        document = pdf%bytes()
+        call pdf%close_canvas(status=status)
+        call require_ok(status)
+        document = pdf%bytes(status=status)
+        call require_ok(status)
 
         images_present = .true.
         do i = 1, NIMAGE
@@ -84,11 +92,17 @@ contains
         type(pdf_renderer_t) :: pdf
         character(len=:), allocatable :: document
 
-        call pdf%open_canvas(100.0_dp, 80.0_dp, [255, 255, 255])
-        call pdf%new_page(width=160.0_dp, height=120.0_dp, bg_rgb=[0, 0, 0], bg_alpha=0.5_dp)
-        call pdf%new_page()
-        call pdf%close_canvas()
-        document = pdf%bytes()
+        type(status_t) :: status
+        call pdf%open_canvas(100.0_dp, 80.0_dp, [255, 255, 255], status=status)
+        call require_ok(status)
+        call pdf%new_page(width=160.0_dp, height=120.0_dp, bg_rgb=[0, 0, 0], bg_alpha=0.5_dp, status=status)
+        call require_ok(status)
+        call pdf%new_page(status=status)
+        call require_ok(status)
+        call pdf%close_canvas(status=status)
+        call require_ok(status)
+        document = pdf%bytes(status=status)
+        call require_ok(status)
 
         call expect(occurrences(document, "/Type /Page ") == 3, "PDF keeps all three pages", nfail)
         call expect(occurrences(document, "/MediaBox [0 0 100 80]") == 1 .and. &
@@ -111,6 +125,7 @@ contains
         type(glyphrun_t) :: run
         character(len=:), allocatable :: document
 
+        type(status_t) :: status
         run%n = 3
         allocate (run%gid(3), run%font(3), run%first(3), run%last(3))
         allocate (run%x(3), run%y(3), run%size(3))
@@ -124,19 +139,25 @@ contains
         ! The emoji has a fallback outline, but extraction must retain its source.
         run%text = "Aé😀"
         paint%filled = .true.
-        call pdf%open_canvas(100.0_dp, 80.0_dp)
-        call pdf%draw_glyphs(5.0_dp, 15.0_dp, run, paint, 0.0_dp)
+        call pdf%open_canvas(100.0_dp, 80.0_dp, status=status)
+        call require_ok(status)
+        call pdf%draw_glyphs(5.0_dp, 15.0_dp, run, paint, 0.0_dp, status=status)
+        call require_ok(status)
 
         run%text = "$A^2$"
         run%source_math = .true.
         run%first = 0
         run%last = 0
-        call pdf%draw_glyphs(5.0_dp, 35.0_dp, run, paint, 0.0_dp)
+        call pdf%draw_glyphs(5.0_dp, 35.0_dp, run, paint, 0.0_dp, status=status)
+        call require_ok(status)
         deallocate (run%text)
         run%source_math = .false.
-        call pdf%draw_glyphs(5.0_dp, 55.0_dp, run, paint, 0.0_dp)
-        call pdf%close_canvas()
-        document = pdf%bytes()
+        call pdf%draw_glyphs(5.0_dp, 55.0_dp, run, paint, 0.0_dp, status=status)
+        call require_ok(status)
+        call pdf%close_canvas(status=status)
+        call require_ok(status)
+        document = pdf%bytes(status=status)
+        call require_ok(status)
 
         call expect(index(document, "/ActualText <FEFF004100E9D83DDE00>") > 0, &
                     "PDF ActualText retains BMP and supplementary Unicode", nfail)
@@ -156,44 +177,60 @@ contains
         real(dp), parameter :: IDENTITY(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
         integer :: i
 
+        type(status_t) :: status
         png%keep_pixels = .true.
-        call png%set_dpi(72.0_dp)
-        call png%open_canvas(64.0_dp, 48.0_dp, [255, 255, 255], x0=10.0_dp, y0=20.0_dp)
+        call png%set_dpi(72.0_dp, status=status)
+        call require_ok(status)
+        call png%open_canvas(64.0_dp, 48.0_dp, [255, 255, 255], x0=10.0_dp, y0=20.0_dp, status=status)
+        call require_ok(status)
         outer_clip = clip_t(.true., 2.0_dp, 2.0_dp, 20.0_dp, 12.0_dp)
-        call png%begin_frame([2.0_dp, 0.0_dp, 0.0_dp, 3.0_dp, 10.0_dp, 20.0_dp], outer_clip)
+        call png%begin_frame([2.0_dp, 0.0_dp, 0.0_dp, 3.0_dp, 10.0_dp, 20.0_dp], outer_clip, status=status)
+        call require_ok(status)
 
         ! After cropping, (u,v) maps to (2u,3v). A two-point pen gives
         ! a six-pixel horizontal band and a four-pixel vertical band.
         paint%stroked = .true.
         paint%line_width = 2.0_dp
         paint%stroke_rgb = [255, 0, 0]
-        call png%draw_path([0.0_dp, 24.0_dp], [5.0_dp, 5.0_dp], [VERB_MOVE, VERB_LINE], 2, paint)
+        call png%draw_path([0.0_dp, 24.0_dp], [5.0_dp, 5.0_dp], [VERB_MOVE, VERB_LINE], 2, paint, status=status)
+        call require_ok(status)
         paint%stroke_rgb = [0, 0, 255]
-        call png%draw_path([18.0_dp, 18.0_dp], [0.0_dp, 16.0_dp], [VERB_MOVE, VERB_LINE], 2, paint)
+        call png%draw_path([18.0_dp, 18.0_dp], [0.0_dp, 16.0_dp], [VERB_MOVE, VERB_LINE], 2, paint, status=status)
+        call require_ok(status)
 
         inner_clip = clip_t(.true., 2.0_dp, 2.0_dp, 4.0_dp, 4.0_dp)
-        call png%begin_frame([1.0_dp, 1.0_dp, -1.0_dp, 1.0_dp, 16.0_dp, 2.0_dp], inner_clip)
+        call png%begin_frame([1.0_dp, 1.0_dp, -1.0_dp, 1.0_dp, 16.0_dp, 2.0_dp], inner_clip, status=status)
+        call require_ok(status)
         do i = 1, 20
-            call png%begin_frame(IDENTITY, none)
+            call png%begin_frame(IDENTITY, none, status=status)
+            call require_ok(status)
         end do
         paint = paint_t(clip=clip_t())
         paint%filled = .true.
         paint%fill_rgb = [0, 255, 0]
-        call png%draw_rect(-5.0_dp, -5.0_dp, 20.0_dp, 20.0_dp, paint)
+        call png%draw_rect(-5.0_dp, -5.0_dp, 20.0_dp, 20.0_dp, paint, status=status)
+        call require_ok(status)
         do i = 1, 20
-            call png%end_frame()
+            call png%end_frame(status=status)
+            call require_ok(status)
         end do
-        call png%end_frame()
+        call png%end_frame(status=status)
+        call require_ok(status)
 
         paint%fill_rgb = [255, 128, 0]
-        call png%draw_rect(0.0_dp, 10.0_dp, 8.0_dp, 3.0_dp, paint)
-        call png%end_frame()
+        call png%draw_rect(0.0_dp, 10.0_dp, 8.0_dp, 3.0_dp, paint, status=status)
+        call require_ok(status)
+        call png%end_frame(status=status)
+        call require_ok(status)
         paint%fill_rgb = [0, 255, 255]
-        call png%draw_rect(12.0_dp, 21.0_dp, 4.0_dp, 3.0_dp, paint)
+        call png%draw_rect(12.0_dp, 21.0_dp, 4.0_dp, 3.0_dp, paint, status=status)
+        call require_ok(status)
         paint = paint_t(clip=clip_t())
         paint%stroked = .true.
-        call png%draw_path([70.2_dp, 70.2_dp], [22.0_dp, 36.0_dp], [VERB_MOVE, VERB_LINE], 2, paint)
-        call png%close_canvas()
+        call png%draw_path([70.2_dp, 70.2_dp], [22.0_dp, 36.0_dp], [VERB_MOVE, VERB_LINE], 2, paint, status=status)
+        call require_ok(status)
+        call png%close_canvas(status=status)
+        call require_ok(status)
 
         call expect_pixel(png, 21, 13, [255, 0, 0], "nonuniform stroke top interior", nfail)
         call expect_pixel(png, 21, 18, [255, 0, 0], "nonuniform stroke bottom interior", nfail)
@@ -220,22 +257,31 @@ contains
         type(clip_t) :: outer_clip, inner_clip
         integer :: rgba(4, 2, 2)
 
+        type(status_t) :: status
         rgba(:, 1, 1) = [255, 0, 0, 255]
         rgba(:, 2, 1) = [0, 255, 0, 255]
         rgba(:, 1, 2) = [0, 0, 255, 255]
         rgba(:, 2, 2) = [255, 255, 0, 255]
         png%keep_pixels = .true.
-        call png%set_dpi(72.0_dp)
-        call png%open_canvas(64.0_dp, 48.0_dp, [255, 255, 255], x0=10.0_dp, y0=20.0_dp)
+        call png%set_dpi(72.0_dp, status=status)
+        call require_ok(status)
+        call png%open_canvas(64.0_dp, 48.0_dp, [255, 255, 255], x0=10.0_dp, y0=20.0_dp, status=status)
+        call require_ok(status)
         outer_clip = clip_t(.true., 0.0_dp, 0.0_dp, 20.0_dp, 16.0_dp)
-        call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 14.0_dp, 24.0_dp], outer_clip)
+        call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 14.0_dp, 24.0_dp], outer_clip, status=status)
+        call require_ok(status)
         inner_clip = clip_t(.true., 1.0_dp, 1.0_dp, 6.0_dp, 6.0_dp)
-        call png%begin_frame([2.0_dp, 1.0_dp, 1.0_dp, 2.0_dp, 4.0_dp, 0.0_dp], inner_clip)
+        call png%begin_frame([2.0_dp, 1.0_dp, 1.0_dp, 2.0_dp, 4.0_dp, 0.0_dp], inner_clip, status=status)
+        call require_ok(status)
         paint%clip = clip_t(.true., 2.0_dp, 0.0_dp, 6.0_dp, 6.0_dp)
-        call png%draw_image(0.0_dp, 0.0_dp, 8.0_dp, 8.0_dp, rgba, 2, 2, paint)
-        call png%end_frame()
-        call png%end_frame()
-        call png%close_canvas()
+        call png%draw_image(0.0_dp, 0.0_dp, 8.0_dp, 8.0_dp, rgba, 2, 2, paint, status=status)
+        call require_ok(status)
+        call png%end_frame(status=status)
+        call require_ok(status)
+        call png%end_frame(status=status)
+        call require_ok(status)
+        call png%close_canvas(status=status)
+        call require_ok(status)
 
         ! Device (X,Y)=(2u+v+8,u+2v+4). These sample the four source
         ! quadrants at (2.5,2.5), (5.5,2.5), (2.5,5.5), and (4.5,4.5).
@@ -257,46 +303,63 @@ contains
         integer, parameter :: verbs(10) = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE, &
                                           VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE]
         real(dp) :: x(8), y(8)
-        call png%set_dpi(72.0_dp)
+        type(status_t) :: status
+        call png%set_dpi(72.0_dp, status=status)
+        call require_ok(status)
         paint%filled = .true.
         x = [1.0_dp, 11.0_dp, 11.0_dp, 1.0_dp, 4.0_dp, 8.0_dp, 8.0_dp, 4.0_dp]
         y = [1.0_dp, 1.0_dp, 11.0_dp, 11.0_dp, 4.0_dp, 4.0_dp, 8.0_dp, 8.0_dp]
-        call png%open_canvas(12.0_dp, 12.0_dp)
+        call png%open_canvas(12.0_dp, 12.0_dp, status=status)
+        call require_ok(status)
         paint%fill_rule = FILL_NONZERO
-        call png%draw_path(x, y, verbs, 10, paint)
-        call expect(png%cv%px(4, 6, 6) == 1.0_dp, "nonzero keeps same-winding nested contours filled", nfail)
-        call png%close_canvas()
+        call png%draw_path(x, y, verbs, 10, paint, status=status)
+        call require_ok(status)
+        call expect(abs(png%cv%px(4, 6, 6) - 1.0_dp) < 1.0e-12_dp, &
+                    "nonzero keeps same-winding nested contours filled", nfail)
+        call png%close_canvas(status=status)
+        call require_ok(status)
 
-        call png%open_canvas(12.0_dp, 12.0_dp)
+        call png%open_canvas(12.0_dp, 12.0_dp, status=status)
+        call require_ok(status)
         paint%fill_rule = FILL_EVENODD
         clip = clip_t(.true., 2.0_dp, 2.0_dp, 8.0_dp, 8.0_dp)
-        call png%begin_frame([-1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 12.0_dp, 0.0_dp], clip)
-        call png%draw_path(x, y, verbs, 10, paint)
-        call png%end_frame()
-        call expect(png%cv%px(4, 6, 6) == 0.0_dp .and. png%cv%px(4, 3, 3) == 1.0_dp, &
+        call png%begin_frame([-1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 12.0_dp, 0.0_dp], clip, status=status)
+        call require_ok(status)
+        call png%draw_path(x, y, verbs, 10, paint, status=status)
+        call require_ok(status)
+        call png%end_frame(status=status)
+        call require_ok(status)
+        call expect(abs(png%cv%px(4, 6, 6)) < 1.0e-12_dp .and. abs(png%cv%px(4, 3, 3) - 1.0_dp) < 1.0e-12_dp, &
                     "even-odd keeps holes under reflected frame transforms", nfail)
-        call expect(png%cv%px(4, 2, 6) == 0.0_dp, "even-odd respects frame clipping", nfail)
-        call png%close_canvas()
+        call expect(abs(png%cv%px(4, 2, 6)) < 1.0e-12_dp, "even-odd respects frame clipping", nfail)
+        call png%close_canvas(status=status)
+        call require_ok(status)
 
         ! Averaged winding followed by modulo would incorrectly paint these edges.
         x(1:4) = [1.25_dp, 10.75_dp, 10.75_dp, 1.25_dp]
         y(1:4) = [1.125_dp, 1.375_dp, 10.875_dp, 10.625_dp]
         x(5:8) = x(1:4)
         y(5:8) = y(1:4)
-        call png%open_canvas(12.0_dp, 12.0_dp)
-        call png%draw_path(x, y, verbs, 10, paint)
+        call png%open_canvas(12.0_dp, 12.0_dp, status=status)
+        call require_ok(status)
+        call png%draw_path(x, y, verbs, 10, paint, status=status)
+        call require_ok(status)
         call expect(maxval(abs(png%cv%px(4, :, :))) < 1.0e-12_dp, &
                     "coincident even-odd contours cancel at fractional pixel edges", nfail)
-        call png%close_canvas()
+        call png%close_canvas(status=status)
+        call require_ok(status)
 
         ! A self-crossing bow tie, only 1/64 pixel high, still has analytic area.
         x(1:4) = [1.0_dp, 3.0_dp, 1.0_dp, 3.0_dp]
         y(1:4) = [1.0_dp, 1.015625_dp, 1.015625_dp, 1.0_dp]
-        call png%open_canvas(12.0_dp, 12.0_dp)
-        call png%draw_path(x(1:4), y(1:4), verbs(1:5), 5, paint)
+        call png%open_canvas(12.0_dp, 12.0_dp, status=status)
+        call require_ok(status)
+        call png%draw_path(x(1:4), y(1:4), verbs(1:5), 5, paint, status=status)
+        call require_ok(status)
         call expect(abs(sum(png%cv%px(4, :, :)) - 0.015625_dp) < 1.0e-12_dp, &
                     "even-odd integrates self-crossings without losing thin shapes", nfail)
-        call png%close_canvas()
+        call png%close_canvas(status=status)
+        call require_ok(status)
     end subroutine png_evenodd_check
 
     subroutine expect(ok, label, nfail)

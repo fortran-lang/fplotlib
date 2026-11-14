@@ -6,10 +6,11 @@
 !
 ! Four rules keep the API from leaking any one format's habits:
 !
-!   1. No state machine. Every drawing call carries the paint it should be
+!   1. No hidden paint state. Every drawing call carries the paint it should be
 !      drawn with, so nothing depends on what was called before it. A backend
 !      may cache the last paint internally to avoid re-emitting attributes,
 !      but that is its own business and cannot be observed through the API.
+!      Canvas lifecycle and transform/clip scopes are explicit.
 !
 !   2. Purely additive, in painter's order. Calls are composited in the order
 !      they arrive; later drawings cover earlier ones. A raster backend can
@@ -68,6 +69,7 @@
 ! format without a document tree, not a lazy one. See the note on groups.
 
 module fplotlib_render
+    use fplotlib_status
     use fplotlib_style, only: dp
     implicit none
     private
@@ -195,6 +197,7 @@ module fplotlib_render
     ! Encoding is separate from drawing: a recorder or an interactive target
     ! need not invent a file format or implement a meaningless bytes method.
     type, abstract, extends(renderer_t) :: encoded_renderer_t
+        logical :: has_output = .false.
     contains
         procedure(bytes_i), deferred :: bytes
     end type encoded_renderer_t
@@ -209,69 +212,83 @@ module fplotlib_render
         ! window onto them moves instead. Every format takes this natively,
         ! as an SVG viewBox, a PDF MediaBox or an EPS BoundingBox, so it
         ! costs nothing to expose and saves the caller translating geometry.
-        subroutine open_canvas_i(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        subroutine open_canvas_i(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
+            import :: status_t
             import :: renderer_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: width, height
             integer, intent(in), optional :: bg_rgb(3)
             real(dp), intent(in), optional :: bg_alpha
             real(dp), intent(in), optional :: x0, y0
+            type(status_t), intent(out) :: status
         end subroutine open_canvas_i
 
         ! Finalizes the container: deflate and CRC for PNG, xref for PDF,
         ! trailer for EPS, closing tag for SVG.
-        subroutine close_canvas_i(self)
+        subroutine close_canvas_i(self, status)
+            import :: status_t
             import :: renderer_t
             class(renderer_t), intent(inout) :: self
+            type(status_t), intent(out) :: status
         end subroutine close_canvas_i
 
         ! The finished document. A character string rather than a specific
         ! file type, so binary formats can return raw bytes and callers can
         ! write a file or hand it to a notebook without a temporary file.
-        function bytes_i(self) result(b)
+        function bytes_i(self, status) result(b)
+            import :: status_t
             import :: encoded_renderer_t
             class(encoded_renderer_t), intent(in) :: self
             character(len=:), allocatable :: b
+            type(status_t), intent(out) :: status
         end function bytes_i
 
         ! n_verb entries of verbs() describe the vertices in x()/y(): MOVE and
         ! LINE take one vertex, CUBIC takes three, CLOSE takes none.
-        subroutine draw_path_i(self, x, y, verbs, n_verb, paint)
+        subroutine draw_path_i(self, x, y, verbs, n_verb, paint, status)
+            import :: status_t
             import :: renderer_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x(:), y(:)
             integer, intent(in) :: verbs(:), n_verb
             type(paint_t), intent(in) :: paint
+            type(status_t), intent(out) :: status
         end subroutine draw_path_i
 
         ! radius rounds the corners, as the legend box needs. Axis aligned, so
         ! a rasterizer can fill whole spans and skip antialiasing on the two
         ! edges that fall on pixel boundaries.
-        subroutine draw_rect_i(self, x, y, w, h, paint, radius)
+        subroutine draw_rect_i(self, x, y, w, h, paint, radius, status)
+            import :: status_t
             import :: renderer_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y, w, h
             type(paint_t), intent(in) :: paint
             real(dp), intent(in), optional :: radius
+            type(status_t), intent(out) :: status
         end subroutine draw_rect_i
 
-        subroutine draw_circle_i(self, cx, cy, r, paint)
+        subroutine draw_circle_i(self, cx, cy, r, paint, status)
+            import :: status_t
             import :: renderer_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: cx, cy, r
             type(paint_t), intent(in) :: paint
+            type(status_t), intent(out) :: status
         end subroutine draw_circle_i
 
         ! One shape, described once about the origin, stamped at every point
         ! in x/y with a single paint. The whole reason this is a primitive is
         ! that every format can express the shape once and then reference it.
-        subroutine draw_markers_i(self, x, y, mx, my, mverbs, n_mverb, paint)
+        subroutine draw_markers_i(self, x, y, mx, my, mverbs, n_mverb, paint, status)
+            import :: status_t
             import :: renderer_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x(:), y(:)
             real(dp), intent(in) :: mx(:), my(:)
             integer, intent(in) :: mverbs(:), n_mverb
             type(paint_t), intent(in) :: paint
+            type(status_t), intent(out) :: status
         end subroutine draw_markers_i
 
         ! Glyphs placed along a line through (x, y), turned angle degrees
@@ -280,25 +297,29 @@ module fplotlib_render
         ! viewer to substitute, so the four formats cannot disagree about
         ! what the text looks like. PDF and EPS still keep it text, through
         ! a font embedded from the outlines with a map back to Unicode.
-        subroutine draw_glyphs_i(self, x, y, run, paint, angle)
+        subroutine draw_glyphs_i(self, x, y, run, paint, angle, status)
+            import :: status_t
             import :: renderer_t, glyphrun_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y
             type(glyphrun_t), intent(in) :: run
             type(paint_t), intent(in) :: paint
             real(dp), intent(in) :: angle
+            type(status_t), intent(out) :: status
         end subroutine draw_glyphs_i
 
         ! An RGBA raster placed in the rectangle (x, y, w, h), row major from
         ! the top left. Used by imshow; PNG blits it, the vector backends
         ! embed or tile it.
-        subroutine draw_image_i(self, x, y, w, h, rgba, nx, ny, paint)
+        subroutine draw_image_i(self, x, y, w, h, rgba, nx, ny, paint, status)
+            import :: status_t
             import :: renderer_t, paint_t, dp
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y, w, h
             integer, intent(in) :: nx, ny
-            integer, intent(in) :: rgba(4, nx, ny)
+            integer, intent(in) :: rgba(:, :, :)
             type(paint_t), intent(in) :: paint
+            type(status_t), intent(out) :: status
         end subroutine draw_image_i
 
     end interface
@@ -307,16 +328,30 @@ contains
 
     ! x' = matrix(1)*x + matrix(3)*y + matrix(5), likewise y with 2,4,6.
     ! clip is in the new local coordinates. Backends restore both on exit.
-    subroutine begin_frame(self, matrix, clip)
+    subroutine begin_frame(self, matrix, clip, status)
         class(renderer_t), intent(inout) :: self
         real(dp), intent(in) :: matrix(6)
         type(clip_t), intent(in) :: clip
-        if (clip%on .or. any(matrix /= [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp])) &
-            error stop "renderer: transformed frames are not supported"
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
+        if (clip%on .or. any(matrix /= [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp])) then
+            call status%set(ERROR_UNSUPPORTED, "renderer: transformed frames are not supported")
+            return
+        end if
     end subroutine begin_frame
 
-    subroutine end_frame(self)
+    subroutine end_frame(self, status)
         class(renderer_t), intent(inout) :: self
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
     end subroutine end_frame
 
     ! ------------------------------------------------------------------
@@ -339,13 +374,25 @@ contains
     ! layers. EPS and PNG have no document tree, so ignoring them is correct.
     ! ------------------------------------------------------------------
 
-    subroutine begin_group(self, name)
+    subroutine begin_group(self, name, status)
         class(renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
     end subroutine begin_group
 
-    subroutine end_group(self)
+    subroutine end_group(self, status)
         class(renderer_t), intent(inout) :: self
+        type(status_t), intent(out) :: status
+
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: canvas is not open")
+            return
+        end if
     end subroutine end_group
 
 end module fplotlib_render

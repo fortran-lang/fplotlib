@@ -1,5 +1,6 @@
 <!-- The README is the landing page; its "# fplotlib" heading is the title. -->
 ```{include} ../README.md
+:relative-docs: docs/
 ```
 
 ```{toctree}

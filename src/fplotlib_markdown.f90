@@ -1,8 +1,9 @@
 ! fplotlib_markdown -- read a document written in Markdown into a tree.
 !
-! The input is Markdown as Pandoc reads it, with TeX math: $...$ inline and
+! The input is a small Pandoc-inspired Markdown subset, with TeX math: $...$ inline and
 ! $$...$$ displayed. md_parse turns it into an fplotlib_doctree tree, which
 ! a document class (fplotlib_docclass) then sets.
+! This is not a complete CommonMark, Pandoc or MyST implementation.
 !
 ! Blocks: a YAML front matter between --- lines (its keys are the class's:
 ! title, author, date, abstract, paper, fontsize, margin, ...); ATX headings
@@ -21,6 +22,7 @@
 ! {#eq:name} or containing \label{name} is numbered, and @eq:name,
 ! @sec:name, \eqref{name} and \ref{name} refer to a formula or a heading.
 module fplotlib_markdown
+    use fplotlib_status
     use fplotlib_style, only: utf8_next
     use fplotlib_doctree
     implicit none
@@ -38,36 +40,49 @@ module fplotlib_markdown
 contains
 
     ! Read text, a Markdown document, into doc.
-    subroutine md_parse(text, doc)
+    subroutine md_parse(text, doc, status)
         character(len=*), intent(in) :: text
         type(doc_t), intent(out) :: doc
         type(line_t), allocatable :: lines(:)
         integer :: n, first
 
+        type(status_t), intent(out) :: status
         call split_lines(text, lines, n)
-        call doc_init(doc)
+        call doc_init(doc, status=status)
+        if (.not. status%ok()) return
         first = 1
-        call front_matter(doc, lines, n, first)
-        if (first <= n) call blocks(doc, 1, lines(first:n), n - first + 1)
+        call front_matter(doc, lines, n, first, status=status)
+        if (.not. status%ok()) return
+        if (first <= n) then
+            call blocks(doc, 1, lines(first:n), n - first + 1, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine md_parse
 
     ! Append ordinary blocks to an existing tree, e.g. after a supplied plot.
-    subroutine md_append(text, doc, parent)
+    subroutine md_append(text, doc, parent, status)
         character(len=*), intent(in) :: text
         type(doc_t), intent(inout) :: doc
         integer, intent(in), optional :: parent
         type(line_t), allocatable :: lines(:)
         integer :: n, p
+        type(status_t), intent(out) :: status
         p = 1
         if (present(parent)) p = parent
-        if (p < 1 .or. p > doc%n) error stop "md_append: invalid parent"
+        if (p < 1 .or. p > doc%n) then
+            call status%set(ERROR_ARGUMENT, "md_append: invalid parent")
+            return
+        end if
         call split_lines(text, lines, n)
-        if (n > 0) call blocks(doc, p, lines, n)
+        if (n > 0) then
+            call blocks(doc, p, lines, n, status=status)
+            if (.not. status%ok()) return
+        end if
     end subroutine md_append
 
     ! The front matter: "key: value" lines between two lines of ---. A key
     ! may come more than once (author).
-    subroutine front_matter(doc, lines, n, first)
+    subroutine front_matter(doc, lines, n, first, status)
         type(doc_t), intent(inout) :: doc
         type(line_t), intent(in) :: lines(:)
         integer, intent(in) :: n
@@ -75,6 +90,7 @@ contains
         integer :: i, j, c, k
         character(len=:), allocatable :: key, val
 
+        type(status_t), intent(out) :: status
         if (n < 1) return
         if (trim(lines(1)%s) /= "---") return
         do i = 2, n
@@ -96,9 +112,12 @@ contains
                 if (len(val) > 0) val = val//" "
                 val = val//trim(adjustl(lines(j)%s))
             end do
-            k = doc_add(doc, 0, DOC_INLINES)
-            call inlines(doc, k, val)
-            call doc_add_meta(doc, key, val, k)
+            k = doc_add(doc, 0, DOC_INLINES, status=status)
+            if (.not. status%ok()) return
+            call inlines(doc, k, val, status=status)
+            if (.not. status%ok()) return
+            call doc_add_meta(doc, key, val, k, status=status)
+            if (.not. status%ok()) return
         end do
         first = i + 1
     end subroutine front_matter
@@ -108,7 +127,7 @@ contains
     ! ------------------------------------------------------------------
 
     ! The blocks of lines L(1:n), as children of parent.
-    recursive subroutine blocks(doc, parent, L, n)
+    recursive subroutine blocks(doc, parent, L, n, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         type(line_t), intent(in) :: L(:)
@@ -117,6 +136,7 @@ contains
         character(len=:), allocatable :: s, t, para, code
         logical :: blank_before
 
+        type(status_t), intent(out) :: status
         i = 1
         blank_before = .true.
         do while (i <= n)
@@ -129,7 +149,8 @@ contains
             end if
 
             if (is_heading(t, lev)) then
-                call heading(doc, parent, heading_text(t, lev), lev)
+                call heading(doc, parent, heading_text(t, lev), lev, status=status)
+                if (.not. status%ok()) return
                 i = i + 1
             else if (is_fence(t)) then
                 j = i + 1
@@ -142,7 +163,8 @@ contains
                 do k = i + 1, min(j - 1, n)
                     code = code//L(k)%s//NL
                 end do
-                node = doc_add_text(doc, parent, DOC_CODE, code)
+                node = doc_add_text(doc, parent, DOC_CODE, code, status=status)
+                if (.not. status%ok()) return
                 i = j + 1
             else if (starts(t, ":::")) then
                 ! A fenced div runs to the matching :::, divs nesting.
@@ -156,9 +178,13 @@ contains
                         if (depth == 0) exit
                     end if
                 end do
-                node = doc_add(doc, parent, DOC_DIV)
+                node = doc_add(doc, parent, DOC_DIV, status=status)
+                if (.not. status%ok()) return
                 doc%nodes(node)%attr = div_attrs(t)
-                if (j - 1 > i) call blocks(doc, node, L(i + 1:j - 1), j - 1 - i)
+                if (j - 1 > i) then
+                    call blocks(doc, node, L(i + 1:j - 1), j - 1 - i, status=status)
+                    if (.not. status%ok()) return
+                end if
                 i = j + 1
             else if (t(1:1) == ">") then
                 j = i
@@ -166,15 +192,19 @@ contains
                     if (len_trim(L(j)%s) == 0) exit
                     j = j + 1
                 end do
-                call quote_block(doc, parent, L(i:j - 1), j - i)
+                call quote_block(doc, parent, L(i:j - 1), j - i, status=status)
+                if (.not. status%ok()) return
                 i = j
             else if (is_item(s, k, lev)) then
-                call list_block(doc, parent, L, n, i, blank_before)
+                call list_block(doc, parent, L, n, i, blank_before, status=status)
+                if (.not. status%ok()) return
             else if (is_rule(t)) then
-                node = doc_add(doc, parent, DOC_RULE)
+                node = doc_add(doc, parent, DOC_RULE, status=status)
+                if (.not. status%ok()) return
                 i = i + 1
             else if (is_raw_block(t)) then
-                node = doc_add_text(doc, parent, DOC_RAW, t)
+                node = doc_add_text(doc, parent, DOC_RAW, t, status=status)
+                if (.not. status%ok()) return
                 i = i + 1
             else
                 ! A paragraph: lines up to a blank one or a block that
@@ -198,16 +228,19 @@ contains
                     t = trim(adjustl(L(j)%s))
                     if (len(t) > 0 .and. (is_underline(t, "=") .or. is_underline(t, "-"))) then
                         if (is_underline(t, "=")) then
-                            call heading(doc, parent, trim(adjustl(para)), 1)
+                            call heading(doc, parent, trim(adjustl(para)), 1, status=status)
+                            if (.not. status%ok()) return
                         else
-                            call heading(doc, parent, trim(adjustl(para)), 2)
+                            call heading(doc, parent, trim(adjustl(para)), 2, status=status)
+                            if (.not. status%ok()) return
                         end if
                         i = j + 1
                         blank_before = .false.
                         cycle
                     end if
                 end if
-                call paragraph(doc, parent, para)
+                call paragraph(doc, parent, para, status=status)
+                if (.not. status%ok()) return
                 i = j
             end if
             blank_before = .false.
@@ -234,41 +267,48 @@ contains
     end function interrupts
 
     ! A paragraph; \noindent at its start is kept as a raw inline.
-    subroutine paragraph(doc, parent, text)
+    subroutine paragraph(doc, parent, text, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         character(len=*), intent(in) :: text
         character(len=:), allocatable :: s
         integer :: node, k
+        type(status_t), intent(out) :: status
         s = trim(adjustl(text))
-        node = doc_add(doc, parent, DOC_PARA)
+        node = doc_add(doc, parent, DOC_PARA, status=status)
+        if (.not. status%ok()) return
         if (starts(s, BS//"noindent")) then
-            k = doc_add_text(doc, node, IN_RAW, "noindent")
+            k = doc_add_text(doc, node, IN_RAW, "noindent", status=status)
+            if (.not. status%ok()) return
             s = trim(adjustl(s(10:)))
         end if
-        call inlines(doc, node, s)
+        call inlines(doc, node, s, status=status)
+        if (.not. status%ok()) return
     end subroutine paragraph
 
     ! A heading: its text and its {#id}.
-    subroutine heading(doc, parent, text, level)
+    subroutine heading(doc, parent, text, level, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent, level
         character(len=*), intent(in) :: text
         integer :: node, a, b
-        node = doc_add(doc, parent, DOC_HEADING)
+        type(status_t), intent(out) :: status
+        node = doc_add(doc, parent, DOC_HEADING, status=status)
+        if (.not. status%ok()) return
         doc%nodes(node)%num = level
         a = index(text, "{#")
         if (a > 0) then
             b = index(text(a:), "}")
             if (b > 0) doc%nodes(node)%id = text(a + 2:a + b - 2)
         end if
-        call inlines(doc, node, strip_attrs(text))
+        call inlines(doc, node, strip_attrs(text), status=status)
+        if (.not. status%ok()) return
     end subroutine heading
 
     ! A list: its items, each from its marker to the next marker at the
     ! same indentation, or the end of the list. A tight list has no blank
     ! lines between its items; spaced is whether a blank line came before.
-    recursive subroutine list_block(doc, parent, L, n, i, blank_before)
+    recursive subroutine list_block(doc, parent, L, n, i, blank_before, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         type(line_t), intent(in) :: L(:)
@@ -280,6 +320,7 @@ contains
         logical :: tight, blank
         character(len=:), allocatable :: s
 
+        type(status_t), intent(out) :: status
         if (.not. is_item(L(i)%s, start_num, kind)) return
         ind0 = indent_of(L(i)%s)
         tight = .true.
@@ -317,7 +358,8 @@ contains
             m = m - 1
         end do
 
-        list = doc_add(doc, parent, DOC_LIST)
+        list = doc_add(doc, parent, DOC_LIST, status=status)
+        if (.not. status%ok()) return
         doc%nodes(list)%ordered = kind == 1
         doc%nodes(list)%num = start_num
         doc%nodes(list)%tight = tight
@@ -348,8 +390,10 @@ contains
                     item(ln)%s = trim(adjustl(s))
                 end if
             end do
-            it = doc_add(doc, list, DOC_ITEM)
-            call blocks(doc, it, item, ni)
+            it = doc_add(doc, list, DOC_ITEM, status=status)
+            if (.not. status%ok()) return
+            call blocks(doc, it, item, ni, status=status)
+            if (.not. status%ok()) return
             deallocate (item)
             j = k
         end do
@@ -357,7 +401,7 @@ contains
     end subroutine list_block
 
     ! A block quote: its lines without their >.
-    recursive subroutine quote_block(doc, parent, L, n)
+    recursive subroutine quote_block(doc, parent, L, n, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         type(line_t), intent(in) :: L(:)
@@ -365,6 +409,7 @@ contains
         type(line_t), allocatable :: q(:)
         integer :: k, node
         character(len=:), allocatable :: s
+        type(status_t), intent(out) :: status
         allocate (q(n))
         do k = 1, n
             s = trim(adjustl(L(k)%s))
@@ -378,8 +423,10 @@ contains
             end if
             q(k)%s = s
         end do
-        node = doc_add(doc, parent, DOC_QUOTE)
-        call blocks(doc, node, q, n)
+        node = doc_add(doc, parent, DOC_QUOTE, status=status)
+        if (.not. status%ok()) return
+        call blocks(doc, node, q, n, status=status)
+        if (.not. status%ok()) return
     end subroutine quote_block
 
     ! The TeX commands a line may hold by itself.
@@ -414,7 +461,7 @@ contains
 
     ! The inlines of s, as children of parent. Emphasis opens and closes
     ! by Pandoc's rules for * and _; the nodes it opens nest.
-    recursive subroutine inlines(doc, parent, s)
+    recursive subroutine inlines(doc, parent, s, status)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         character(len=*), intent(in) :: s
@@ -424,6 +471,7 @@ contains
         logical :: em_open, strong_open, lf, rf
         character :: c, em_c, strong_c, prev, next
 
+        type(status_t), intent(out) :: status
         w = ""
         ns = 1
         stack(1) = parent
@@ -441,18 +489,25 @@ contains
                 ! Two spaces before the end of a line break it.
                 if (c == " " .and. i + 2 <= len(s)) then
                     if (s(i:i + 2) == "  "//NL) then
-                        call flush()
-                        node = doc_add(doc, stack(ns), IN_BREAK)
+                        call flush(status=status)
+                        if (.not. status%ok()) return
+                        node = doc_add(doc, stack(ns), IN_BREAK, status=status)
+                        if (.not. status%ok()) return
                         i = i + 3
                         cycle
                     end if
                 end if
-                call flush()
+                call flush(status=status)
+                if (.not. status%ok()) return
                 node = doc%nodes(stack(ns))%last
                 if (node > 0) then
-                    if (doc%nodes(node)%kind /= IN_SPACE) node = doc_add(doc, stack(ns), IN_SPACE)
+                    if (doc%nodes(node)%kind /= IN_SPACE) then
+                        node = doc_add(doc, stack(ns), IN_SPACE, status=status)
+                        if (.not. status%ok()) return
+                    end if
                 else
-                    node = doc_add(doc, stack(ns), IN_SPACE)
+                    node = doc_add(doc, stack(ns), IN_SPACE, status=status)
+                    if (.not. status%ok()) return
                 end if
                 i = i + 1
             case ("*", "_")
@@ -475,26 +530,32 @@ contains
                 if (rf .and. ((r == 1 .and. em_open .and. em_c == c) .or. &
                               (r == 2 .and. strong_open .and. strong_c == c) .or. &
                               (r >= 3 .and. em_open .and. strong_open))) then
-                    call flush()
+                    call flush(status=status)
+                    if (.not. status%ok()) return
                     if (r == 1 .or. r >= 3) then
                         em_open = .false.
-                        call close(IN_EMPH)
+                        call close(IN_EMPH, status=status)
+                        if (.not. status%ok()) return
                     end if
                     if (r >= 2) then
                         strong_open = .false.
-                        call close(IN_STRONG)
+                        call close(IN_STRONG, status=status)
+                        if (.not. status%ok()) return
                     end if
                 else if (lf .and. r <= 3) then
-                    call flush()
+                    call flush(status=status)
+                    if (.not. status%ok()) return
                     if (r == 1 .or. r == 3) then
                         em_open = .true.
                         em_c = c
-                        call open(IN_EMPH)
+                        call open(IN_EMPH, status=status)
+                        if (.not. status%ok()) return
                     end if
                     if (r >= 2) then
                         strong_open = .true.
                         strong_c = c
-                        call open(IN_STRONG)
+                        call open(IN_STRONG, status=status)
+                        if (.not. status%ok()) return
                     end if
                 else
                     w = w//s(i:i + r - 1)
@@ -512,9 +573,11 @@ contains
                     i = i + r
                     cycle
                 end if
-                call flush()
+                call flush(status=status)
+                if (.not. status%ok()) return
                 node = doc_add_text(doc, stack(ns), IN_CODE, &
-                                    trim(adjustl(s(i + r:i + r + j - 2))))
+                                    trim(adjustl(s(i + r:i + r + j - 2))), status=status)
+                if (.not. status%ok()) return
                 i = i + r + j - 1 + r
             case ("$")
                 if (i < len(s)) then
@@ -522,8 +585,10 @@ contains
                         ! A display, and the {#id} after it.
                         j = index(s(i + 2:), "$$")
                         if (j > 0) then
-                            call flush()
-                            node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 2:i + j))
+                            call flush(status=status)
+                            if (.not. status%ok()) return
+                            node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 2:i + j), status=status)
+                            if (.not. status%ok()) return
                             doc%nodes(node)%display = .true.
                             k = i + j + 3
                             a = k
@@ -553,8 +618,10 @@ contains
                 end if
                 j = closing_dollar(s, i)
                 if (j > 0) then
-                    call flush()
-                    node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 1:j - 1))
+                    call flush(status=status)
+                    if (.not. status%ok()) return
+                    node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 1:j - 1), status=status)
+                    if (.not. status%ok()) return
                     i = j + 1
                 else
                     w = w//"$"
@@ -568,8 +635,10 @@ contains
                 end if
                 next = s(i + 1:i + 1)
                 if (next == NL) then
-                    call flush()
-                    node = doc_add(doc, stack(ns), IN_BREAK)
+                    call flush(status=status)
+                    if (.not. status%ok()) return
+                    node = doc_add(doc, stack(ns), IN_BREAK, status=status)
+                    if (.not. status%ok()) return
                     i = i + 2
                 else if (next == " ") then
                     ! A no-break space, as Pandoc reads it.
@@ -591,7 +660,8 @@ contains
                             k = k + 1
                         end if
                     end if
-                    call command(cmd, arg, k, j)
+                    call command(cmd, arg, k, j, status=status)
+                    if (.not. status%ok()) return
                     ! A command without an argument may be ended by {}.
                     if (k == j .and. j + 1 <= len(s)) then
                         if (s(j:j + 1) == "{}") k = j + 2
@@ -607,19 +677,25 @@ contains
                     if (s(j + 1:j + 1) == "(") then
                         k = index(s(j + 1:), ")")
                         if (k > 0) then
-                            call flush()
-                            node = doc_add_text(doc, stack(ns), IN_LINK, s(j + 2:j + k - 1))
-                            call inlines(doc, node, s(i + 1:j - 1))
+                            call flush(status=status)
+                            if (.not. status%ok()) return
+                            node = doc_add_text(doc, stack(ns), IN_LINK, s(j + 2:j + k - 1), status=status)
+                            if (.not. status%ok()) return
+                            call inlines(doc, node, s(i + 1:j - 1), status=status)
+                            if (.not. status%ok()) return
                             i = j + k + 1
                             cycle
                         end if
                     else if (s(j + 1:j + 1) == "{") then
                         k = matching(s, j + 1)
                         if (k > 0) then
-                            call flush()
-                            node = doc_add(doc, stack(ns), IN_SPAN)
+                            call flush(status=status)
+                            if (.not. status%ok()) return
+                            node = doc_add(doc, stack(ns), IN_SPAN, status=status)
+                            if (.not. status%ok()) return
                             doc%nodes(node)%attr = s(j + 2:k - 1)
-                            call inlines(doc, node, s(i + 1:j - 1))
+                            call inlines(doc, node, s(i + 1:j - 1), status=status)
+                            if (.not. status%ok()) return
                             i = k + 1
                             cycle
                         end if
@@ -634,8 +710,10 @@ contains
                 if (starts(s(i:), "<br/>")) k = 5
                 if (starts(s(i:), "<br />")) k = 6
                 if (k > 0) then
-                    call flush()
-                    node = doc_add(doc, stack(ns), IN_BREAK)
+                    call flush(status=status)
+                    if (.not. status%ok()) return
+                    node = doc_add(doc, stack(ns), IN_BREAK, status=status)
+                    if (.not. status%ok()) return
                     i = i + k
                     do while (i <= len(s))
                         if (s(i:i) /= " " .and. s(i:i) /= NL) exit
@@ -658,7 +736,8 @@ contains
                     j = j - 1
                 end do
                 if (j > i + 1 .and. white(prev)) then
-                    call ref(s(i + 1:j - 1), REF_AT)
+                    call ref(s(i + 1:j - 1), REF_AT, status=status)
+                    if (.not. status%ok()) return
                     i = j
                 else
                     w = w//"@"
@@ -711,30 +790,36 @@ contains
                 i = i + nb
             end select
         end do
-        call flush()
+        call flush(status=status)
+        if (.not. status%ok()) return
 
     contains
 
         ! The text so far, a string.
-        subroutine flush()
+        subroutine flush(status)
             integer :: kk
+            type(status_t), intent(out) :: status
             if (len(w) == 0) return
-            kk = doc_add_text(doc, stack(ns), IN_STR, w)
+            kk = doc_add_text(doc, stack(ns), IN_STR, w, status=status)
+            if (.not. status%ok()) return
             w = ""
         end subroutine flush
 
-        subroutine open(kind)
+        subroutine open(kind, status)
             integer, intent(in) :: kind
+            type(status_t), intent(out) :: status
             if (ns == size(stack)) return
             ns = ns + 1
-            stack(ns) = doc_add(doc, stack(ns - 1), kind)
+            stack(ns) = doc_add(doc, stack(ns - 1), kind, status=status)
+            if (.not. status%ok()) return
         end subroutine open
 
         ! Close the innermost open node of the kind; those opened inside
         ! it go on after it.
-        subroutine close(kind)
+        subroutine close(kind, status)
             integer, intent(in) :: kind
             integer :: p, q, kinds(64), nk
+            type(status_t), intent(out) :: status
             p = ns
             do while (p > 1)
                 if (doc%nodes(stack(p))%kind == kind) exit
@@ -748,52 +833,68 @@ contains
             end do
             ns = p - 1
             do q = 1, nk
-                call open(kinds(q))
+                call open(kinds(q), status=status)
+                if (.not. status%ok()) return
             end do
         end subroutine close
 
-        subroutine ref(name, form)
+        subroutine ref(name, form, status)
             character(len=*), intent(in) :: name
             integer, intent(in) :: form
             integer :: kk
-            call flush()
-            kk = doc_add(doc, stack(ns), IN_REF)
+            type(status_t), intent(out) :: status
+            call flush(status=status)
+            if (.not. status%ok()) return
+            kk = doc_add(doc, stack(ns), IN_REF, status=status)
+            if (.not. status%ok()) return
             doc%nodes(kk)%id = name
             doc%nodes(kk)%num = form
         end subroutine ref
 
         ! A command written in the text.
-        recursive subroutine command(cmd, arg, k, j)
+        recursive subroutine command(cmd, arg, k, j, status)
             character(len=*), intent(in) :: cmd, arg
             integer, intent(inout) :: k
             integer, intent(in) :: j
             integer :: kk
+            type(status_t), intent(out) :: status
             select case (cmd)
             case ("hfill", "quad", "qquad", "TeX", "LaTeX")
-                call flush()
-                kk = doc_add_text(doc, stack(ns), IN_RAW, cmd)
+                call flush(status=status)
+                if (.not. status%ok()) return
+                kk = doc_add_text(doc, stack(ns), IN_RAW, cmd, status=status)
+                if (.not. status%ok()) return
                 k = j
             case ("newline", "linebreak")
-                call flush()
-                kk = doc_add(doc, stack(ns), IN_BREAK)
+                call flush(status=status)
+                if (.not. status%ok()) return
+                kk = doc_add(doc, stack(ns), IN_BREAK, status=status)
+                if (.not. status%ok()) return
                 k = j
             case ("textbf", "emph", "textit", "textrm", "textsf", "textup")
-                call flush()
+                call flush(status=status)
+                if (.not. status%ok()) return
                 select case (cmd)
                 case ("textbf")
-                    kk = doc_add(doc, stack(ns), IN_STRONG)
+                    kk = doc_add(doc, stack(ns), IN_STRONG, status=status)
+                    if (.not. status%ok()) return
                 case ("emph")
-                    kk = doc_add(doc, stack(ns), IN_EMPH)
+                    kk = doc_add(doc, stack(ns), IN_EMPH, status=status)
+                    if (.not. status%ok()) return
                 case default
-                    kk = doc_add(doc, stack(ns), IN_SPAN)
+                    kk = doc_add(doc, stack(ns), IN_SPAN, status=status)
+                    if (.not. status%ok()) return
                     if (cmd == "textit") doc%nodes(kk)%attr = ".italic"
                     if (cmd == "textrm" .or. cmd == "textup") doc%nodes(kk)%attr = ".upright"
                 end select
-                call inlines(doc, kk, arg)
+                call inlines(doc, kk, arg, status=status)
+                if (.not. status%ok()) return
             case ("eqref")
-                call ref(arg, REF_EQ)
+                call ref(arg, REF_EQ, status=status)
+                if (.not. status%ok()) return
             case ("ref")
-                call ref(arg, REF_PLAIN)
+                call ref(arg, REF_PLAIN, status=status)
+                if (.not. status%ok()) return
             case ("noindent", "par")
                 k = j
             case default

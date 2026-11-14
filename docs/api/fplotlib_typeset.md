@@ -14,5 +14,10 @@ string, not a public programmatic math tree. `layout_fragment` in
 flow constraint. These are interface gaps, not promises of complete
 TeX/Typst compatibility.
 
+Fallible operations take a required `status_t` output. Infallible state queries
+and simple list operations do not. In particular, oversized unbreakable
+content returns a layout error rather than terminating the application.
+The [complete inventory](typesetting_api.md) distinguishes these signatures.
+
 ```{f:module} fplotlib_typeset
 ```

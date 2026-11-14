@@ -26,9 +26,13 @@
 ! integer formula, so that it is exactly TeX's.
 !
 ! The document is built by calls (ts_begin_par, ts_word, ts_space, ...)
-! into module state, then ts_paginate cuts it into pages and ts_page_draw
+! into an explicit typeset_context_t, then ts_paginate cuts it into pages and ts_page_draw
 ! draws one page on any renderer.
+! The raw ts_* interface is a prototype, subject to change.
 module fplotlib_typeset
+    use fplotlib_render_checks
+    use fplotlib_resources
+    use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: renderer_t, paint_t, glyphrun_t, clip_t
     use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
@@ -190,8 +194,12 @@ contains
     ! ------------------------------------------------------------------
 
     ! Start a new document.
-    subroutine ts_reset(state)
+    subroutine ts_reset(state, status)
         type(typeset_context_t), intent(inout) :: state
+        type(status_t), intent(out) :: status
+
+        call initialize_resources(status=status)
+        if (.not. status%ok()) return
         state%HN = 0
         state%NCP = 0
         state%NBX = 0
@@ -208,9 +216,12 @@ contains
         if (allocated(state%VREPEAT)) state%VREPEAT(:) = 0
         if (allocated(state%VPACKED)) state%VPACKED(:) = .false.
         if (allocated(state%PGREPEAT)) state%PGREPEAT(:) = 0
-        call state%graphics%init(0.0_dp, 0.0_dp)
-        call ts_set_page(state, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
-        call ts_set_font(state, 10.0_dp)
+        call state%graphics%init(0.0_dp, 0.0_dp, status=status)
+        if (.not. status%ok()) return
+        call ts_set_page(state, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp, status=status)
+        if (.not. status%ok()) return
+        call ts_set_font(state, 10.0_dp, status=status)
+        if (.not. status%ok()) return
         state%PAGE_NUMBERS = .true.
         state%HEADINGS = .false.
         state%FLUSH_BOTTOM = .false.
@@ -219,9 +230,15 @@ contains
     end subroutine ts_reset
 
     ! Public colours use integer RGB components, as paint_t and grid rows do.
-    subroutine ts_set_colors(state, text, page)
+    subroutine ts_set_colors(state, text, page, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: text(3), page(3)
+        type(status_t), intent(out) :: status
+
+        call check_rgb(text, status=status)
+        if (.not. status%ok()) return
+        call check_rgb(page, status=status)
+        if (.not. status%ok()) return
         state%TEXT_COLOR = packed_color(text)
         state%PAGE_COLOR = packed_color(page)
     end subroutine ts_set_colors
@@ -241,10 +258,18 @@ contains
         ts_font_size = state%FONT_SIZE
     end function ts_font_size
 
-    subroutine ts_set_page(state, w, h, left, right, top, bottom, numbers, headings_, flush)
+    subroutine ts_set_page(state, w, h, left, right, top, bottom, numbers, headings_, flush, status)
         type(typeset_context_t), intent(inout) :: state
         real(dp), intent(in) :: w, h, left, right, top, bottom
         logical, intent(in), optional :: numbers, headings_, flush
+        type(status_t), intent(out) :: status
+
+        call check_finite([w, h, left, right, top, bottom], status=status)
+        if (.not. status%ok()) return
+        if (w <= 0.0_dp .or. h <= 0.0_dp .or. w - left - right <= 0.0_dp .or. h - top - bottom <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "typeset: page and body dimensions must be positive")
+            return
+        end if
         state%PAPER_W = w
         state%PAPER_H = h
         state%MARGIN_L = left
@@ -261,10 +286,14 @@ contains
     ! The body size and what goes with it, LaTeX's lengths scaled from its
     ! 10pt ones: \baselineskip 1.2 em, \parskip 0pt plus 1pt, \topskip one
     ! em, \maxdepth half of it, \footskip 30pt.
-    subroutine ts_set_font(state, size, leading)
+    subroutine ts_set_font(state, size, leading, status)
         type(typeset_context_t), intent(inout) :: state
         real(dp), intent(in) :: size
         real(dp), intent(in), optional :: leading
+        type(status_t), intent(out) :: status
+
+        call check_font(FACE_REGULAR, size, status=status)
+        if (.not. status%ok()) return
         state%FONT_SIZE = size
         state%BASELINESKIP = ts_glue_t(1.2_dp*size, 0.0_dp, 0.0_dp, 0, 0)
         if (present(leading)) state%BASELINESKIP%w = leading
@@ -322,14 +351,19 @@ contains
     ! from the left and right margins, its indentation (0 for none), and a
     ! hanging indentation of all lines but the first.
     subroutine ts_begin_par(state, align, indent, left, right, size, hang, skip, leading, &
-                            nobreak)
+                            nobreak, &
+        status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: align
         real(dp), intent(in) :: indent
         real(dp), intent(in), optional :: left, right, size, hang, leading
         logical, intent(in), optional :: skip, nobreak
         logical :: sk
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         state%IN_PAR = .true.
         state%P_ALIGN = align
         state%P_LEFT = 0.0_dp
@@ -364,7 +398,7 @@ contains
     ! Words: s is one word or a piece of one (no spaces), in face at size.
     ! Explicit hyphens in it are places it may break, as TeX's
     ! \exhyphenpenalty allows.
-    subroutine ts_word(state, s, face, size, color, raise)
+    subroutine ts_word(state, s, face, size, color, raise, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
@@ -374,7 +408,18 @@ contains
         integer, allocatable :: cps(:), first(:), last(:)
         integer :: n, k, k0, col, offset
         real(dp) :: up
-        if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
+        if (present(color)) then
+            call check_rgb(color, status)
+            if (.not. status%ok()) return
+        end if
+        if (.not. state%IN_PAR) then
+            call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp, status=status)
+            if (.not. status%ok()) return
+        end if
         col = state%TEXT_COLOR
         if (present(color)) col = packed_color(color)
         up = 0.0_dp
@@ -402,7 +447,7 @@ contains
 
     ! Plain UTF-8, not markup. Horizontal whitespace uses ordinary word glue;
     ! its original bytes, including tabs and CRLF, remain in the logical source.
-    subroutine ts_text(state, text, face, size, color)
+    subroutine ts_text(state, text, face, size, color, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         integer, intent(in) :: face
@@ -410,31 +455,48 @@ contains
         integer, intent(in), optional :: color(3)
         integer :: i, first, cp, nb, offset
 
+        type(status_t), intent(out) :: status
+
+        if (present(color)) then
+            call check_rgb(color, status)
+            if (.not. status%ok()) return
+        end if
         if (len(text) == 0) return
-        if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
+        if (.not. state%IN_PAR) then
+            call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp, status=status)
+            if (.not. status%ok()) return
+        end if
         first = 1
         i = 1
         do while (i <= len(text))
             call utf8_next(text, i, cp, nb)
             if (cp == 9 .or. cp == 10 .or. cp == 13 .or. cp == 32) then
-                if (i > first) call ts_word(state, text(first:i - 1), face, size, color)
+                if (i > first) then
+                    call ts_word(state, text(first:i - 1), face, size, color, status=status)
+                    if (.not. status%ok()) return
+                end if
                 offset = len(state%SOURCE_TEXT)
                 if (cp == 10 .or. cp == 13) then
                     if (cp == 13 .and. i < len(text)) then
                         if (text(i + 1:i + 1) == achar(10)) nb = 2
                     end if
                     call ts_strut(state, 0.0_dp, 0.0_dp)
-                    call ts_hard_break(state)
+                    call ts_hard_break(state, status=status)
+                    if (.not. status%ok()) return
                     call ts_strut(state, 0.0_dp, 0.0_dp)
                 else
-                    call ts_space(state, face, size)
+                    call ts_space(state, face, size, status=status)
+                    if (.not. status%ok()) return
                 end if
                 state%SOURCE_TEXT = state%SOURCE_TEXT(:offset)//text(i:i + nb - 1)
                 first = i + nb
             end if
             i = i + nb
         end do
-        if (first <= len(text)) call ts_word(state, text(first:), face, size, color)
+        if (first <= len(text)) then
+            call ts_word(state, text(first:), face, size, color, status=status)
+            if (.not. status%ok()) return
+        end if
         if (state%HN == 0) call ts_strut(state, 0.0_dp, 0.0_dp)
         state%SOURCE_EXACT_END = len(state%SOURCE_TEXT)
     end subroutine ts_text
@@ -534,13 +596,18 @@ contains
     end subroutine measure
 
     ! Measure with the same Unicode normalization, font fallback and kerning as ts_word.
-    real(dp) function ts_word_width(text, face, fontsize) result(width)
+    real(dp) function ts_word_width(text, face, fontsize, status) result(width)
         character(len=*), intent(in) :: text
         integer, intent(in) :: face
         real(dp), intent(in) :: fontsize
         integer, allocatable :: cps(:)
         integer :: n
         real(dp) :: height, depth
+        type(status_t), intent(out) :: status
+
+        width = 0.0_dp
+        call check_font(face, fontsize, status=status)
+        if (.not. status%ok()) return
         call code_points(text, cps, n)
         call shape(cps(1:n), face, fontsize, width, height, depth)
     end function ts_word_width
@@ -571,12 +638,16 @@ contains
     ! The space between words, in face at size: XeTeX's glue for an
     ! OpenType font, the width of the space with half of it to stretch and
     ! a third to shrink, adjusted by the space factor.
-    subroutine ts_space(state, face, size)
+    subroutine ts_space(state, face, size, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: face
         real(dp), intent(in) :: size
         real(dp) :: sp
         integer :: gf
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
         if (.not. state%IN_PAR) return
         if (state%HN == 0) return
         if (state%HK(state%HN) == HK_GLUE) return
@@ -594,15 +665,23 @@ contains
     end subroutine ts_space
 
     ! A space that does not break: the same glue behind a penalty.
-    subroutine ts_nbsp(state, face, size)
+    subroutine ts_nbsp(state, face, size, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: face
         real(dp), intent(in) :: size
-        if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
+        if (.not. state%IN_PAR) then
+            call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp, status=status)
+            if (.not. status%ok()) return
+        end if
         state%P_SF = 1000.0_dp
         call h_new(state, HK_PEN)
         state%HP(state%HN) = INF_PENALTY
-        call ts_space(state, face, size)
+        call ts_space(state, face, size, status=status)
+        if (.not. status%ok()) return
         if (state%HK(state%HN) /= HK_GLUE) then
             state%HN = state%HN - 1
         else
@@ -632,7 +711,7 @@ contains
     ! with display, displayed (TeX's $$...$$, below) with the number tag.
     ! The layout of the formula itself is the same, math_formula's; only
     ! its style and where it goes differ.
-    subroutine ts_math(state, src, size, color, display, tag)
+    subroutine ts_math(state, src, size, color, display, tag, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
@@ -643,20 +722,34 @@ contains
         type(mrules_t) :: rules
         real(dp) :: w, h, d
         integer :: col, i0, i1
+        type(status_t), intent(out) :: status
+
+        call check_font(FACE_REGULAR, size, status=status)
+        if (.not. status%ok()) return
+        if (present(color)) then
+            call check_rgb(color, status)
+            if (.not. status%ok()) return
+        end if
         col = state%TEXT_COLOR
         if (present(color)) col = packed_color(color)
         if (present(display)) then
             if (display) then
                 if (present(tag)) then
-                    call set_display(state, src, size, tag, col)
+                    call set_display(state, src, size, tag, col, status=status)
+                    if (.not. status%ok()) return
                 else
-                    call set_display(state, src, size, "", col)
+                    call set_display(state, src, size, "", col, status=status)
+                    if (.not. status%ok()) return
                 end if
                 return
             end if
         end if
-        if (.not. state%IN_PAR) call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp)
-        call math_formula(src, size, .false., run, rules, w, h, d, context=state%math)
+        if (.not. state%IN_PAR) then
+            call ts_begin_par(state, ALIGN_JUSTIFY, 0.0_dp, status=status)
+            if (.not. status%ok()) return
+        end if
+        call math_formula(src, size, .false., run, rules, w, h, d, context=state%math, status=status)
+        if (.not. status%ok()) return
         call h_new(state, HK_BOX)
         state%HW(state%HN) = w
         state%HH(state%HN) = h
@@ -670,7 +763,7 @@ contains
     ! A label hung to the left of the paragraph's first line, ending sep
     ! before the text, as a LaTeX \item puts it; a penalty of 0 follows,
     ! as there.
-    subroutine ts_label(state, s, face, size, sep, color)
+    subroutine ts_label(state, s, face, size, sep, color, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
@@ -681,6 +774,14 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, g, gf, prev, pf, col, i0, i1
         real(dp) :: pen, w
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
+        if (present(color)) then
+            call check_rgb(color, status)
+            if (.not. status%ok()) return
+        end if
         col = state%TEXT_COLOR
         if (present(color)) col = packed_color(color)
         call code_points(s, cps, n)
@@ -690,7 +791,8 @@ contains
         do k = 1, n
             g = glyph_for(face, cps(k), gf)
             if (prev > 0 .and. gf == pf) pen = pen + glyph_kern(gf, prev, g)*size
-            call run_add(run, g, pen, 0.0_dp, size)
+            call run_add(run, g, pen, 0.0_dp, size, status=status)
+            if (.not. status%ok()) return
             pen = pen + glyph_adv(g)*size
             prev = g
             pf = gf
@@ -699,7 +801,8 @@ contains
         do k = 1, run%n
             run%x(k) = run%x(k) - sep - w
         end do
-        call run_map(run, 1, run%n, s)
+        call run_map(run, 1, run%n, s, status=status)
+        if (.not. status%ok()) return
         call h_new(state, HK_BOX)
         state%HW(state%HN) = 0.0_dp
         state%HH(state%HN) = 0.0_dp
@@ -715,11 +818,12 @@ contains
     ! ragged right text \nobreak\hfil\break; in centred or ragged left
     ! text the paragraph ends and a new one goes on with the same settings,
     ! as \centering's \\ does.
-    subroutine ts_hard_break(state)
+    subroutine ts_hard_break(state, status)
         type(typeset_context_t), intent(inout) :: state
         integer :: al
         real(dp) :: l, r, s, hg, lead
         logical :: nb
+        type(status_t), intent(out) :: status
         if (.not. state%IN_PAR) return
         do while (state%HN > 0)
             if (state%HK(state%HN) /= HK_GLUE) exit
@@ -733,9 +837,11 @@ contains
             hg = state%P_HANG
             lead = state%CUR_BASELINE%w
             nb = state%P_NOBREAK
-            call ts_end_par(state)
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
             call ts_begin_par(state, al, 0.0_dp, l, r, s, hg, skip=.false., leading=lead, &
-                              nobreak=nb)
+                              nobreak=nb, status=status)
+            if (.not. status%ok()) return
             return
         end if
         call h_new(state, HK_PEN)
@@ -751,12 +857,14 @@ contains
 
     ! End the paragraph: break it into lines and put them on the vertical
     ! list.
-    subroutine ts_end_par(state)
+    subroutine ts_end_par(state, status)
         type(typeset_context_t), intent(inout) :: state
+        type(status_t), intent(out) :: status
         if (.not. state%IN_PAR) return
         state%IN_PAR = .false.
         if (state%HN > 0) then
-            call line_break(state, .false.)
+            call line_break(state, .false., status=status)
+            if (.not. status%ok()) return
             state%NOBREAK_NEXT = .false.
             state%SOURCE_TEXT = state%SOURCE_TEXT//achar(10)
         end if
@@ -765,7 +873,7 @@ contains
 
     ! TeX's line_break. d is true when a display follows, which changes
     ! the penalty before the last line.
-    subroutine line_break(state, d)
+    subroutine line_break(state, d, status)
         type(typeset_context_t), intent(inout) :: state
         logical, intent(in) :: d
         type(ts_glue_t) :: lskip, rskip, pfill
@@ -774,6 +882,7 @@ contains
         logical, allocatable :: hyph(:)
 
         ! The glue at the end goes, and \penalty10000 \parfillskip comes.
+        type(status_t), intent(out) :: status
         if (state%HK(state%HN) == HK_GLUE) state%HN = state%HN - 1
         call align_glue(state, lskip, rskip, pfill)
         call h_new(state, HK_PEN)
@@ -783,7 +892,8 @@ contains
         state%HST(state%HN) = pfill%st
         state%HSO(state%HN) = pfill%sto
 
-        call find_breaks(state, lskip, rskip, brk, hyph, nlines)
+        call find_breaks(state, lskip, rskip, brk, hyph, nlines, status=status)
+        if (.not. status%ok()) return
         call post_line_break(state, lskip, rskip, brk, hyph, nlines, d)
     end subroutine line_break
 
@@ -839,7 +949,7 @@ contains
     ! Knuth and Plass: the breaks of least total demerits, brk(1..n) the
     ! nodes the n lines end at (HN + 1 for the end of the paragraph) and
     ! hyph(k) whether line k ends at a hyphen.
-    subroutine find_breaks(state, lskip, rskip, brk, hyph, nlines)
+    subroutine find_breaks(state, lskip, rskip, brk, hyph, nlines, status)
         type(typeset_context_t), intent(inout) :: state
         type(ts_glue_t), intent(in) :: lskip, rskip
         integer, allocatable, intent(out) :: brk(:)
@@ -863,6 +973,7 @@ contains
         real(dp) :: bg(6), cw(6), shortfall, linew, discw
         integer :: start, nfree
 
+        type(status_t), intent(out) :: status
         nlines = 0
         hyphenated = .false.
         bg = 0.0_dp
@@ -881,7 +992,8 @@ contains
 
         do pass = 1, 3
             if (second .and. .not. hyphenated) then
-                call hyphenate_all(state)
+                call hyphenate_all(state, status=status)
+                if (.not. status%ok()) return
                 hyphenated = .true.
             end if
             if (allocated(sw)) deallocate (sw)
@@ -970,7 +1082,8 @@ contains
                 final = .true.
             end if
         end do
-        error stop "fplotlib: line breaking failed"
+        call status%set(ERROR_LAYOUT, "fplotlib: line breaking failed")
+        return
 
     contains
 
@@ -1267,11 +1380,12 @@ contains
     ! word of an OpenType font, and its letters are cut again at the
     ! places the patterns allow, with a discretionary hyphen in each cut.
     ! The pieces are measured separately, as in XeTeX.
-    subroutine hyphenate_all(state)
+    subroutine hyphenate_all(state, status)
         type(typeset_context_t), intent(inout) :: state
         integer :: i, j, k, a, b, n, npos, pos(64), m
         character(len=64) :: lw
         logical :: ok
+        type(status_t), intent(out) :: status
         i = 1
         do while (i <= state%HN)
             if (state%HK(i) /= HK_GLUE) then
@@ -1334,7 +1448,8 @@ contains
             do k = 1, n
                 lw(k:k) = lower(state%CPA(state%HC0(j) + k - 1))
             end do
-            call hyph_points(lw(1:n), LEFT_HYPHEN_MIN, RIGHT_HYPHEN_MIN, pos, npos)
+            call hyph_points(lw(1:n), LEFT_HYPHEN_MIN, RIGHT_HYPHEN_MIN, pos, npos, status=status)
+            if (.not. status%ok()) return
             ! Cut from the end, so that the earlier positions stay valid.
             do m = npos, 1, -1
                 call split_word(state, j, state%HC0(j) + pos(m))
@@ -1752,7 +1867,7 @@ contains
     ! between \abovedisplayskip and \belowdisplayskip (or the short ones
     ! when the line before ends well before it), with its number, tag, at
     ! the right margin, and the paragraph goes on after it, not indented.
-    subroutine set_display(state, src, size, tag, col)
+    subroutine set_display(state, src, size, tag, col, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
@@ -1767,6 +1882,7 @@ contains
         type(ts_glue_t) :: g1, g2
         real(dp) :: lft, rgt, hg, paragraph_size
 
+        type(status_t), intent(out) :: status
         f = size/10.0_dp
         inpar = state%IN_PAR .and. state%HN > 0
         al = state%P_ALIGN
@@ -1777,7 +1893,8 @@ contains
         pre = -huge(1.0_dp)
         pg = 0
         if (inpar) then
-            call line_break(state, .true.)
+            call line_break(state, .true., status=status)
+            if (.not. status%ok()) return
             pre = pre_display_size(state, size)
             pg = state%P_PREV_GRAF
         else if (state%NV > 0) then
@@ -1786,7 +1903,8 @@ contains
         end if
         state%IN_PAR = .false.
 
-        call math_formula(src, size, .true., run, rules, w, h, d, context=state%math)
+        call math_formula(src, size, .true., run, rules, w, h, d, context=state%math, status=status)
+        if (.not. status%ok()) return
         z = state%HSIZE - lft - rgt
         s = lft
         ! The number, in the text font.
@@ -1798,12 +1916,14 @@ contains
             do i0 = 1, k
                 g = glyph_for(FACE_REGULAR, cps(i0), gf)
                 if (prev > 0) tw = tw + glyph_kern(FACE_REGULAR, prev, g)*size
-                call run_add(trun, g, tw, 0.0_dp, size)
+                call run_add(trun, g, tw, 0.0_dp, size, status=status)
+                if (.not. status%ok()) return
                 tw = tw + glyph_adv(g)*size
                 prev = g
             end do
             e = tw
-            call run_map(trun, 1, trun%n, "("//trim(tag)//")")
+            call run_map(trun, 1, trun%n, "("//trim(tag)//")", status=status)
+            if (.not. status%ok()) return
         end if
         dd = 0.5_dp*(z - w)
         if (e > 0.0_dp .and. dd < 2.0_dp*e) then
@@ -1844,7 +1964,8 @@ contains
         call v_glue(state, g2)
 
         ! The paragraph resumes, unindented, if anything follows.
-        call ts_begin_par(state, al, 0.0_dp, lft, rgt, paragraph_size, hg, skip=.false.)
+        call ts_begin_par(state, al, 0.0_dp, lft, rgt, paragraph_size, hg, skip=.false., status=status)
+        if (.not. status%ok()) return
         state%P_PREV_GRAF = pg + 3
     end subroutine set_display
 
@@ -1943,19 +2064,27 @@ contains
         state%VHO(state%NV) = g%sho
     end subroutine v_glue
 
-    subroutine ts_vskip(state, g)
+    subroutine ts_vskip(state, g, status)
         type(typeset_context_t), intent(inout) :: state
         type(ts_glue_t), intent(in) :: g
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         call v_glue(state, g)
     end subroutine ts_vskip
 
     ! LaTeX's \addvspace: a skip that merges with one just before it, the
     ! larger of the two winning.
-    subroutine ts_addvspace(state, g)
+    subroutine ts_addvspace(state, g, status)
         type(typeset_context_t), intent(inout) :: state
         type(ts_glue_t), intent(in) :: g
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         if (state%NV > 0) then
             if (state%VK(state%NV) == VK_GLUE .and. state%VP(state%NV) == 1) then
                 if (g%w > state%VW(state%NV)) then
@@ -1971,19 +2100,27 @@ contains
         state%VP(state%NV) = 1
     end subroutine ts_addvspace
 
-    subroutine ts_vfil(state)
+    subroutine ts_vfil(state, status)
         type(typeset_context_t), intent(inout) :: state
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         call v_glue(state, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine ts_vfil
 
     ! A skip that stays at the top of a page, LaTeX's \vspace*: an empty
     ! rule before it, which is not discarded, and which, as a rule does,
     ! leaves no \baselineskip to the line after it.
-    subroutine ts_vkeep(state, g)
+    subroutine ts_vkeep(state, g, status)
         type(typeset_context_t), intent(inout) :: state
         type(ts_glue_t), intent(in) :: g
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         call v_new(state, VK_BOX)
         state%VI0(state%NV) = 1
         state%VI1(state%NV) = 0
@@ -2009,12 +2146,16 @@ contains
     end subroutine ts_penalty
 
     ! LaTeX's \addpenalty: a penalty that goes before a skip just added.
-    subroutine ts_addpenalty(state, p)
+    subroutine ts_addpenalty(state, p, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: p
         type(ts_glue_t) :: g
         integer :: m
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         if (state%NV == 0) return
         if (state%VK(state%NV) == VK_GLUE) then
             g = ts_glue_t(state%VW(state%NV), state%VST(state%NV), state%VSH(state%NV), state%VSO(state%NV), &
@@ -2030,11 +2171,16 @@ contains
     end subroutine ts_addpenalty
 
     ! LaTeX's \newpage: \vfil\penalty-10000.
-    subroutine ts_page_break(state)
+    subroutine ts_page_break(state, status)
         type(typeset_context_t), intent(inout) :: state
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         if (state%NV == 0) return
-        call ts_vfil(state)
+        call ts_vfil(state, status=status)
+        if (.not. status%ok()) return
         call ts_penalty(state, EJECT_PENALTY)
         state%PREV_DEPTH = IGNORE_DEPTH
     end subroutine ts_page_break
@@ -2047,14 +2193,23 @@ contains
     end subroutine ts_nobreak_next
 
     ! A horizontal rule, width wide and thick high, centred.
-    subroutine ts_rule(state, width, thick, color)
+    subroutine ts_rule(state, width, thick, color, status)
         type(typeset_context_t), intent(inout) :: state
         real(dp), intent(in) :: width, thick
         integer, intent(in), optional :: color(3)
         integer :: col, i0
+        type(status_t), intent(out) :: status
+
+        if (present(color)) then
+            call check_rgb(color, status)
+            if (.not. status%ok()) return
+        end if
         col = state%TEXT_COLOR
         if (present(color)) col = packed_color(color)
-        if (state%IN_PAR) call ts_end_par(state)
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         i0 = state%NIT + 1
         call it_rule(state, 0.5_dp*(state%HSIZE - width), 0.0_dp, width, thick, col)
         call append_box(state, i0, state%NIT, state%HSIZE, thick, 0.0_dp, 0.0_dp)
@@ -2086,22 +2241,34 @@ contains
     ! there is computed from the page's badness and the penalty, the
     ! cheapest so far is remembered, and when the page is overfull or a
     ! penalty forces a break, the page ends at the cheapest.
-    subroutine ts_paginate(state)
+    subroutine ts_paginate(state, status)
         type(typeset_context_t), intent(inout) :: state
         integer :: i, start, best, c, b, pi
         integer :: least
         real(dp) :: total, depth, so_far(6), goal
         logical :: empty, legal, plain, pplain, packed
 
-        if (state%IN_PAR) call ts_end_par(state)
+        type(status_t), intent(out) :: status
+        real(dp) :: repeat_height_value1
+        real(dp) :: repeat_height_value2
+        if (state%IN_PAR) then
+            call ts_end_par(state, status=status)
+            if (.not. status%ok()) return
+        end if
         do i = 1, state%NV
             if (state%VK(i) /= VK_BOX) cycle
             if (state%VREPEAT(i) > 0) then
-                if (repeat_height(state, state%VREPEAT(i)) + state%VH(i) + state%VD(i) > state%VSIZE) &
-                    error stop "typeset: repeated header and unbreakable row exceed page body"
+                repeat_height_value1 = repeat_height(state, state%VREPEAT(i), status=status)
+                if (.not. status%ok()) return
+                if (repeat_height_value1 + state%VH(i) + state%VD(i) > state%VSIZE) then
+                    call status%set(ERROR_LAYOUT, "typeset: repeated header and unbreakable row exceed page body")
+                    return
+                end if
             else if (state%VPACKED(i)) then
-                if (max(state%TOPSKIP, state%VH(i)) + state%VD(i) > state%VSIZE) &
-                    error stop "typeset: unbreakable row exceeds page body"
+                if (max(state%TOPSKIP, state%VH(i)) + state%VD(i) > state%VSIZE) then
+                    call status%set(ERROR_LAYOUT, "typeset: unbreakable row exceeds page body")
+                    return
+                end if
             end if
         end do
         state%NPAGE = 0
@@ -2184,7 +2351,9 @@ contains
                         start = i
                         state%PGREPEAT(state%NPAGE + 1) = state%VREPEAT(i)
                         if (state%VREPEAT(i) > 0) then
-                            total = repeat_height(state, state%VREPEAT(i)) + state%VH(i)
+                            repeat_height_value2 = repeat_height(state, state%VREPEAT(i), status=status)
+                            if (.not. status%ok()) return
+                            total = repeat_height_value2 + state%VH(i)
                         else
                             total = max(state%TOPSKIP - state%VH(i), 0.0_dp) + state%VH(i)
                         end if
@@ -2226,18 +2395,23 @@ contains
             state%PG1(state%NPAGE) = best - 1
             state%PGPLAIN(state%NPAGE) = plain
             call page_head(state, state%NPAGE, state%PGHEAD0(state%NPAGE), state%PGHEAD1(state%NPAGE))
-            call set_page_glue(state, state%NPAGE)
+            call set_page_glue(state, state%NPAGE, status=status)
+            if (.not. status%ok()) return
             ! What is left starts at the break, where the glue or penalty
             ! of the break is discarded at the top of the next page.
             start = best
         end do
     end subroutine ts_paginate
 
-    real(dp) function repeat_height(state, handle) result(height)
+    real(dp) function repeat_height(state, handle, status) result(height)
         type(typeset_context_t), intent(in) :: state
         integer, intent(in) :: handle
         real(dp) :: w, h, baseline
-        call state%graphics%metrics(w, h, baseline, handle)
+        type(status_t), intent(out) :: status
+
+        height = 0.0_dp
+        call state%graphics%metrics(w, h, baseline, handle, status=status)
+        if (.not. status%ok()) return
         height = h + max(state%TOPSKIP - baseline, 0.0_dp)
     end function repeat_height
 
@@ -2276,12 +2450,14 @@ contains
     ! left; otherwise \raggedbottom leaves the glue at its natural size
     ! and \flushbottom stretches it to fill the page; a page too full
     ! shrinks its glue, no further than its shrink.
-    subroutine set_page_glue(state, p)
+    subroutine set_page_glue(state, p, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: p
         real(dp) :: total, depth, st(0:3), shrink
         integer :: k, o
         logical :: first
+        type(status_t), intent(out) :: status
+        real(dp) :: repeat_height_value1
         total = 0.0_dp
         depth = 0.0_dp
         st = 0.0_dp
@@ -2292,7 +2468,9 @@ contains
             case (VK_BOX)
                 if (first) then
                     if (state%PGREPEAT(p) > 0) then
-                        total = repeat_height(state, state%PGREPEAT(p)) + state%VH(k)
+                        repeat_height_value1 = repeat_height(state, state%PGREPEAT(p), status=status)
+                        if (.not. status%ok()) return
+                        total = repeat_height_value1 + state%VH(k)
                     else
                         total = max(state%TOPSKIP, state%VH(k))
                     end if
@@ -2345,17 +2523,19 @@ contains
         ts_page_count = state%NPAGE
     end function ts_page_count
 
-    subroutine ts_import_frame(state, frame, handle)
+    subroutine ts_import_frame(state, frame, handle, status)
         type(typeset_context_t), intent(inout) :: state
         type(frame_t), intent(in) :: frame
         integer, intent(out) :: handle
-        call state%graphics%import_frame(frame, handle)
+        type(status_t), intent(out) :: status
+        call state%graphics%import_frame(frame, handle, status=status)
+        if (.not. status%ok()) return
     end subroutine ts_import_frame
 
     ! An unbreakable block. Its contents remain a shared child frame.
     ! interline=false omits the preceding interline glue. repeat_before is
     ! an imported frame drawn above this block only when it starts a page.
-    subroutine ts_place_frame(state, handle, left, right, align, interline, repeat_before)
+    subroutine ts_place_frame(state, handle, left, right, align, interline, repeat_before, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: handle
         real(dp), intent(in), optional :: left, right
@@ -2366,12 +2546,21 @@ contains
         real(dp) :: rw, rh
         integer :: i0, al, repeat
         logical :: packed
-        call ts_end_par(state)
-        call state%graphics%metrics(w, h, baseline, handle)
+        type(status_t), intent(out) :: status
+        call ts_end_par(state, status=status)
+        if (.not. status%ok()) return
+        call state%graphics%metrics(w, h, baseline, handle, status=status)
+        if (.not. status%ok()) return
         repeat = 0
         if (present(repeat_before)) repeat = repeat_before
-        if (repeat < 0 .or. repeat == 1) error stop "typeset: repeat_before is not an imported frame handle"
-        if (repeat > 0) call state%graphics%metrics(rw, rh, handle=repeat)
+        if (repeat < 0 .or. repeat == 1) then
+            call status%set(ERROR_ARGUMENT, "typeset: repeat_before is not an imported frame handle")
+            return
+        end if
+        if (repeat > 0) then
+            call state%graphics%metrics(rw, rh, handle=repeat, status=status)
+            if (.not. status%ok()) return
+        end if
         packed = .false.
         if (present(interline)) then
             packed = .not. interline
@@ -2398,41 +2587,59 @@ contains
         state%VPACKED(state%NV) = packed .or. repeat > 0
     end subroutine ts_place_frame
 
-    subroutine ts_finish(state, document)
+    subroutine ts_finish(state, document, status)
         type(typeset_context_t), intent(inout) :: state
         type(paged_document_t), intent(out) :: document
         type(recording_renderer_t) :: rec
         type(frame_t) :: page
         type(paint_t) :: background
         integer :: p
-        call ts_paginate(state)
-        call document%clear()
+        type(status_t), intent(out) :: status
+        call ts_paginate(state, status=status)
+        if (.not. status%ok()) return
+        call document%clear(status=status)
+        if (.not. status%ok()) return
         background = color_paint(state%PAGE_COLOR)
         do p = 1, max(1, state%NPAGE)
-            call rec%open_canvas(state%PAPER_W, state%PAPER_H, bg_rgb=background%fill_rgb)
-            if (p <= state%NPAGE) call ts_page_draw(state, rec, p)
-            call rec%close_canvas()
-            call rec%take(page)
-            call document%add_page(page)
+            call rec%open_canvas(state%PAPER_W, state%PAPER_H, bg_rgb=background%fill_rgb, status=status)
+            if (.not. status%ok()) return
+            if (p <= state%NPAGE) then
+                call ts_page_draw(state, rec, p, status=status)
+                if (.not. status%ok()) return
+            end if
+            call rec%close_canvas(status=status)
+            if (.not. status%ok()) return
+            call rec%take(page, status=status)
+            if (.not. status%ok()) return
+            call document%add_page(page, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine ts_finish
 
     ! Pack the whole flow at natural vertical spacing, without page furniture.
-    subroutine ts_finish_frame(state, frame)
+    subroutine ts_finish_frame(state, frame, status)
         type(typeset_context_t), intent(inout) :: state
         type(frame_t), intent(out) :: frame
         type(recording_renderer_t) :: rec
         real(dp) :: bottom, baseline
-        call ts_end_par(state)
-        call rec%open_canvas(state%HSIZE, 0.0_dp)
-        call draw_vertical(state, rec, 1, state%NV, 0.0_dp, 0.0_dp, 0.0_dp, 0, bottom, baseline)
-        call rec%close_canvas()
-        call rec%take(frame)
-        call frame%set_size(state%HSIZE, max(0.0_dp, bottom))
-        call frame%set_baseline(baseline)
+        type(status_t), intent(out) :: status
+        call ts_end_par(state, status=status)
+        if (.not. status%ok()) return
+        call rec%open_canvas(state%HSIZE, 0.0_dp, status=status)
+        if (.not. status%ok()) return
+        call draw_vertical(state, rec, 1, state%NV, 0.0_dp, 0.0_dp, 0.0_dp, 0, bottom, baseline, status=status)
+        if (.not. status%ok()) return
+        call rec%close_canvas(status=status)
+        if (.not. status%ok()) return
+        call rec%take(frame, status=status)
+        if (.not. status%ok()) return
+        call frame%set_size(state%HSIZE, max(0.0_dp, bottom), status=status)
+        if (.not. status%ok()) return
+        call frame%set_baseline(baseline, status=status)
+        if (.not. status%ok()) return
     end subroutine ts_finish_frame
 
-    subroutine draw_vertical(state, r, first_node, last_node, left, top, ratio, order, bottom, baseline, repeat_before)
+    subroutine draw_vertical(state, r, first_node, last_node, left, top, ratio, order, bottom, baseline, repeat_before, status)
         type(typeset_context_t), intent(inout) :: state
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: first_node, last_node, order
@@ -2444,6 +2651,8 @@ contains
         real(dp) :: y, depth, gw, w, h, base, matrix(6)
         integer :: k, source_end, repeat
         logical :: first
+        type(status_t), intent(out) :: status
+        real(dp) :: repeat_height_value1
         y = top
         depth = 0.0_dp
         first = .true.
@@ -2456,13 +2665,19 @@ contains
             case (VK_BOX)
                 if (first) then
                     if (repeat > 0) then
-                        call state%graphics%metrics(w, h, base, repeat)
+                        call state%graphics%metrics(w, h, base, repeat, status=status)
+                        if (.not. status%ok()) return
                         matrix = IDENTITY
                         matrix(5:6) = [left + state%VX(k), y + max(state%TOPSKIP - base, 0.0_dp)]
-                        call r%begin_frame(matrix, clip)
-                        call state%graphics%draw(r, repeat)
-                        call r%end_frame()
-                        y = y + repeat_height(state, repeat) + state%VH(k)
+                        call r%begin_frame(matrix, clip, status=status)
+                        if (.not. status%ok()) return
+                        call state%graphics%draw(r, repeat, status=status)
+                        if (.not. status%ok()) return
+                        call r%end_frame(status=status)
+                        if (.not. status%ok()) return
+                        repeat_height_value1 = repeat_height(state, repeat, status=status)
+                        if (.not. status%ok()) return
+                        y = y + repeat_height_value1 + state%VH(k)
                     else
                         y = y + max(state%TOPSKIP, state%VH(k))
                     end if
@@ -2471,7 +2686,8 @@ contains
                 else
                     y = y + depth + state%VH(k)
                 end if
-                call draw_box(state, r, k, left + state%VX(k), y, source_end)
+                call draw_box(state, r, k, left + state%VX(k), y, source_end, status=status)
+                if (.not. status%ok()) return
                 depth = state%VD(k)
             case (VK_GLUE)
                 if (.not. first) then
@@ -2492,48 +2708,67 @@ contains
         if (last_node == state%NV .and. state%SOURCE_EXACT_END > source_end) then
             if (source_white(state%SOURCE_TEXT(source_end + 1:state%SOURCE_EXACT_END))) then
                 run%text = state%SOURCE_TEXT(source_end + 1:state%SOURCE_EXACT_END)
-                call r%draw_glyphs(left, y, run, color_paint(state%TEXT_COLOR), 0.0_dp)
+                call r%draw_glyphs(left, y, run, color_paint(state%TEXT_COLOR), 0.0_dp, status=status)
+                if (.not. status%ok()) return
             end if
         end if
     end subroutine draw_vertical
 
     ! Draw page p on r, which the caller has opened at the paper's size.
-    subroutine ts_page_draw(state, r, p)
+    subroutine ts_page_draw(state, r, p, status)
         type(typeset_context_t), intent(inout) :: state
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: p
         real(dp) :: bottom, baseline
         character(len=16) :: num
+        type(status_t), intent(out) :: status
+
+        call initialize_resources(status=status)
+        if (.not. status%ok()) return
+        if (p < 1 .or. p > state%NPAGE) then
+            call status%set(ERROR_ARGUMENT, "typeset: invalid page")
+            return
+        end if
         call draw_vertical(state, r, state%PG0(p), state%PG1(p), state%MARGIN_L, state%MARGIN_T, &
-                           state%PGSET(p), state%PGORD(p), bottom, baseline, state%PGREPEAT(p))
+                           state%PGSET(p), state%PGORD(p), bottom, baseline, state%PGREPEAT(p), status=status)
+        if (.not. status%ok()) return
         if (state%PAGE_NUMBERS .and. (.not. state%HEADINGS .or. state%PGPLAIN(p))) then
             write (num, "(I0)") p
             call draw_string(state, r, trim(num), FACE_REGULAR, state%FONT_SIZE, &
-                             state%MARGIN_L + 0.5_dp*state%HSIZE, state%MARGIN_T + state%VSIZE + state%FOOTSKIP, 1)
+                             state%MARGIN_L + 0.5_dp*state%HSIZE, state%MARGIN_T + state%VSIZE + state%FOOTSKIP, 1, &
+                status=status)
+            if (.not. status%ok()) return
         else if (state%HEADINGS) then
             write (num, "(I0)") p
             ! LaTeX's headings: the number at the outer edge, the head in
             ! slanted capitals at the inner one; here, italic.
             if (mod(p, 2) == 0) then
                 call draw_string(state, r, trim(num), FACE_REGULAR, state%FONT_SIZE, state%MARGIN_L, &
-                                 state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 0)
-                if (state%PGHEAD1(p) >= state%PGHEAD0(p)) &
+                                 state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 0, status=status)
+                if (.not. status%ok()) return
+                if (state%PGHEAD1(p) >= state%PGHEAD0(p)) then
                     call draw_string(state, r, state%MARKS(state%PGHEAD0(p):state%PGHEAD1(p)), FACE_ITALIC, &
                                      state%FONT_SIZE, state%MARGIN_L + state%HSIZE, &
-                                     state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 2)
+                                     state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 2, status=status)
+                    if (.not. status%ok()) return
+                end if
             else
                 call draw_string(state, r, trim(num), FACE_REGULAR, state%FONT_SIZE, state%MARGIN_L + state%HSIZE, &
-                                 state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 2)
-                if (state%PGHEAD1(p) >= state%PGHEAD0(p)) &
+                                 state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 2, status=status)
+                if (.not. status%ok()) return
+                if (state%PGHEAD1(p) >= state%PGHEAD0(p)) then
                     call draw_string(state, r, state%MARKS(state%PGHEAD0(p):state%PGHEAD1(p)), FACE_ITALIC, &
-                                     state%FONT_SIZE, state%MARGIN_L, state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 0)
+                                     state%FONT_SIZE, state%MARGIN_L, state%MARGIN_T - 2.5_dp*state%FONT_SIZE, 0, &
+                        status=status)
+                    if (.not. status%ok()) return
+                end if
             end if
         end if
     end subroutine ts_page_draw
 
     ! Batch only adjacent glyphs: grouping all glyphs of a colour would
     ! reorder both painting and logical text.
-    subroutine draw_box(state, r, k, x, y, source_end)
+    subroutine draw_box(state, r, k, x, y, source_end, status)
         type(typeset_context_t), intent(inout) :: state
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: k
@@ -2543,6 +2778,7 @@ contains
         type(clip_t) :: clip
         real(dp) :: matrix(6)
         integer :: j, start, c, lo, hi, g, cp, nb, next
+        type(status_t), intent(out) :: status
         j = state%VI0(k)
         do while (j <= state%VI1(k))
             select case (state%ITK(j))
@@ -2556,7 +2792,8 @@ contains
                 do while (j <= state%VI1(k))
                     if (state%ITK(j) /= 1 .or. state%ITC(j) /= c) exit
                     if (state%ITMATH(j) .neqv. run%source_math) exit
-                    call run_add(run, state%ITG(j), state%ITX(j), -state%ITY(j), state%ITS(j))
+                    call run_add(run, state%ITG(j), state%ITX(j), -state%ITY(j), state%ITS(j), status=status)
+                    if (.not. status%ok()) return
                     if (state%ITFIRST(j) > 0) lo = min(lo, state%ITFIRST(j))
                     hi = max(hi, state%ITLAST(j))
                     j = j + 1
@@ -2586,20 +2823,26 @@ contains
                     end do
                     source_end = max(source_end, hi)
                 end if
-                call r%draw_glyphs(x, y, run, color_paint(c), 0.0_dp)
+                call r%draw_glyphs(x, y, run, color_paint(c), 0.0_dp, status=status)
+                if (.not. status%ok()) return
             case (2)
                 call r%draw_rect(x + state%ITX(j), y - state%ITY(j) - state%ITH(j), &
-                                 state%ITW(j), state%ITH(j), color_paint(state%ITC(j)))
+                                 state%ITW(j), state%ITH(j), color_paint(state%ITC(j)), status=status)
+                if (.not. status%ok()) return
                 j = j + 1
             case (3)
                 matrix = IDENTITY
                 matrix(5:6) = [x + state%ITX(j), y - state%ITY(j)]
-                call r%begin_frame(matrix, clip)
-                call state%graphics%draw(r, state%ITG(j))
-                call r%end_frame()
+                call r%begin_frame(matrix, clip, status=status)
+                if (.not. status%ok()) return
+                call state%graphics%draw(r, state%ITG(j), status=status)
+                if (.not. status%ok()) return
+                call r%end_frame(status=status)
+                if (.not. status%ok()) return
                 j = j + 1
             case default
-                error stop "typeset: invalid finished item"
+                call status%set(ERROR_ARGUMENT, "typeset: invalid finished item")
+                return
             end select
         end do
     end subroutine draw_box
@@ -2637,7 +2880,7 @@ contains
 
     ! A string on the page, anchored at its start (0), middle (1) or end
     ! (2), its baseline at y.
-    subroutine draw_string(state, r, s, face, size, x, y, anchor)
+    subroutine draw_string(state, r, s, face, size, x, y, anchor, status)
         type(typeset_context_t), intent(inout) :: state
         class(renderer_t), intent(inout) :: r
         character(len=*), intent(in) :: s
@@ -2647,19 +2890,23 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, g, gf, prev
         real(dp) :: pen
+        type(status_t), intent(out) :: status
         call code_points(s, cps, n)
         pen = 0.0_dp
         prev = 0
         do k = 1, n
             g = glyph_for(face, cps(k), gf)
             if (prev > 0) pen = pen + glyph_kern(face, prev, g)*size
-            call run_add(run, g, pen, 0.0_dp, size)
+            call run_add(run, g, pen, 0.0_dp, size, status=status)
+            if (.not. status%ok()) return
             pen = pen + glyph_adv(g)*size
             prev = g
         end do
         if (run%n == 0) return
-        call run_map(run, 1, run%n, s)
-        call r%draw_glyphs(x - 0.5_dp*anchor*pen, y, run, color_paint(state%TEXT_COLOR), 0.0_dp)
+        call run_map(run, 1, run%n, s, status=status)
+        if (.not. status%ok()) return
+        call r%draw_glyphs(x - 0.5_dp*anchor*pen, y, run, color_paint(state%TEXT_COLOR), 0.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine draw_string
 
     ! ------------------------------------------------------------------
@@ -2684,13 +2931,19 @@ contains
 
     ! Line l of the last paragraph: its glyphs' code points (as glyph ids)
     ! and x positions.
-    subroutine ts_line_info(state, l, gids, xs, n)
+    subroutine ts_line_info(state, l, gids, xs, n, status)
         type(typeset_context_t), intent(inout) :: state
         integer, intent(in) :: l
         integer, allocatable, intent(out) :: gids(:)
         real(dp), allocatable, intent(out) :: xs(:)
         integer, intent(out) :: n
         integer :: k, c, j
+        type(status_t), intent(out) :: status
+
+        if (l < 1 .or. l > ts_line_count(state)) then
+            call status%set(ERROR_ARGUMENT, "typeset: invalid line")
+            return
+        end if
         c = 0
         n = 0
         do k = state%LAST_PAR0, state%LAST_PAR1

@@ -4,6 +4,7 @@
 :caption: API Reference
 :hidden:
 
+typesetting_api
 fplotlib_artist
 fplotlib_backend_eps
 fplotlib_backend_pdf
@@ -31,10 +32,13 @@ fplotlib_png
 fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
+fplotlib_render_checks
 fplotlib_report
+fplotlib_resources
 fplotlib_scale
 fplotlib_scene
 fplotlib_state
+fplotlib_status
 fplotlib_style
 fplotlib_svg
 fplotlib_text

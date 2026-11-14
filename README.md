@@ -306,6 +306,12 @@ several reports can use `fplotlib_report:report_t` directly: its `markdown`,
 used by the procedural facade. The explicit `include_frame` accepts a supplied
 frame instead of consulting global plotting state.
 
+Fallible explicit APIs require a `status_t` argument from `fplotlib_status`.
+Check it before using outputs or making another call; there is no hidden
+last-error state. The high-level `fplotlib` facade handles these errors by
+aborting for now. The [report and typesetting API](docs/api/typesetting_api.md)
+lists the complete document-facing surface and its ownership/error contracts.
+
 The end-user frontend is intentionally small: Markdown, equations, basic
 figures/tables, captions and references. Generic measurement, packing,
 pagination and drawing belong to the reusable core. A richer document
@@ -334,7 +340,12 @@ call markdown([character(len=80) :: &
 call save("notes.pdf")
 ```
 
-The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
+The Markdown reader is currently a **Pandoc-inspired subset**, not a complete
+CommonMark, Pandoc, or MyST implementation. Its syntax is still under review;
+the [Markdown reference](docs/api/fplotlib_markdown.md) distinguishes established
+notation from fplotlib-specific conventions.
+
+The layout follows TeX's algorithms (`fplotlib_typeset`), with LaTeX's parameters and the
 spacing of its article and book classes:
 
 - paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
@@ -350,7 +361,7 @@ spacing of its article and book classes:
 
 A document goes through three layers, as in Pandoc and LaTeX: a reader
 (`fplotlib_markdown`) reads the text into a tree of blocks and inlines
-(`fplotlib_doctree`, Pandoc's); a document class (`fplotlib_docclass`) sets
+(`fplotlib_doctree`, inspired by Pandoc's); a document class (`fplotlib_docclass`) sets
 the tree with LaTeX's styles, numbering sections and equations from a first
 pass over it as LaTeX does from its `.aux` file; and the engine
 (`fplotlib_typeset`) works at the level of TeX's primitives: words, glue,
@@ -365,32 +376,39 @@ into that workspace. Text, equations and plots share the positioned
 those frames without knowing how they were laid out.
 
 ```fortran
-use fplotlib, only: dp
-use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
-use fplotlib_scene, only: paged_document_t, frame_t
-use fplotlib_document, only: save_document
+subroutine write_report(status)
+    use fplotlib, only: dp
+    use fplotlib_status, only: status_t
+    use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
+    use fplotlib_scene, only: paged_document_t, frame_t
+    use fplotlib_document, only: save_document
 
-type(layout_context_t) :: context
-type(paged_document_t) :: document
-type(frame_t) :: annotation
+    type(status_t), intent(out) :: status
+    type(layout_context_t) :: context
+    type(paged_document_t) :: document
+    type(frame_t) :: annotation
 
-call layout_markdown(context, "# Results"//achar(10)//achar(10)// &
-                     "The energy is $E=mc^2$.", document)
-! Reusing the workspace does not change the finished document.
-call layout_fragment(context, "A **label** with $x^2$.", 120.0_dp, annotation)
-call save_document(document, "report.pdf")
-call save_document(document, "report.svg")
+    call layout_markdown(context, "# Results"//achar(10)//achar(10)// &
+                         "The energy is $E=mc^2$.", document, status)
+    if (.not. status%ok()) return
+    ! Reusing the workspace does not change the finished document.
+    call layout_fragment(context, "A **label** with $x^2$.", 120.0_dp, annotation, status=status)
+    if (.not. status%ok()) return
+    call save_document(document, "report.pdf", status=status)
+    if (.not. status%ok()) return
+    call save_document(document, "report.svg", status=status)
+end subroutine write_report
 ```
 
 The `fplotlib` module exposes the high-level facade; explicit layout, frame,
 and export APIs are imported from their own modules.
-`fplotlib_draw:render_frame(frame)` captures the current plot without serializing
-an image. A frame's `import_frame(child, handle)` imports an owned copy;
-`place(handle, matrix, clip)` can reuse it at several positions. The six
+`fplotlib_draw:render_frame(frame, status=...)` captures the current plot without
+serializing an image. A frame's `import_frame(child, handle, status)` imports an
+owned copy; `place(handle, matrix, clip, status)` can reuse it at several positions. The six
 matrix entries are `[a,b,c,d,e,f]`, mapping a point to
 `(a*x+c*y+e, b*x+d*y+f)`. The optional rectangular clip is in the child's
 local coordinates. Frames retain a baseline separately from their layout
-size and ink bounds. `source_text()` concatenates stored glyph-run source in
+size and ink bounds. `source_text(status)` concatenates stored glyph-run source in
 drawing order, including TeX for formulas; it is not semantic or accessibility
 text.
 
@@ -399,8 +417,8 @@ text.
 A `recording_renderer_t` produces a frame instead, with no filesystem or
 byte-export requirement.
 
-For report composition, `doc_add_frame(tree, parent, frame)` inserts a
-graphics block into a parsed document, and `md_append(text, tree)` adds
+For report composition, `doc_add_frame(tree, parent, frame, status)` inserts a
+graphics block into a parsed document, and `md_append(text, tree, status=...)` adds
 more Markdown after it. No new Markdown syntax is needed. The
 `plot_hpc_report.f90` gallery example combines Markdown, a vector plot and
 a numerical table through the procedural report API. The
@@ -408,10 +426,22 @@ a numerical table through the procedural report API. The
 and a plot annotation that is itself a typeset paragraph and equation.
 
 The low-level modules do not depend on the plotting frontend. A host can
-call `export_document(document, format, assets, dpi)` from
+call `export_document(document, format, assets, dpi, status)` from
 `fplotlib_document` to receive bytes in memory, or replay a frame directly
 to any `renderer_t`. PDF produces one asset; SVG, PNG and EPS produce one
 per page. Pages may have different sizes.
+
+The raw `ts_*` interface is a **prototype, subject to change**. General inline
+frames, horizontal glue/penalty/discretionary constructors, a programmatic math
+tree and an unbounded fragment-layout interface are still work in progress.
+The current engine is not a complete TeX/Typst implementation.
+
+Built-in font and English hyphenation tables are prepared once and then shared
+read-only. Serial entrypoints prepare them automatically; call
+`fplotlib_resources:initialize_resources(status)` serially before starting
+concurrent explicit-context work. This initialization policy is not a blanket
+thread-safety guarantee, and the implicit plotting/report facade is not
+reentrant.
 
 The font provider remains the small compiled-in font set. Glyph runs now
 retain font identity, logical UTF-8 text and glyph-to-source byte ranges;

@@ -18,11 +18,12 @@
 ! The faces are Lato: regular, bold and italic; bold italic is set in
 ! bold.
 module fplotlib_text
+    use fplotlib_render_checks
+    use fplotlib_resources
+    use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
-    use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
-                               glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC, glyph_face
+    use fplotlib_glyphs
     implicit none
     private
 
@@ -49,7 +50,7 @@ contains
 
     ! Append s, set in face at size, to run, starting with the pen at
     ! (x0, y0). xend is where the pen is left.
-    subroutine text_layout(s, size, face, x0, y0, run, xend)
+    subroutine text_layout(s, size, face, x0, y0, run, xend, status)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size, x0, y0
         integer, intent(in) :: face
@@ -59,6 +60,14 @@ contains
         integer :: n, k, gid, prev, start, offset
         real(dp) :: pen
 
+        type(status_t), intent(out) :: status
+
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x0, y0], status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         call code_points(s, cps, n, first, last)
         start = run%n + 1
         if (.not. allocated(run%text)) run%text = ""
@@ -69,7 +78,8 @@ contains
             gid = glyph_cmap(face, cps(k))
             if (gid == 0) gid = glyph_cmap(face, 32)
             if (prev > 0) pen = pen + glyph_kern(face, prev, gid)*size
-            call run_add(run, gid, pen, y0, size)
+            call run_add(run, gid, pen, y0, size, status=status)
+            if (.not. status%ok()) return
             pen = pen + glyph_adv(gid)*size
             prev = gid
         end do
@@ -82,7 +92,7 @@ contains
     end subroutine text_layout
 
     ! Width of s in points, laid out exactly as text_layout lays it out.
-    function text_width(s, size, face) result(w)
+    function text_width(s, size, face, status) result(w)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in) :: face
@@ -90,6 +100,11 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, gid, prev
 
+        type(status_t), intent(out) :: status
+
+        w = 0.0_dp
+        call check_font(face, size, status=status)
+        if (.not. status%ok()) return
         call code_points(s, cps, n)
         w = 0.0_dp
         prev = 0
@@ -154,7 +169,7 @@ contains
         run%source_math = .false.
     end subroutine run_reset
 
-    subroutine run_add(run, gid, x, y, fs)
+    subroutine run_add(run, gid, x, y, fs, status)
         type(glyphrun_t), intent(inout) :: run
         integer, intent(in) :: gid
         real(dp), intent(in) :: x, y, fs
@@ -162,11 +177,21 @@ contains
         real(dp), allocatable :: t(:)
         integer :: cap
 
+        type(status_t), intent(out) :: status
+
+        call initialize_resources(status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, fs], status=status)
+        if (.not. status%ok()) return
+        if (gid < 0 .or. gid > NGLYPH .or. fs < 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "run_add: invalid glyph or size")
+            return
+        end if
         if (.not. allocated(run%gid)) then
             allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
                       run%x(16), run%y(16), run%size(16))
         else if (run%n >= size(run%gid)) then
-            cap = 2*size(run%gid)
+            cap = max(16, 2*size(run%gid))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)
@@ -200,26 +225,36 @@ contains
     end subroutine run_add
 
     ! A cluster may contain several glyphs and several Unicode characters.
-    subroutine run_map(run, first_glyph, last_glyph, text, math)
+    subroutine run_map(run, first_glyph, last_glyph, text, math, status)
         type(glyphrun_t), intent(inout) :: run
         integer, intent(in) :: first_glyph, last_glyph
         character(len=*), intent(in) :: text
         logical, intent(in), optional :: math
         integer :: offset
+        type(status_t), intent(out) :: status
+        if (first_glyph <= last_glyph) then
+            if (first_glyph < 1 .or. last_glyph > run%n) then
+                call status%set(ERROR_ARGUMENT, "run_map: invalid glyph range")
+                return
+            end if
+        end if
         if (.not. allocated(run%text)) run%text = ""
         offset = len(run%text)
         run%text = run%text//text
         if (present(math)) run%source_math = run%source_math .or. math
         if (first_glyph > last_glyph) return
-        if (first_glyph < 1 .or. last_glyph > run%n) error stop "run_map: invalid glyph range"
         run%first(first_glyph:last_glyph) = offset + 1
         run%last(first_glyph:last_glyph) = len(run%text)
     end subroutine run_map
 
-    subroutine run_copy(source, dest)
+    subroutine run_copy(source, dest, status)
         type(glyphrun_t), intent(in) :: source
         type(glyphrun_t), intent(out) :: dest
         integer :: n
+        type(status_t), intent(out) :: status
+
+        call check_glyphs(source, status=status)
+        if (.not. status%ok()) return
         n = source%n
         dest%n = n
         dest%source_math = source%source_math

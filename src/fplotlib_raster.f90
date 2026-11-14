@@ -25,6 +25,7 @@
 ! per point. There is one rasterizer here, not five.
 
 module fplotlib_raster
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render, only: paint_t, clip_t, VERB_MOVE, VERB_LINE, VERB_CUBIC, &
                             VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
@@ -98,10 +99,14 @@ contains
         cv%px(4, :, :) = bg_alpha
     end subroutine canvas_init
 
-    subroutine canvas_free(cv)
+    subroutine canvas_free(cv, status)
         type(canvas_t), intent(inout) :: cv
 
-        if (cv%n_frame /= 0) error stop "raster: unclosed frame at canvas_free"
+        type(status_t), intent(out) :: status
+        if (cv%n_frame /= 0) then
+            call status%set(ERROR_STATE, "raster: unclosed frame at canvas_free")
+            return
+        end if
         if (allocated(cv%px)) deallocate (cv%px)
         if (allocated(cv%acc)) deallocate (cv%acc)
         if (allocated(cv%frames)) deallocate (cv%frames)
@@ -109,14 +114,18 @@ contains
 
     ! The matrix acts on local pixels; clip coordinates, like paint clips,
     ! are points in the same local, origin-shifted coordinate system.
-    subroutine canvas_begin_frame(cv, matrix, clip)
+    subroutine canvas_begin_frame(cv, matrix, clip, status)
         type(canvas_t), intent(inout) :: cv
         real(dp), intent(in) :: matrix(6)
         type(clip_t), intent(in) :: clip
         type(raster_frame_t), allocatable :: grown(:)
         real(dp) :: p(6), m(6), qx(4), qy(4)
 
-        if (.not. allocated(cv%px)) error stop "raster: begin_frame outside canvas"
+        type(status_t), intent(out) :: status
+        if (.not. allocated(cv%px)) then
+            call status%set(ERROR_STATE, "raster: begin_frame outside canvas")
+            return
+        end if
         if (.not. allocated(cv%frames)) allocate (cv%frames(8))
         if (cv%n_frame == size(cv%frames)) then
             allocate (grown(2*cv%n_frame))
@@ -142,11 +151,15 @@ contains
         end if
     end subroutine canvas_begin_frame
 
-    subroutine canvas_end_frame(cv)
+    subroutine canvas_end_frame(cv, status)
         type(canvas_t), intent(inout) :: cv
         real(dp) :: matrix(6)
 
-        if (cv%n_frame == 0) error stop "raster: unmatched end_frame"
+        type(status_t), intent(out) :: status
+        if (cv%n_frame == 0) then
+            call status%set(ERROR_STATE, "raster: unmatched end_frame")
+            return
+        end if
         if (cv%frames(cv%n_frame)%clipped) cv%n_clip = cv%n_clip - 1
         cv%n_frame = cv%n_frame - 1
         matrix = IDENTITY
@@ -189,12 +202,18 @@ contains
     ! Undo the premultiplication on the way out, because PNG stores straight
     ! alpha. Fully transparent pixels have no colour to recover and are left
     ! black, which is what every other encoder does.
-    function canvas_rgba(cv) result(out)
+    subroutine canvas_rgba(cv, out, status)
+        use fplotlib_status, only: status_t, ERROR_STATE
         type(canvas_t), intent(in) :: cv
-        integer, allocatable :: out(:, :, :)
+        integer, allocatable, intent(out) :: out(:, :, :)
+        type(status_t), intent(out) :: status
         integer :: x, y, c
         real(dp) :: a, v
 
+        if (.not. allocated(cv%px)) then
+            call status%set(ERROR_STATE, "raster: canvas is not initialized")
+            return
+        end if
         allocate (out(4, cv%w, cv%h))
         do y = 1, cv%h
             do x = 1, cv%w
@@ -210,7 +229,7 @@ contains
                 end if
             end do
         end do
-    end function canvas_rgba
+    end subroutine canvas_rgba
 
     ! ------------------------------------------------------------------
     ! Path building. Coordinates go in as points and come out as pixels, so

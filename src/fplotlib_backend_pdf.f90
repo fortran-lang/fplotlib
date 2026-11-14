@@ -21,6 +21,8 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -239,14 +241,22 @@ contains
         call put(self, "Q"//new_line("a"))
     end subroutine end_paint
 
-    subroutine pdf_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+    subroutine pdf_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: width, height
         integer, intent(in), optional :: bg_rgb(3)
         real(dp), intent(in), optional :: bg_alpha
         real(dp), intent(in), optional :: x0, y0
 
-        if (self%n_frame /= 0) error stop "pdf: unclosed frame at open_canvas"
+        type(status_t), intent(out) :: status
+
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status=status)
+        if (.not. status%ok()) return
+        self%has_output = .false.
+        if (self%n_frame /= 0) then
+            call status%set(ERROR_STATE, "pdf: unclosed frame at open_canvas")
+            return
+        end if
         self%width = width
         self%height = height
         self%is_open = .true.
@@ -267,16 +277,18 @@ contains
         if (present(bg_rgb)) self%bg = bg_rgb
         self%bga = 1.0_dp
         if (present(bg_alpha)) self%bga = bg_alpha
-        call start_page(self)
+        call start_page(self, status=status)
+        if (.not. status%ok()) return
     end subroutine pdf_open_canvas
 
     ! A page's content starts with the matrix that turns the API's
     ! top-left origin with y downwards into PDF's bottom-left origin with
     ! y upwards, and applies the canvas origin at the same time; then the
     ! background, if there is one.
-    subroutine start_page(self)
+    subroutine start_page(self, status)
         class(pdf_renderer_t), intent(inout) :: self
         type(paint_t) :: p
+        type(status_t), intent(out) :: status
         call builder_init(self%c)
         call put(self, "1 0 0 -1 "//num_str(-self%x0)//" " &
                  //num_str(self%y0 + self%h)//" cm"//new_line("a"))
@@ -284,21 +296,48 @@ contains
             p%filled = .true.
             p%fill_rgb = self%bg
             p%fill_alpha = self%bga
-            call pdf_draw_rect(self, self%x0, self%y0, self%w, self%h, p)
+            call pdf_draw_rect(self, self%x0, self%y0, self%w, self%h, p, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine start_page
 
     ! Omitted page settings inherit the preceding page, including its
     ! background. Alpha zero requests a transparent background.
-    subroutine pdf_new_page(self, width, height, bg_rgb, bg_alpha)
+    subroutine pdf_new_page(self, width, height, bg_rgb, bg_alpha, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in), optional :: width, height
         integer, intent(in), optional :: bg_rgb(3)
         real(dp), intent(in), optional :: bg_alpha
         type(pdf_page_t), allocatable :: t(:)
+        real(dp) :: next_width, next_height
 
-        if (.not. self%is_open) error stop "pdf: new_page outside canvas"
-        if (self%n_frame /= 0) error stop "pdf: unclosed frame at new_page"
+        type(status_t), intent(out) :: status
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "pdf: new_page outside canvas")
+            return
+        end if
+        if (self%n_frame /= 0) then
+            call status%set(ERROR_STATE, "pdf: unclosed frame at new_page")
+            return
+        end if
+        next_width = self%w
+        next_height = self%h
+        if (present(width)) next_width = width
+        if (present(height)) next_height = height
+        call check_frame_size(next_width, next_height, status=status)
+        if (.not. status%ok()) return
+        if (present(bg_rgb)) then
+            call check_rgb(bg_rgb, status)
+            if (.not. status%ok()) return
+        end if
+        if (present(bg_alpha)) then
+            call check_finite([bg_alpha], status)
+            if (.not. status%ok()) return
+            if (bg_alpha < 0.0_dp .or. bg_alpha > 1.0_dp) then
+                call status%set(ERROR_ARGUMENT, "pdf: background alpha must be in [0,1]")
+                return
+            end if
+        end if
         if (.not. allocated(self%pages)) allocate (self%pages(4))
         if (self%npages >= size(self%pages)) then
             allocate (t(2*size(self%pages)))
@@ -309,8 +348,8 @@ contains
         self%pages(self%npages)%content = builder_get(self%c)
         self%pages(self%npages)%w = self%w
         self%pages(self%npages)%h = self%h
-        if (present(width)) self%w = width
-        if (present(height)) self%h = height
+        self%w = next_width
+        self%h = next_height
         self%width = self%w
         self%height = self%h
         if (present(bg_rgb)) then
@@ -318,16 +357,26 @@ contains
             self%bg = bg_rgb
         end if
         if (present(bg_alpha)) self%bga = bg_alpha
-        call start_page(self)
+        call start_page(self, status=status)
+        if (.not. status%ok()) return
     end subroutine pdf_new_page
 
-    subroutine pdf_begin_frame(self, matrix, clip)
+    subroutine pdf_begin_frame(self, matrix, clip, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: matrix(6)
         type(clip_t), intent(in) :: clip
         integer :: i
 
-        if (.not. self%is_open) error stop "pdf: begin_frame outside canvas"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_transform(matrix, clip, status=status)
+        if (.not. status%ok()) return
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "pdf: begin_frame outside canvas")
+            return
+        end if
         call put(self, "q"//new_line("a"))
         do i = 1, 6
             call put_num(self, matrix(i))
@@ -343,10 +392,17 @@ contains
         self%n_frame = self%n_frame + 1
     end subroutine pdf_begin_frame
 
-    subroutine pdf_end_frame(self)
+    subroutine pdf_end_frame(self, status)
         class(pdf_renderer_t), intent(inout) :: self
 
-        if (self%n_frame == 0) error stop "pdf: unmatched end_frame"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_frame == 0) then
+            call status%set(ERROR_STATE, "pdf: unmatched end_frame")
+            return
+        end if
         call put(self, "Q"//new_line("a"))
         self%n_frame = self%n_frame - 1
     end subroutine pdf_end_frame
@@ -383,23 +439,35 @@ contains
         end do
     end subroutine emit_path
 
-    subroutine pdf_draw_path(self, x, y, verbs, n_verb, paint)
+    subroutine pdf_draw_path(self, x, y, verbs, n_verb, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_path(x, y, verbs, n_verb, paint, status=status)
+        if (.not. status%ok()) return
         if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
         call end_paint(self, paint)
     end subroutine pdf_draw_path
 
-    subroutine pdf_draw_rect(self, x, y, w, h, paint, radius)
+    subroutine pdf_draw_rect(self, x, y, w, h, paint, radius, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(x, y, w, h, paint, radius, status=status)
+        if (.not. status%ok()) return
         call begin_paint(self, paint)
         ! Rounded corners are rare enough that they go through the general
         ! path; the plain case gets the single "re" operator.
@@ -411,34 +479,56 @@ contains
         call end_paint(self, paint)
     end subroutine pdf_draw_rect
 
-    subroutine pdf_draw_circle(self, cx, cy, r, paint)
+    subroutine pdf_draw_circle(self, cx, cy, r, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
         real(dp) :: x(13), y(13), k
         integer :: v(6)
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(cx, cy, r, r, paint, status=status)
+        if (.not. status%ok()) return
         k = r*0.5522847498307933_dp
         x = [cx + r, cx + r, cx + k, cx, cx - k, cx - r, cx - r, cx - r, &
              cx - k, cx, cx + k, cx + r, cx + r]
         y = [cy, cy + k, cy + r, cy + r, cy + r, cy + k, cy, cy - k, &
              cy - r, cy - r, cy - r, cy - k, cy]
         v = [VERB_MOVE, VERB_CUBIC, VERB_CUBIC, VERB_CUBIC, VERB_CUBIC, VERB_CLOSE]
-        call pdf_draw_path(self, x, y, v, 6, paint)
+        call pdf_draw_path(self, x, y, v, 6, paint, status=status)
+        if (.not. status%ok()) return
     end subroutine pdf_draw_circle
 
     ! Repeating the outline per point rather than defining a form XObject.
     ! A form would make the file smaller, but every point still needs its own
     ! placement operator, so the drawing cost is the same either way.
-    subroutine pdf_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+    subroutine pdf_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         real(dp), intent(in) :: mx(:), my(:)
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (size(x) /= size(y)) then
+            call status%set(ERROR_ARGUMENT, "markers: inconsistent coordinate counts")
+            return
+        end if
+        call check_finite(x, status=status)
+        if (.not. status%ok()) return
+        call check_finite(y, status=status)
+        if (.not. status%ok()) return
+        call check_path(mx, my, mverbs, n_mverb, paint, status=status)
+        if (.not. status%ok()) return
         do i = 1, size(x)
-            call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
+            call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine pdf_draw_markers
 
@@ -446,7 +536,7 @@ contains
     ! at one size on one baseline, placed by its own text matrix. Within a
     ! segment the glyphs follow each other by their widths, and kerning is
     ! the number TJ takes between two of them.
-    subroutine pdf_draw_glyphs(self, x, y, run, paint, angle)
+    subroutine pdf_draw_glyphs(self, x, y, run, paint, angle, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
@@ -458,6 +548,16 @@ contains
         logical :: open, actual_text
         character(len=1) :: eol
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, angle], status=status)
+        if (.not. status%ok()) return
+        call check_paint(paint, status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         if (run%n == 0) return
         eol = new_line("a")
         pp = paint
@@ -558,17 +658,23 @@ contains
     ! with the first row at the top of it, so the matrix that lands it on the
     ! API's rectangle is a flip: v = 1 is the top edge, and the page is
     ! already flipped underneath.
-    subroutine pdf_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+    subroutine pdf_draw_image(self, x, y, w, h, rgba, nx, ny, paint, status)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         integer, allocatable :: rgb(:), a(:)
         type(pdf_image_t), allocatable :: images(:)
         integer :: i, j, k, id
         logical :: opaque
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_image(x, y, w, h, rgba, nx, ny, paint, status=status)
+        if (.not. status%ok()) return
         if (nx < 1 .or. ny < 1) return
         if (.not. allocated(self%img)) allocate (self%img(16))
         if (self%n_img == size(self%img)) then
@@ -615,7 +721,7 @@ contains
 
     ! Assemble the file. Objects have to be byte-counted as they are written
     ! because the trailing xref table records where each one starts.
-    subroutine pdf_close_canvas(self)
+    subroutine pdf_close_canvas(self, status)
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=:), allocatable :: content, res, gs, xo, ft, kids
@@ -624,7 +730,14 @@ contains
         real(dp) :: page_w, page_h
         character(len=1) :: eol
 
-        if (self%n_frame /= 0) error stop "pdf: unclosed frame at close_canvas"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_frame /= 0) then
+            call status%set(ERROR_STATE, "pdf: unclosed frame at close_canvas")
+            return
+        end if
         eol = new_line("a")
         content = builder_get(self%c)
         ! Page k is object 2k + 1 and its content 2k + 2; the last page is
@@ -761,6 +874,7 @@ contains
 
         self%out = builder_get(f)
         self%is_open = .false.
+        self%has_output = .true.
     end subroutine pdf_close_canvas
 
     ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
@@ -881,9 +995,16 @@ contains
         write (t, "(I10.10)") i
     end function pad10
 
-    function pdf_bytes(self) result(s)
+    function pdf_bytes(self, status) result(s)
         class(pdf_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+        type(status_t), intent(out) :: status
+
+        s = ""
+        if (.not. self%has_output .or. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: no finished encoded output")
+            return
+        end if
         if (allocated(self%out)) then
             s = self%out
         else

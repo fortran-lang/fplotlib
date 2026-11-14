@@ -9,11 +9,12 @@
 ! overrides the patterns. TeX's \lefthyphenmin and \righthyphenmin keep
 ! a break at least that many letters from either end.
 module fplotlib_hyph
+    use fplotlib_status
     use fplotlib_hyph_data, only: N_PATTERNS, N_EXCEPTIONS, BLOB_LEN, blob_text
     implicit none
     private
 
-    public :: hyph_points
+    public :: hyph_points, initialize_hyphenation
 
     ! The characters a digit is coded as; tools/gen_hyph.py has the same.
     character(len=*), parameter :: DIGIT_CODES = &
@@ -29,6 +30,10 @@ module fplotlib_hyph
     integer, save :: MAXKEY = 0
 
 contains
+
+    subroutine initialize_hyphenation()
+        if (.not. ready) call load()
+    end subroutine initialize_hyphenation
 
     subroutine load()
         character(len=BLOB_LEN) :: s
@@ -129,18 +134,24 @@ contains
     ! a..z matches no pattern. Breaks closer than lhm letters to the start
     ! or rhm to the end are left out, and so is every break in a word
     ! shorter than lhm + rhm, as in TeX.
-    subroutine hyph_points(word, lhm, rhm, pos, n)
+    subroutine hyph_points(word, lhm, rhm, pos, n, status)
         character(len=*), intent(in) :: word
         integer, intent(in) :: lhm, rhm
         integer, intent(out) :: pos(:), n
+        type(status_t), intent(out) :: status
         character(len=:), allocatable :: w
         integer :: vals(0:len(word) + 2)
         integer :: i, j, p, t, nw, e, q, k
 
         n = 0
         nw = len(word)
-        if (nw < lhm + rhm) return
-        if (.not. ready) call load()
+        if (lhm < 0 .or. rhm < 0) then
+            call status%set(ERROR_ARGUMENT, "hyph_points: negative minimum")
+            return
+        end if
+        if (lhm > nw .or. rhm > nw) return
+        if (lhm > nw - rhm) return
+        call initialize_hyphenation()
         vals = 0
 
         ! An exception decides by itself.
@@ -150,7 +161,11 @@ contains
             do k = e, len(EXC)
                 if (EXC(k:k) == " ") exit
                 if (EXC(k:k) == "-") then
-                    if (q >= lhm .and. nw - q >= rhm .and. n < size(pos)) then
+                    if (q >= lhm .and. nw - q >= rhm) then
+                        if (n == size(pos)) then
+                            call status%set(ERROR_ARGUMENT, "hyph_points: output array too small")
+                            return
+                        end if
                         n = n + 1
                         pos(n) = q
                     end if
@@ -173,7 +188,11 @@ contains
         end do
         ! Gap g lies between w(g) and w(g + 1): after the word's letter g - 1.
         do q = lhm, nw - rhm
-            if (mod(vals(q + 1), 2) == 1 .and. n < size(pos)) then
+            if (mod(vals(q + 1), 2) == 1) then
+                if (n == size(pos)) then
+                    call status%set(ERROR_ARGUMENT, "hyph_points: output array too small")
+                    return
+                end if
                 n = n + 1
                 pos(n) = q
             end if

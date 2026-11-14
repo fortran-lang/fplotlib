@@ -12,6 +12,8 @@
 ! depending on which helper emitted it, which made the output harder to diff
 ! than it needed to be.
 module fplotlib_backend_svg
+    use fplotlib_render_checks
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -225,7 +227,7 @@ contains
         call put_eol(self)
     end subroutine open_clip_group
 
-    subroutine svg_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+    subroutine svg_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: width, height
         integer, intent(in), optional :: bg_rgb(3)
@@ -233,7 +235,15 @@ contains
         real(dp), intent(in), optional :: x0, y0
         real(dp) :: ox, oy
 
-        if (self%n_scope /= 0) error stop "svg: unclosed scope at open_canvas"
+        type(status_t), intent(out) :: status
+
+        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0, status=status)
+        if (.not. status%ok()) return
+        self%has_output = .false.
+        if (self%n_scope /= 0) then
+            call status%set(ERROR_STATE, "svg: unclosed scope at open_canvas")
+            return
+        end if
         self%width = width
         self%height = height
         self%is_open = .true.
@@ -293,20 +303,35 @@ contains
         end if
     end subroutine svg_open_canvas
 
-    subroutine svg_close_canvas(self)
+    subroutine svg_close_canvas(self, status)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
 
-        if (self%n_scope /= 0) error stop "svg: unclosed scope at close_canvas"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_scope /= 0) then
+            call status%set(ERROR_STATE, "svg: unclosed scope at close_canvas")
+            return
+        end if
         call sync_clip(self, none)
         call put(self, "</svg>")
         call put_eol(self)
         self%is_open = .false.
+        self%has_output = .true.
     end subroutine svg_close_canvas
 
-    function svg_bytes(self) result(s)
+    function svg_bytes(self, status) result(s)
         class(svg_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+        type(status_t), intent(out) :: status
+
+        s = ""
+        if (.not. self%has_output .or. self%is_open) then
+            call status%set(ERROR_STATE, "renderer: no finished encoded output")
+            return
+        end if
         s = builder_get(self%b)
     end function svg_bytes
 
@@ -352,12 +377,18 @@ contains
         end do
     end subroutine put_path_data
 
-    subroutine svg_draw_path(self, x, y, verbs, n_verb, paint)
+    subroutine svg_draw_path(self, x, y, verbs, n_verb, paint, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_path(x, y, verbs, n_verb, paint, status=status)
+        if (.not. status%ok()) return
         if (n_verb <= 0) return
         call sync_clip(self, paint%clip)
         call put(self, '<path d="')
@@ -368,12 +399,18 @@ contains
         call put_eol(self)
     end subroutine svg_draw_path
 
-    subroutine svg_draw_rect(self, x, y, w, h, paint, radius)
+    subroutine svg_draw_rect(self, x, y, w, h, paint, radius, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(x, y, w, h, paint, radius, status=status)
+        if (.not. status%ok()) return
         call sync_clip(self, paint%clip)
         call put(self, '<rect x="')
         call put_num(self, x)
@@ -396,11 +433,17 @@ contains
         call put_eol(self)
     end subroutine svg_draw_rect
 
-    subroutine svg_draw_circle(self, cx, cy, r, paint)
+    subroutine svg_draw_circle(self, cx, cy, r, paint, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_rect(cx, cy, r, r, paint, status=status)
+        if (.not. status%ok()) return
         call sync_clip(self, paint%clip)
         call put(self, '<circle cx="')
         call put_num(self, cx)
@@ -417,7 +460,7 @@ contains
     ! One <defs> shape and a <use> per point. For a thousand point scatter
     ! this is the difference between naming the outline once and repeating
     ! it a thousand times.
-    subroutine svg_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+    subroutine svg_draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x(:), y(:)
         real(dp), intent(in) :: mx(:), my(:)
@@ -425,6 +468,20 @@ contains
         type(paint_t), intent(in) :: paint
         integer :: i
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (size(x) /= size(y)) then
+            call status%set(ERROR_ARGUMENT, "markers: inconsistent coordinate counts")
+            return
+        end if
+        call check_finite(x, status=status)
+        if (.not. status%ok()) return
+        call check_finite(y, status=status)
+        if (.not. status%ok()) return
+        call check_path(mx, my, mverbs, n_mverb, paint, status=status)
+        if (.not. status%ok()) return
         if (size(x) <= 0 .or. n_mverb <= 0) return
         call sync_clip(self, paint%clip)
 
@@ -455,7 +512,7 @@ contains
     ! and every occurrence is a <use> of it, scaled to its size and flipped
     ! into the canvas. No font is named, so no viewer can substitute one.
     ! The string itself goes on the group as its accessible name.
-    subroutine svg_draw_glyphs(self, x, y, run, paint, angle)
+    subroutine svg_draw_glyphs(self, x, y, run, paint, angle, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
@@ -468,6 +525,16 @@ contains
         logical :: opened
         real(dp) :: ca, sa, k
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_finite([x, y, angle], status=status)
+        if (.not. status%ok()) return
+        call check_paint(paint, status=status)
+        if (.not. status%ok()) return
+        call check_glyphs(run, status=status)
+        if (.not. status%ok()) return
         if (run%n == 0) return
         call sync_clip(self, paint%clip)
 
@@ -553,13 +620,19 @@ contains
     ! emits and what lets the whole image be one element. Smoothing is turned
     ! off: the samples are the data, and interpolating them would show the
     ! reader values that were never measured.
-    subroutine svg_draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+    subroutine svg_draw_image(self, x, y, w, h, rgba, nx, ny, paint, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
 
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_image(x, y, w, h, rgba, nx, ny, paint, status=status)
+        if (.not. status%ok()) return
         if (nx < 1 .or. ny < 1) return
         call sync_clip(self, paint%clip)
         call put(self, '<image x="')
@@ -617,12 +690,17 @@ contains
         call put(self, out)
     end subroutine put_base64
 
-    subroutine svg_begin_group(self, name)
+    subroutine svg_begin_group(self, name, status)
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
 
-        call push_scope(self, SCOPE_GROUP)
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call push_scope(self, SCOPE_GROUP, status=status)
+        if (.not. status%ok()) return
         call sync_clip(self, none)
         call put(self, '<g id="')
         call put(self, name)
@@ -630,12 +708,22 @@ contains
         call put_eol(self)
     end subroutine svg_begin_group
 
-    subroutine svg_end_group(self)
+    subroutine svg_end_group(self, status)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
 
-        if (self%n_scope == 0) error stop "svg: unmatched end_group"
-        if (self%scopes(self%n_scope) /= SCOPE_GROUP) error stop "svg: end_group inside frame"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_scope == 0) then
+            call status%set(ERROR_STATE, "svg: unmatched end_group")
+            return
+        end if
+        if (self%scopes(self%n_scope) /= SCOPE_GROUP) then
+            call status%set(ERROR_ARGUMENT, "svg: end_group inside frame")
+            return
+        end if
         ! A clip must not outlive the group that contains it.
         call sync_clip(self, none)
         call put(self, "</g>")
@@ -643,12 +731,16 @@ contains
         self%n_scope = self%n_scope - 1
     end subroutine svg_end_group
 
-    subroutine push_scope(self, scope)
+    subroutine push_scope(self, scope, status)
         class(svg_renderer_t), intent(inout) :: self
         integer, intent(in) :: scope
         integer, allocatable :: grown(:)
 
-        if (.not. self%is_open) error stop "svg: scope outside canvas"
+        type(status_t), intent(out) :: status
+        if (.not. self%is_open) then
+            call status%set(ERROR_STATE, "svg: scope outside canvas")
+            return
+        end if
         if (.not. allocated(self%scopes)) allocate (self%scopes(8))
         if (self%n_scope == size(self%scopes)) then
             allocate (grown(2*self%n_scope))
@@ -659,14 +751,21 @@ contains
         self%scopes(self%n_scope) = scope
     end subroutine push_scope
 
-    subroutine svg_begin_frame(self, matrix, clip)
+    subroutine svg_begin_frame(self, matrix, clip, status)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: matrix(6)
         type(clip_t), intent(in) :: clip
         type(clip_t) :: none
         integer :: i
 
-        call push_scope(self, merge(SCOPE_CLIPPED_FRAME, SCOPE_FRAME, clip%on))
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        call check_transform(matrix, clip, status=status)
+        if (.not. status%ok()) return
+        call push_scope(self, merge(SCOPE_CLIPPED_FRAME, SCOPE_FRAME, clip%on), status=status)
+        if (.not. status%ok()) return
         call sync_clip(self, none)
         call put(self, '<g transform="matrix(')
         do i = 1, 6
@@ -678,12 +777,22 @@ contains
         if (clip%on) call open_clip_group(self, clip)
     end subroutine svg_begin_frame
 
-    subroutine svg_end_frame(self)
+    subroutine svg_end_frame(self, status)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
 
-        if (self%n_scope == 0) error stop "svg: unmatched end_frame"
-        if (self%scopes(self%n_scope) == SCOPE_GROUP) error stop "svg: end_frame inside group"
+        type(status_t), intent(out) :: status
+
+        call check_open(self, status=status)
+        if (.not. status%ok()) return
+        if (self%n_scope == 0) then
+            call status%set(ERROR_STATE, "svg: unmatched end_frame")
+            return
+        end if
+        if (self%scopes(self%n_scope) == SCOPE_GROUP) then
+            call status%set(ERROR_ARGUMENT, "svg: end_frame inside group")
+            return
+        end if
         call sync_clip(self, none)
         if (self%scopes(self%n_scope) == SCOPE_CLIPPED_FRAME) then
             call put(self, "</g>")

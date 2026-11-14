@@ -9,5 +9,14 @@ The built-in text family has size, weight and slant styles. There is no
 serif/monospace family selector that silently substitutes the sans font.
 Finished glyph runs identify the actual built-in glyphs they use.
 
+Every renderer operation has a required `status_t` output. This includes
+`bytes(status)`, which is available only after successful finalization of an
+encoded target. Unsupported frame transforms on a custom target return
+`ERROR_UNSUPPORTED`; they are not silently ignored.
+
+All four built-in backends implement nonzero and even-odd path filling.
+PNG computes even-odd coverage analytically, including self-intersections and
+transformed rectangular clips.
+
 ```{f:module} fplotlib_render
 ```

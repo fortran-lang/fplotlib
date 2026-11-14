@@ -11,11 +11,13 @@
 module fplotlib_doctree
     use fplotlib_style, only: dp
     use fplotlib_scene, only: frame_t
+    use fplotlib_status
     implicit none
     private
 
     public :: doc_t, doc_node_t, doc_meta_t, doc_table_t
     public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame, doc_add_table
+    public :: doc_validate
     public :: DOC_ROOT, DOC_PARA, DOC_HEADING, DOC_LIST, DOC_ITEM, DOC_QUOTE, DOC_CODE, &
               DOC_RULE, DOC_DIV, DOC_RAW, DOC_INLINES, DOC_FRAME, DOC_FIGURE, DOC_TABLE
     public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, &
@@ -96,20 +98,32 @@ module fplotlib_doctree
 
 contains
 
-    subroutine doc_init(doc)
+    subroutine doc_init(doc, status)
         type(doc_t), intent(out) :: doc
+        type(status_t), intent(out) :: status
         allocate (doc%nodes(64), doc%meta(16), doc%tables(4))
         doc%n = 1
         doc%nodes(1)%kind = DOC_ROOT
         doc%nmeta = 0
-        call doc%graphics%init(0.0_dp, 0.0_dp)
+        call doc%graphics%init(0.0_dp, 0.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine doc_init
 
     ! A new node of the kind, the last child of parent; its index.
-    integer function doc_add(doc, parent, kind) result(k)
+    integer function doc_add(doc, parent, kind, status) result(k)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent, kind
+        type(status_t), intent(out) :: status
         type(doc_node_t), allocatable :: tmp(:)
+
+        k = 0
+        k = 0
+        call check_parent(doc, parent, status)
+        if (.not. status%ok()) return
+        if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_TABLE) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
+            call status%set(ERROR_UNSUPPORTED, "doc_add: unsupported node kind")
+            return
+        end if
         if (doc%n == size(doc%nodes)) then
             allocate (tmp(2*size(doc%nodes)))
             tmp(1:doc%n) = doc%nodes(1:doc%n)
@@ -133,26 +147,37 @@ contains
     end function doc_add
 
     ! The same, with its text.
-    integer function doc_add_text(doc, parent, kind, text) result(k)
+    integer function doc_add_text(doc, parent, kind, text, status) result(k)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent, kind
         character(len=*), intent(in) :: text
-        k = doc_add(doc, parent, kind)
+        type(status_t), intent(out) :: status
+
+        k = 0
+        k = doc_add(doc, parent, kind, status=status)
+        if (.not. status%ok()) return
         doc%nodes(k)%text = text
     end function doc_add_text
 
-    integer function doc_add_frame(doc, parent, frame) result(k)
+    integer function doc_add_frame(doc, parent, frame, status) result(k)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         type(frame_t), intent(in) :: frame
         integer :: handle
-        call doc%graphics%import_frame(frame, handle)
-        k = doc_add(doc, parent, DOC_FRAME)
+        type(status_t), intent(out) :: status
+
+        k = 0
+        call check_parent(doc, parent, status=status)
+        if (.not. status%ok()) return
+        call doc%graphics%import_frame(frame, handle, status=status)
+        if (.not. status%ok()) return
+        k = doc_add(doc, parent, DOC_FRAME, status=status)
+        if (.not. status%ok()) return
         doc%nodes(k)%num = handle
         doc%ngraphics = doc%ngraphics + 1
     end function doc_add_frame
 
-    integer function doc_add_table(doc, parent, cells, columns, numeric) result(k)
+    integer function doc_add_table(doc, parent, cells, columns, numeric, status) result(k)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         character(len=*), intent(in) :: cells(:, :)
@@ -160,11 +185,22 @@ contains
         logical, intent(in), optional :: numeric
         type(doc_table_t), allocatable :: tmp(:)
         integer :: i, nr, nc
+        type(status_t), intent(out) :: status
+
+        k = 0
+        call check_parent(doc, parent, status=status)
+        if (.not. status%ok()) return
         nr = size(cells, 1)
         nc = size(cells, 2)
-        if (nc == 0) error stop "include_table: no columns"
+        if (nc == 0) then
+            call status%set(ERROR_ARGUMENT, "include_table: no columns")
+            return
+        end if
         if (present(columns)) then
-            if (size(columns) /= nc) error stop "include_table: column labels do not match data"
+            if (size(columns) /= nc) then
+                call status%set(ERROR_ARGUMENT, "include_table: column labels do not match data")
+                return
+            end if
         end if
         if (doc%ntables == size(doc%tables)) then
             allocate (tmp(2*size(doc%tables)))
@@ -184,17 +220,21 @@ contains
             doc%tables(i)%headers = columns
         end if
         if (present(numeric)) doc%tables(i)%numeric = numeric
-        k = doc_add(doc, parent, DOC_TABLE)
+        k = doc_add(doc, parent, DOC_TABLE, status=status)
+        if (.not. status%ok()) return
         doc%nodes(k)%num = i
     end function doc_add_table
 
     ! A key of the front matter, its value, and the value as inlines (a
     ! DOC_INLINES node, not in the document, or 0).
-    subroutine doc_add_meta(doc, key, value, node)
+    subroutine doc_add_meta(doc, key, value, node, status)
         type(doc_t), intent(inout) :: doc
         character(len=*), intent(in) :: key, value
         integer, intent(in) :: node
         type(doc_meta_t), allocatable :: tmp(:)
+        type(status_t), intent(out) :: status
+        call check_parent(doc, node, status=status)
+        if (.not. status%ok()) return
         if (doc%nmeta == size(doc%meta)) then
             allocate (tmp(2*size(doc%meta)))
             tmp(1:doc%nmeta) = doc%meta(1:doc%nmeta)
@@ -207,7 +247,24 @@ contains
     end subroutine doc_add_meta
 
     ! The text of node k's inlines, without their markup (math as $...$).
-    recursive function doc_plain(doc, k) result(s)
+    function doc_plain(doc, k, status) result(s)
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: k
+        type(status_t), intent(out) :: status
+        character(len=:), allocatable :: s
+
+        s = ""
+        s = ""
+        call doc_validate(doc, status)
+        if (.not. status%ok()) return
+        if (k < 1 .or. k > doc%n) then
+            call status%set(ERROR_ARGUMENT, "doc_plain: invalid node")
+            return
+        end if
+        s = plain_node(doc, k)
+    end function doc_plain
+
+    recursive function plain_node(doc, k) result(s)
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         character(len=:), allocatable :: s
@@ -224,10 +281,125 @@ contains
                 s = s//"$"//doc%nodes(c)%text//"$"
             case (IN_RAW, IN_REF)
             case default
-                s = s//doc_plain(doc, c)
+                s = s//plain_node(doc, c)
             end select
             c = doc%nodes(c)%next
         end do
-    end function doc_plain
+    end function plain_node
+
+    subroutine check_parent(doc, parent, status)
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: parent
+        type(status_t), intent(out) :: status
+        if (.not. allocated(doc%nodes) .or. .not. allocated(doc%meta) .or. .not. allocated(doc%tables)) then
+            call status%set(ERROR_STATE, "document: call doc_init before adding nodes")
+            return
+        end if
+        if (doc%n < 1 .or. doc%n > size(doc%nodes) .or. doc%nmeta < 0 .or. doc%nmeta > size(doc%meta) .or. &
+            doc%ntables < 0 .or. doc%ntables > size(doc%tables)) then
+            call status%set(ERROR_STATE, "document: inconsistent arena counts")
+            return
+        end if
+        if (parent < 0 .or. parent > doc%n) then
+            call status%set(ERROR_ARGUMENT, "document: invalid parent")
+            return
+        end if
+        if (parent > 0) then
+            if (doc%nodes(parent)%last < 0 .or. doc%nodes(parent)%last > doc%n) &
+                call status%set(ERROR_ARGUMENT, "document: invalid last child")
+        end if
+    end subroutine check_parent
+
+    subroutine doc_validate(doc, status)
+        type(doc_t), intent(in) :: doc
+        type(status_t), intent(out) :: status
+        integer :: i, first, last, next, kind, head, count, node, link, j
+        integer, allocatable :: incoming(:), order(:), chain_end(:)
+        call check_parent(doc, 0, status)
+        if (.not. status%ok()) return
+        if (doc%nodes(1)%kind /= DOC_ROOT) then
+            call status%set(ERROR_ARGUMENT, "document: missing root")
+            return
+        end if
+        do i = 1, doc%n
+            first = doc%nodes(i)%first
+            last = doc%nodes(i)%last
+            next = doc%nodes(i)%next
+            if (min(first, last, next) < 0 .or. max(first, last, next) > doc%n .or. &
+                ((first == 0) .neqv. (last == 0))) then
+                call status%set(ERROR_ARGUMENT, "document: invalid node link")
+                return
+            end if
+            kind = doc%nodes(i)%kind
+            if (.not. ((kind >= DOC_ROOT .and. kind <= DOC_TABLE) .or. (kind >= IN_STR .and. kind <= IN_REF))) then
+                call status%set(ERROR_UNSUPPORTED, "document: unsupported node kind")
+                return
+            end if
+            if (i == 1) cycle
+            if (.not. allocated(doc%nodes(i)%text) .or. .not. allocated(doc%nodes(i)%id) .or. &
+                .not. allocated(doc%nodes(i)%attr) .or. .not. allocated(doc%nodes(i)%number)) then
+                call status%set(ERROR_ARGUMENT, "document: initialize node strings with doc_add")
+                return
+            end if
+        end do
+        ! Validate the traversal graph without restricting node allocation or
+        ! sibling order. Clients may reorder an existing tree.
+        allocate (incoming(doc%n), order(doc%n), chain_end(doc%n))
+        incoming = 0
+        do i = 1, doc%n
+            first = doc%nodes(i)%first
+            next = doc%nodes(i)%next
+            if (first > 0) incoming(first) = incoming(first) + 1
+            if (next > 0) incoming(next) = incoming(next) + 1
+        end do
+        count = 0
+        do i = 1, doc%n
+            if (incoming(i) /= 0) cycle
+            count = count + 1
+            order(count) = i
+        end do
+        head = 1
+        do while (head <= count)
+            node = order(head)
+            head = head + 1
+            do j = 1, 2
+                link = merge(doc%nodes(node)%first, doc%nodes(node)%next, j == 1)
+                if (link == 0) cycle
+                incoming(link) = incoming(link) - 1
+                if (incoming(link) /= 0) cycle
+                count = count + 1
+                order(count) = link
+            end do
+        end do
+        if (count /= doc%n) then
+            call status%set(ERROR_ARGUMENT, "document: cyclic node links")
+            return
+        end if
+        do i = doc%n, 1, -1
+            node = order(i)
+            next = doc%nodes(node)%next
+            chain_end(node) = node
+            if (next > 0) chain_end(node) = chain_end(next)
+            first = doc%nodes(node)%first
+            if (first == 0) cycle
+            if (doc%nodes(node)%last /= chain_end(first)) then
+                call status%set(ERROR_ARGUMENT, "document: last child does not end its sibling chain")
+                return
+            end if
+        end do
+        do i = 1, doc%nmeta
+            if (doc%meta(i)%node < 0 .or. doc%meta(i)%node > doc%n .or. &
+                .not. allocated(doc%meta(i)%key) .or. .not. allocated(doc%meta(i)%value)) then
+                call status%set(ERROR_ARGUMENT, "document: invalid metadata")
+                return
+            end if
+        end do
+        do i = 1, doc%ntables
+            if (.not. allocated(doc%tables(i)%cells)) then
+                call status%set(ERROR_ARGUMENT, "document: missing table cells")
+                return
+            end if
+        end do
+    end subroutine doc_validate
 
 end module fplotlib_doctree

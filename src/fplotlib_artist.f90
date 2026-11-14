@@ -5,6 +5,7 @@
 ! types turn data into calls to these, which is the division matplotlib
 ! draws between its artists and its backends.
 module fplotlib_artist
+    use fplotlib_status
     use fplotlib_colors
     use fplotlib_style
     use fplotlib_render
@@ -150,19 +151,21 @@ contains
         end do
     end function line_verbs
 
-    subroutine append_stroke_path(b, px, py, np, color, lw, alpha)
+    subroutine append_stroke_path(b, px, py, np, color, lw, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
         integer, intent(in) :: np
         character(len=*), intent(in) :: color
         real(dp), intent(in) :: lw, alpha
+        type(status_t), intent(out) :: status
         if (np < 2) return
         call b%draw_path(px(1:np), py(1:np), line_verbs(np), np, &
-                         pen(color, lw, alpha))
+                         pen(color, lw, alpha), status=status)
+        if (.not. status%ok()) return
     end subroutine append_stroke_path
 
     ! A filled closed polygon, used by the shaped markers and by fill_between.
-    subroutine append_polygon(b, px, py, np, color, alpha, seal)
+    subroutine append_polygon(b, px, py, np, color, alpha, seal, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
         integer, intent(in) :: np
@@ -172,6 +175,7 @@ contains
         type(paint_t) :: p
         integer :: v(np + 1)
 
+        type(status_t), intent(out) :: status
         if (np < 2) return
         v(1:np) = line_verbs(np)
         v(np + 1) = VERB_CLOSE
@@ -187,7 +191,8 @@ contains
                 p%line_width = 0.5_dp
             end if
         end if
-        call b%draw_path(px(1:np), py(1:np), v, np + 1, p)
+        call b%draw_path(px(1:np), py(1:np), v, np + 1, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_polygon
 
     ! The outline of one marker, described about the origin, together with
@@ -315,7 +320,7 @@ contains
     end subroutine marker_shape
 
     ! Draw the same marker at every point of x/y.
-    subroutine append_markers(b, mk, x, y, n, ms, color, alpha, face, edge, ewidth)
+    subroutine append_markers(b, mk, x, y, n, ms, color, alpha, face, edge, ewidth, status)
         class(renderer_t), intent(inout) :: b
         integer, intent(in) :: mk, n
         real(dp), intent(in) :: x(:), y(:), ms, alpha
@@ -329,6 +334,7 @@ contains
         logical :: do_fill, do_stroke
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         if (mk == MARKER_NONE .or. n <= 0) return
         call marker_shape(mk, ms, mx, my, mv, nv, np, do_fill, do_stroke, lw)
         if (nv <= 0) return
@@ -360,25 +366,29 @@ contains
         p%stroke_alpha = alpha
         p%line_width = lw
         p%clip = g_clip
-        call b%draw_markers(x(1:n), y(1:n), mx(1:np), my(1:np), mv(1:nv), nv, p)
+        call b%draw_markers(x(1:n), y(1:n), mx(1:np), my(1:np), mv(1:nv), nv, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_markers
 
     ! One marker, for the legend key and anywhere else a single point is
     ! drawn on its own.
-    subroutine append_marker(b, mk, cx, cy, ms, color, alpha)
+    subroutine append_marker(b, mk, cx, cy, ms, color, alpha, status)
         class(renderer_t), intent(inout) :: b
         integer, intent(in) :: mk
         real(dp), intent(in) :: cx, cy, ms
         character(len=*), intent(in) :: color
         real(dp), intent(in) :: alpha
-        call append_markers(b, mk, [cx], [cy], 1, ms, color, alpha)
+        type(status_t), intent(out) :: status
+        call append_markers(b, mk, [cx], [cy], 1, ms, color, alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine append_marker
 
     ! Text element. anchor is a matplotlib horizontal alignment
     ! (left/center/right) or an SVG anchor (start/middle/end). rot is a
     ! matplotlib rotation, counterclockwise in degrees.
     subroutine append_text(b, x, y, s, anchor, fontsize, color, rot, weight, &
-                           slant, baseline)
+                           slant, baseline, &
+        status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, fontsize
         character(len=*), intent(in) :: s, anchor, color
@@ -389,6 +399,7 @@ contains
         integer :: an, bl
         real(dp) :: ang, w
 
+        type(status_t), intent(out) :: status
         select case (anchor)
         case ("left", "start"); an = ANCHOR_START
         case ("right", "end"); an = ANCHOR_END
@@ -404,12 +415,15 @@ contains
         if (present(rot)) ang = -rot
         if (len_trim(s) == 0) return
         if (math_is(s)) then
-            call append_math(b, x, y, s, f, brush(color), an, bl, ang)
+            call append_math(b, x, y, s, f, brush(color), an, bl, ang, status=status)
+            if (.not. status%ok()) return
         else
             call text_layout(s, f%size, text_face(f%weight, f%slant), 0.0_dp, &
-                             0.0_dp, run, w)
+                             0.0_dp, run, w, status=status)
+            if (.not. status%ok()) return
             call align_run(run, w, f, an, bl)
-            call b%draw_glyphs(x, y, run, brush(color), ang)
+            call b%draw_glyphs(x, y, run, brush(color), ang, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine append_text
 
@@ -435,20 +449,25 @@ contains
     end function text_mid
 
     ! Width of a label in points, mathtext or not, as append_text sets it.
-    function str_width(s, size, weight, slant) result(w)
+    function str_width(s, size, weight, slant, status) result(w)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         integer, intent(in), optional :: weight, slant
         real(dp) :: w
         integer :: wt, sl
+        type(status_t), intent(out) :: status
+
+        w = 0.0_dp
         wt = WEIGHT_NORMAL
         sl = SLANT_ROMAN
         if (present(weight)) wt = weight
         if (present(slant)) sl = slant
         if (math_is(s)) then
-            w = math_width(s, size, text_face(wt, sl))
+            w = math_width(s, size, text_face(wt, sl), status=status)
+            if (.not. status%ok()) return
         else
-            w = text_width(s, size, text_face(wt, sl))
+            w = text_width(s, size, text_face(wt, sl), status=status)
+            if (.not. status%ok()) return
         end if
     end function str_width
 
@@ -483,7 +502,7 @@ contains
     ! Mathtext is laid out into glyphs and rules: the glyphs are drawn as
     ! any other text and the rules (fraction bars, radical bars) as filled
     ! rectangles, turned with the text about the same origin.
-    subroutine append_math(b, x, y, s, f, p, anchor, baseline, ang)
+    subroutine append_math(b, x, y, s, f, p, anchor, baseline, ang, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, ang
         character(len=*), intent(in) :: s
@@ -497,7 +516,9 @@ contains
         integer :: i
         real(dp) :: w, x0, y0, ca, sa, rad, rx(4), ry(4)
 
-        call math_layout(s, f%size, run, rules, w, text_face(f%weight, f%slant))
+        type(status_t), intent(out) :: status
+        call math_layout(s, f%size, run, rules, w, text_face(f%weight, f%slant), status=status)
+        if (.not. status%ok()) return
         ! The text around the math takes the weight and slant asked for, and
         ! the math is set in its regular font whatever they are; the faces
         ! share their metrics, so the run is aligned by the regular one.
@@ -505,7 +526,8 @@ contains
         mf%weight = WEIGHT_NORMAL
         mf%slant = SLANT_ROMAN
         call align_run(run, w, mf, anchor, baseline, x0, y0)
-        call b%draw_glyphs(x, y, run, p, ang)
+        call b%draw_glyphs(x, y, run, p, ang, status=status)
+        if (.not. status%ok()) return
 
         rad = ang*PI/180.0_dp
         ca = cos(rad)
@@ -518,7 +540,8 @@ contains
             ry = y0 + rules%y(i) + [0.0_dp, 0.0_dp, rules%h(i), rules%h(i)]
             call b%draw_path(x + rx*ca - ry*sa, y + rx*sa + ry*ca, &
                              [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE], &
-                             5, rp)
+                             5, rp, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine append_math
 
@@ -557,13 +580,14 @@ contains
     ! talks about, pulled back at both ends, and optionally a two-stroke head
     ! at the point. Head geometry follows matplotlib's "->" style: it reaches
     ! 0.4 em back along the shaft and 0.2 em out to each side.
-    subroutine append_arrow(b, t, px, py, tx, ty)
+    subroutine append_arrow(b, t, px, py, tx, ty, status)
         class(renderer_t), intent(inout) :: b
         type(text_t), intent(in) :: t
         real(dp), intent(in) :: px, py, tx, ty
         real(dp) :: dx, dy, d, ux, uy, x0, y0, x1, y1, hl, hw
         real(dp) :: bx(3), by(3), cx, cy, qx(4), qy(4)
 
+        type(status_t), intent(out) :: status
         dx = tx - px
         dy = ty - py
         d = sqrt(dx*dx + dy*dy)
@@ -588,14 +612,16 @@ contains
         uy = -uy
         if (t%arc_rad == 0.0_dp) then
             call append_line(b, x0, y0, x1, y1, trim(t%arrow_color), t%arrow_lw, &
-                             LINE_SOLID, 1.0_dp)
+                             LINE_SOLID, 1.0_dp, status=status)
+            if (.not. status%ok()) return
         else
             ! The quadratic through the control point, written as the cubic
             ! the renderer draws.
             qx = [x0, x0 + 2.0_dp/3.0_dp*(cx - x0), x1 + 2.0_dp/3.0_dp*(cx - x1), x1]
             qy = [y0, y0 + 2.0_dp/3.0_dp*(cy - y0), y1 + 2.0_dp/3.0_dp*(cy - y1), y1]
             call b%draw_path(qx, qy, [VERB_MOVE, VERB_CUBIC], 2, &
-                             pen(trim(t%arrow_color), t%arrow_lw, 1.0_dp))
+                             pen(trim(t%arrow_color), t%arrow_lw, 1.0_dp), status=status)
+            if (.not. status%ok()) return
         end if
         if (.not. t%arrow_head) return
         hl = 0.4_dp*t%fontsize
@@ -607,7 +633,8 @@ contains
         bx(3) = x1 - hl*ux - hw*uy
         by(3) = y1 - hl*uy + hw*ux
         call append_stroke_path(b, bx, by, 3, trim(t%arrow_color), t%arrow_lw, &
-                                1.0_dp)
+                                1.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine append_arrow
 
     ! Unit vector from (x, y) towards (cx, cy), or towards the far end
@@ -636,13 +663,15 @@ contains
     ! One annotation: its box, then its lines. A string is broken at every
     ! newline and the lines are stacked at matplotlib's spacing of 1.2 times
     ! the font size.
-    subroutine append_annotation(b, t, px, py)
+    subroutine append_annotation(b, t, px, py, status)
         class(renderer_t), intent(inout) :: b
         type(text_t), intent(in) :: t
         real(dp), intent(in) :: px, py
         integer :: nl, k, i0, i1, base
         real(dp) :: lh, dy, wmax, x0, y0, pad, hgt
 
+        type(status_t), intent(out) :: status
+        real(dp) :: str_width_value1
         lh = 1.2_dp*t%fontsize
         nl = line_count(t%s)
 
@@ -667,8 +696,12 @@ contains
             wmax = 0.0_dp
             do k = 1, nl
                 call line_bounds(t%s, k, i0, i1)
-                if (i1 >= i0) wmax = max(wmax, str_width(t%s(i0:i1), t%fontsize, &
-                                                         t%weight, t%slant))
+                if (i1 >= i0) then
+                    str_width_value1 = str_width(t%s(i0:i1), t%fontsize, &
+                                                         t%weight, t%slant, status=status)
+                    if (.not. status%ok()) return
+                    wmax = max(wmax, str_width_value1)
+                end if
             end do
             pad = t%box_pad*t%fontsize
             hgt = (nl - 1)*lh + t%fontsize
@@ -684,14 +717,17 @@ contains
             if (trim(t%box_style) == "round") then
                 call append_round_rect(b, x0 - pad, y0 - pad, wmax + 2.0_dp*pad, &
                                        hgt + 2.0_dp*pad, pad, trim(t%box_fc), &
-                                       t%box_alpha, trim(t%box_ec))
+                                       t%box_alpha, trim(t%box_ec), status=status)
+                if (.not. status%ok()) return
             else if (len_trim(t%box_ec) > 0) then
                 call append_rect(b, x0 - pad, y0 - pad, wmax + 2.0_dp*pad, &
                                  hgt + 2.0_dp*pad, trim(t%box_fc), t%box_alpha, &
-                                 trim(t%box_ec), 1.0_dp)
+                                 trim(t%box_ec), 1.0_dp, status=status)
+                if (.not. status%ok()) return
             else
                 call append_rect(b, x0 - pad, y0 - pad, wmax + 2.0_dp*pad, &
-                                 hgt + 2.0_dp*pad, trim(t%box_fc), t%box_alpha)
+                                 hgt + 2.0_dp*pad, trim(t%box_fc), t%box_alpha, status=status)
+                if (.not. status%ok()) return
             end if
         end if
 
@@ -700,20 +736,23 @@ contains
             if (i1 < i0) cycle
             call append_text(b, px, py + dy + (k - 1)*lh, t%s(i0:i1), &
                              trim(t%ha), t%fontsize, trim(t%color), rot=t%rot, &
-                             weight=t%weight, slant=t%slant, baseline=base)
+                             weight=t%weight, slant=t%slant, baseline=base, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine append_annotation
 
     ! Straight line segment in pixel coordinates.
-    subroutine append_line(b, x1, y1, x2, y2, color, lw, ls, alpha)
+    subroutine append_line(b, x1, y1, x2, y2, color, lw, ls, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x1, y1, x2, y2, lw
         character(len=*), intent(in) :: color
         integer, intent(in) :: ls
         real(dp), intent(in) :: alpha
+        type(status_t), intent(out) :: status
         if (ls == LINE_NONE) return
         call b%draw_path([x1, x2], [y1, y2], [VERB_MOVE, VERB_LINE], 2, &
-                         pen(color, lw, alpha, ls))
+                         pen(color, lw, alpha, ls), status=status)
+        if (.not. status%ok()) return
     end subroutine append_line
 
     ! matplotlib's hatching: lines ruled across the shape and clipped to
@@ -722,7 +761,7 @@ contains
     ! matplotlib puts in its 72 point tile. "/", "\", "|", "-", "+" and "x"
     ! say which way the lines run; repeating a character packs them closer,
     ! which is what matplotlib's density does.
-    subroutine append_hatch(b, px, py, np, pattern, color, alpha)
+    subroutine append_hatch(b, px, py, np, pattern, color, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
         integer, intent(in) :: np
@@ -730,16 +769,21 @@ contains
         real(dp), intent(in) :: alpha
         character(len=7) :: col
 
+        type(status_t), intent(out) :: status
         col = "#000000"
         if (len_trim(color) > 0) col = color
         call hatch_family(b, px, py, np, 1, char_count(pattern, "|") &
-                          + char_count(pattern, "+"), col, alpha)
+                          + char_count(pattern, "+"), col, alpha, status=status)
+        if (.not. status%ok()) return
         call hatch_family(b, px, py, np, 2, char_count(pattern, "-") &
-                          + char_count(pattern, "+"), col, alpha)
+                          + char_count(pattern, "+"), col, alpha, status=status)
+        if (.not. status%ok()) return
         call hatch_family(b, px, py, np, 3, char_count(pattern, "/") &
-                          + char_count(pattern, "x"), col, alpha)
+                          + char_count(pattern, "x"), col, alpha, status=status)
+        if (.not. status%ok()) return
         call hatch_family(b, px, py, np, 4, char_count(pattern, achar(92)) &
-                          + char_count(pattern, "x"), col, alpha)
+                          + char_count(pattern, "x"), col, alpha, status=status)
+        if (.not. status%ok()) return
     end subroutine append_hatch
 
     pure function char_count(s, c) result(n)
@@ -754,7 +798,7 @@ contains
     ! One family of parallel lines. Each line is written as a point and a
     ! direction, and the family as the offsets c of its members: x for the
     ! uprights, y for the flats, x+y and x-y for the two diagonals.
-    subroutine hatch_family(b, px, py, np, fam, nrep, color, alpha)
+    subroutine hatch_family(b, px, py, np, fam, nrep, color, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
         integer, intent(in) :: np, fam, nrep
@@ -763,6 +807,7 @@ contains
         real(dp) :: x0, x1, y0, y1, step, c0, cmin, cmax, c, dx, dy, ox, oy
         integer :: k, k0, k1
 
+        type(status_t), intent(out) :: status
         if (nrep < 1 .or. np < 3) return
         x0 = minval(px(1:np))
         x1 = maxval(px(1:np))
@@ -814,14 +859,15 @@ contains
                 ox = c
                 oy = 0.0_dp
             end select
-            call hatch_line(b, px, py, np, ox, oy, dx, dy, color, alpha)
+            call hatch_line(b, px, py, np, ox, oy, dx, dy, color, alpha, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine hatch_family
 
     ! One ruled line, cut to the parts of it that lie inside the shape.
     ! Where the line crosses the outline an odd number of times it is in,
     ! so the crossings sort into pairs and every pair is one dash.
-    subroutine hatch_line(b, px, py, np, ox, oy, dx, dy, color, alpha)
+    subroutine hatch_line(b, px, py, np, ox, oy, dx, dy, color, alpha, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
         integer, intent(in) :: np
@@ -831,6 +877,7 @@ contains
         real(dp) :: ts(np + 1), ex, ey, det, t, s, ax_, ay
         integer :: i, j, nt
 
+        type(status_t), intent(out) :: status
         nt = 0
         do i = 1, np
             j = i + 1
@@ -853,14 +900,15 @@ contains
         do i = 1, nt - 1, 2
             call append_line(b, ox + ts(i)*dx, oy + ts(i)*dy, &
                              ox + ts(i + 1)*dx, oy + ts(i + 1)*dy, &
-                             color, 1.0_dp, LINE_SOLID, alpha)
+                             color, 1.0_dp, LINE_SOLID, alpha, status=status)
+            if (.not. status%ok()) return
         end do
     end subroutine hatch_line
 
     ! An axis aligned filled rectangle, optionally outlined.
     ! A rectangle with quarter-circle corners of radius r, which is
     ! matplotlib's "round" box style.
-    subroutine append_round_rect(b, x, y, w, h, r, color, alpha, edge)
+    subroutine append_round_rect(b, x, y, w, h, r, color, alpha, edge, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, w, h, r, alpha
         character(len=*), intent(in) :: color, edge
@@ -868,6 +916,7 @@ contains
         integer :: v(10)
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         rr = min(r, 0.5_dp*w, 0.5_dp*h)
         k = rr*(1.0_dp - 0.5522847498307933_dp)
         px = [x + rr, x + w - rr, x + w - k, x + w, x + w, &
@@ -889,10 +938,11 @@ contains
             p%stroke_rgb = hex_rgb(edge)
             p%line_width = 1.0_dp
         end if
-        call b%draw_path(px, py, v, 10, p)
+        call b%draw_path(px, py, v, 10, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_round_rect
 
-    subroutine append_rect(b, x, y, w, h, color, alpha, edge, elw)
+    subroutine append_rect(b, x, y, w, h, color, alpha, edge, elw, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, w, h
         character(len=*), intent(in) :: color
@@ -901,6 +951,7 @@ contains
         real(dp), intent(in), optional :: elw
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         p%clip = g_clip
         if (len_trim(color) > 0) then
             p%filled = .true.
@@ -913,14 +964,17 @@ contains
             p%line_width = 1.0_dp
             if (present(elw)) p%line_width = elw
         end if
-        call b%draw_rect(x, y, w, h, p)
+        call b%draw_rect(x, y, w, h, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_rect
 
-    subroutine append_open_circle(b, cx, cy, r, color)
+    subroutine append_open_circle(b, cx, cy, r, color, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: cx, cy, r
         character(len=*), intent(in) :: color
-        call b%draw_circle(cx, cy, r, pen(color, 1.0_dp))
+        type(status_t), intent(out) :: status
+        call b%draw_circle(cx, cy, r, pen(color, 1.0_dp), status=status)
+        if (.not. status%ok()) return
     end subroutine append_open_circle
 
     ! One wedge: out along a radius, round the rim, back to the centre.
@@ -929,7 +983,7 @@ contains
     ! arc primitive, so flattening here is what lets the same wedge reach a
     ! PDF or a rasterizer unchanged. Splitting at 90 degrees keeps the error
     ! of the standard cubic approximation far below a pixel.
-    subroutine append_wedge(b, cx, cy, rx, ry, a0, a1, color, alpha, edge, ewidth)
+    subroutine append_wedge(b, cx, cy, rx, ry, a0, a1, color, alpha, edge, ewidth, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: cx, cy, rx, ry, a0, a1, alpha
         character(len=*), intent(in) :: color
@@ -942,6 +996,7 @@ contains
         real(dp) :: t0, t1, dt, al
         type(paint_t) :: p
 
+        type(status_t), intent(out) :: status
         nseg = max(1, min(MAXSEG, int(abs(a1 - a0)/(0.5_dp*PI)) + 1))
         dt = (a1 - a0)/real(nseg, dp)
         ! y grows downwards on the canvas, so the sine term is subtracted.
@@ -982,38 +1037,46 @@ contains
                 if (present(ewidth)) p%line_width = ewidth
             end if
         end if
-        call b%draw_path(px(1:np), py(1:np), verbs(1:nv), nv, p)
+        call b%draw_path(px(1:np), py(1:np), verbs(1:nv), nv, p, status=status)
+        if (.not. status%ok()) return
     end subroutine append_wedge
 
     ! Cells are grown by a hairline so that neighbours overlap; without it the
     ! renderer leaves visible seams between abutting rectangles.
-    subroutine append_cell(b, x, y, w, h, color)
+    subroutine append_cell(b, x, y, w, h, color, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, w, h
         character(len=*), intent(in) :: color
         real(dp), parameter :: BLEED = 0.05_dp
+        type(status_t), intent(out) :: status
         call append_rect(b, x - BLEED, y - BLEED, w + 2.0_dp*BLEED, &
-                         h + 2.0_dp*BLEED, color)
+                         h + 2.0_dp*BLEED, color, status=status)
+        if (.not. status%ok()) return
     end subroutine append_cell
 
-    subroutine append_tick(b, x1, y1, x2, y2)
+    subroutine append_tick(b, x1, y1, x2, y2, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x1, y1, x2, y2
-        call append_line(b, x1, y1, x2, y2, rc_text_color, 0.8_dp, LINE_SOLID, 1.0_dp)
+        type(status_t), intent(out) :: status
+        call append_line(b, x1, y1, x2, y2, rc_text_color, 0.8_dp, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine append_tick
 
-    subroutine append_spine(b, x1, y1, x2, y2)
+    subroutine append_spine(b, x1, y1, x2, y2, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x1, y1, x2, y2
-        call append_line(b, x1, y1, x2, y2, rc_spine_color, rc_spine_lw, LINE_SOLID, 1.0_dp)
+        type(status_t), intent(out) :: status
+        call append_line(b, x1, y1, x2, y2, rc_spine_color, rc_spine_lw, LINE_SOLID, 1.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine append_spine
 
     ! A tick at (x, y) on a spine whose outward normal is (ox, oy). dir 1
     ! puts it outside the axes, -1 inside, 0 straddling the spine.
-    subroutine append_tick_at(b, x, y, ox, oy, dir, length)
+    subroutine append_tick_at(b, x, y, ox, oy, dir, length, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, ox, oy, dir, length
         real(dp) :: a, c
+        type(status_t), intent(out) :: status
         if (dir > 0.0_dp) then
             a = 0.0_dp
             c = length
@@ -1024,15 +1087,18 @@ contains
             a = -length
             c = length
         end if
-        call append_tick(b, x + ox * a, y + oy * a, x + ox * c, y + oy * c)
+        call append_tick(b, x + ox * a, y + oy * a, x + ox * c, y + oy * c, status=status)
+        if (.not. status%ok()) return
     end subroutine append_tick_at
 
     ! A tick label, rotated about its anchor when asked.
-    subroutine append_tick_text(b, x, y, s, anchor, fontsize, rot)
+    subroutine append_tick_text(b, x, y, s, anchor, fontsize, rot, status)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y, fontsize, rot
         character(len=*), intent(in) :: s, anchor
-        call append_text(b, x, y, s, anchor, fontsize, rc_text_color, rot)
+        type(status_t), intent(out) :: status
+        call append_text(b, x, y, s, anchor, fontsize, rc_text_color, rot, status=status)
+        if (.not. status%ok()) return
     end subroutine append_tick_text
 
 end module fplotlib_artist

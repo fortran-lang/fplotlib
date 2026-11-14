@@ -20,6 +20,7 @@
 ! Lengths are in points (1/72 in, as in PostScript and Typst), or in bp,
 ! in, cm, mm, em or ex.
 module fplotlib_docclass
+    use fplotlib_status
     use fplotlib_style, only: dp
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight, &
@@ -112,43 +113,61 @@ contains
     ! ------------------------------------------------------------------
 
     ! Set doc into fplotlib_typeset's pages.
-    subroutine doc_typeset(state, doc, document)
+    subroutine doc_typeset(state, doc, document, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(paged_document_t), intent(out) :: document
         type(ctx_t) :: ctx
 
-        call ts_reset(state%engine)
-        call defaults(state)
-        if (doc%ngraphics > 0) call ts_import_frame(state%engine, doc%graphics, state%graphics_base)
-        call settings(state, doc)
-        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE)
+        type(status_t), intent(out) :: status
+        call doc_validate(doc, status=status)
+        if (.not. status%ok()) return
+        call ts_reset(state%engine, status=status)
+        if (.not. status%ok()) return
+        call defaults(state, status=status)
+        if (.not. status%ok()) return
+        if (doc%ngraphics > 0) then
+            call ts_import_frame(state%engine, doc%graphics, state%graphics_base, status=status)
+            if (.not. status%ok()) return
+        end if
+        call settings(state, doc, status=status)
+        if (.not. status%ok()) return
+        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, state%PARSKIP_G)
-        call ts_set_colors(state%engine, state%TEXT_COL, state%PAGE_COL)
-        call labels(state, doc, 1)
+        call ts_set_colors(state%engine, state%TEXT_COL, state%PAGE_COL, status=status)
+        if (.not. status%ok()) return
+        call labels(state, doc, 1, status=status)
+        if (.not. status%ok()) return
         state%SEC = 0
         state%CHAPTER = 0
         state%EQNO = 0
         ctx%size = state%BASE
         ctx%color = state%TEXT_COL
         ctx%align = state%DOC_ALIGN
-        call title_block(state, doc, ctx)
-        call set_blocks(state, doc, 1, ctx)
-        call ts_finish(state%engine, document)
+        call title_block(state, doc, ctx, status=status)
+        if (.not. status%ok()) return
+        call set_blocks(state, doc, 1, ctx, status=status)
+        if (.not. status%ok()) return
+        call ts_finish(state%engine, document, status=status)
+        if (.not. status%ok()) return
     end subroutine doc_typeset
 
-    subroutine layout_markdown(state, text, document)
+    subroutine layout_markdown(state, text, document, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         type(paged_document_t), intent(out) :: document
         type(doc_t) :: tree
-        call md_parse(text, tree)
-        call doc_typeset(state, tree, document)
+        type(status_t), intent(out) :: status
+        call md_parse(text, tree, status=status)
+        if (.not. status%ok()) return
+        call doc_typeset(state, tree, document, status=status)
+        if (.not. status%ok()) return
     end subroutine layout_markdown
 
     ! A width-constrained fragment for an annotation or another layout engine.
     ! It uses the same block/inline layout without title or page furniture.
-    subroutine layout_fragment(state, text, width, frame, font_size)
+    subroutine layout_fragment(state, text, width, frame, font_size, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         real(dp), intent(in) :: width
@@ -156,28 +175,44 @@ contains
         real(dp), intent(in), optional :: font_size
         type(doc_t) :: tree
         type(ctx_t) :: ctx
-        if (width <= 0.0_dp) error stop "layout_fragment: width must be positive"
-        call md_parse(text, tree)
-        call ts_reset(state%engine)
-        call defaults(state)
+        type(status_t), intent(out) :: status
+        if (width <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "layout_fragment: width must be positive")
+            return
+        end if
+        call md_parse(text, tree, status=status)
+        if (.not. status%ok()) return
+        call ts_reset(state%engine, status=status)
+        if (.not. status%ok()) return
+        call defaults(state, status=status)
+        if (.not. status%ok()) return
         if (present(font_size)) state%BASE = font_size
-        if (state%BASE <= 0.0_dp) error stop "layout_fragment: font size must be positive"
-        call ts_set_page(state%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
-        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE)
+        if (state%BASE <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "layout_fragment: font size must be positive")
+            return
+        end if
+        call ts_set_page(state%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false., status=status)
+        if (.not. status%ok()) return
+        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, state%PARSKIP_G)
         state%PARINDENT = 0.0_dp
         ctx%size = state%BASE
         ctx%indent = .false.
-        call labels(state, tree, 1)
+        call labels(state, tree, 1, status=status)
+        if (.not. status%ok()) return
         state%SEC = 0
         state%CHAPTER = 0
         state%EQNO = 0
-        call set_blocks(state, tree, 1, ctx)
-        call ts_finish_frame(state%engine, frame)
+        call set_blocks(state, tree, 1, ctx, status=status)
+        if (.not. status%ok()) return
+        call ts_finish_frame(state%engine, frame, status=status)
+        if (.not. status%ok()) return
     end subroutine layout_fragment
 
-    subroutine defaults(state)
+    subroutine defaults(state, status)
         type(layout_context_t), intent(inout) :: state
+        type(status_t), intent(out) :: status
         state%BASE = 10.0_dp
         state%LEAD = 1.2_dp
         state%PARINDENT = -1.0_dp
@@ -203,12 +238,13 @@ contains
         state%PENDING_LABEL = ""
         state%W = ""
         state%SPACE = .false.
-        call ts_set_page(state%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
+        call ts_set_page(state%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp, status=status)
+        if (.not. status%ok()) return
     end subroutine defaults
 
     ! The settings of the front matter, in its order (a length in ems is
     ! in the font size given before it).
-    subroutine settings(state, doc)
+    subroutine settings(state, doc, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer :: i
@@ -216,6 +252,7 @@ contains
         real(dp) :: pw, ph, ml, mr, mt, mb, m
         logical :: numbers, heads
 
+        type(status_t), intent(out) :: status
         pw = 595.2756_dp
         ph = 841.8898_dp
         m = -1.0_dp
@@ -292,7 +329,8 @@ contains
         if (mr < 0.0_dp) mr = m
         if (mt < 0.0_dp) mt = m
         if (mb < 0.0_dp) mb = m
-        call ts_set_page(state%engine, pw, ph, ml, mr, mt, mb, numbers, heads, state%BOOK)
+        call ts_set_page(state%engine, pw, ph, ml, mr, mt, mb, numbers, heads, state%BOOK, status=status)
+        if (.not. status%ok()) return
     end subroutine settings
 
     subroutine paper_size(state, v, w, h)
@@ -330,65 +368,94 @@ contains
     end subroutine paper_size
 
     ! LaTeX's \maketitle and abstract, for the article class.
-    subroutine title_block(state, doc, ctx)
+    subroutine title_block(state, doc, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         type(ctx_t), intent(in) :: ctx
         type(style_t) :: st
         integer :: i
+        type(status_t), intent(out) :: status
         if (state%TITLE == 0) return
         st = base_style(ctx)
-        call ts_vkeep(state%engine, ts_glue_t(2.0_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_vkeep(state%engine, ts_glue_t(2.0_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
         st%size = 1.728_dp*state%BASE
         call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*state%BASE/10.0_dp, &
-                          skip=.false.)
-        call set_inlines(state, doc, state%TITLE, st)
-        call ts_end_par(state%engine)
+                          skip=.false., status=status)
+        if (.not. status%ok()) return
+        call set_inlines(state, doc, state%TITLE, st, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         if (state%SUBTITLE > 0) then
             st%size = 1.2_dp*state%BASE
-            call ts_vskip(state%engine, ts_glue_t(0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
-            call set_inlines(state, doc, state%SUBTITLE, st)
-            call ts_end_par(state%engine)
+                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+            if (.not. status%ok()) return
+            call set_inlines(state, doc, state%SUBTITLE, st, status=status)
+            if (.not. status%ok()) return
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
         end if
         st%size = 1.2_dp*state%BASE
         if (state%NAUTHOR > 0) then
-            call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
             do i = 1, state%NAUTHOR
                 call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                  leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
-                call set_inlines(state, doc, state%AUTHORS(i), st)
-                call ts_end_par(state%engine)
+                                  leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+                if (.not. status%ok()) return
+                call set_inlines(state, doc, state%AUTHORS(i), st, status=status)
+                if (.not. status%ok()) return
+                call ts_end_par(state%engine, status=status)
+                if (.not. status%ok()) return
             end do
         end if
         if (state%DATE > 0) then
-            call ts_vskip(state%engine, ts_glue_t(state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false.)
-            call set_inlines(state, doc, state%DATE, st)
-            call ts_end_par(state%engine)
+                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+            if (.not. status%ok()) return
+            call set_inlines(state, doc, state%DATE, st, status=status)
+            if (.not. status%ok()) return
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
         end if
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
+        call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         if (state%ABSTRACT > 0) then
             ! \small, a centred bold heading, and a quotation.
             st = base_style(ctx)
             st%size = 0.9_dp*state%BASE
             st%bold = .true.
-            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+            if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=11.0_dp*state%BASE/10.0_dp, skip=.false.)
-            call set_words(state, "Abstract", st)
-            call ts_end_par(state%engine)
+                              leading=11.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+            if (.not. status%ok()) return
+            call set_words(state, "Abstract", st, status=status)
+            if (.not. status%ok()) return
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
             st%bold = .false.
-            call ts_vskip(state%engine, ts_glue_t(-0.5_dp*st%size + 0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(-0.5_dp*st%size + 0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*state%BASE, &
-                              right=2.5_dp*state%BASE, size=st%size, leading=11.0_dp*state%BASE/10.0_dp)
-            call set_inlines(state, doc, state%ABSTRACT, st)
-            call ts_end_par(state%engine)
-            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                              right=2.5_dp*state%BASE, size=st%size, leading=11.0_dp*state%BASE/10.0_dp, status=status)
+            if (.not. status%ok()) return
+            call set_inlines(state, doc, state%ABSTRACT, st, status=status)
+            if (.not. status%ok()) return
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
+            call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+            if (.not. status%ok()) return
         end if
         state%NOINDENT = .false.
     end subroutine title_block
@@ -398,7 +465,7 @@ contains
     ! ------------------------------------------------------------------
 
     ! The blocks that are the children of node parent.
-    recursive subroutine set_blocks(state, doc, parent, ctx)
+    recursive subroutine set_blocks(state, doc, parent, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
@@ -406,44 +473,70 @@ contains
         type(ctx_t) :: sub
         integer :: c, aligns
 
+        type(status_t), intent(out) :: status
         c = doc%nodes(parent)%first
         do while (c > 0)
             select case (doc%nodes(c)%kind)
             case (DOC_PARA)
-                call paragraph(state, doc, c, ctx)
+                call paragraph(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_HEADING)
-                call heading(state, doc, c, ctx)
+                call heading(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_CODE)
-                call code_block(state, doc%nodes(c)%text, ctx)
+                call code_block(state, doc%nodes(c)%text, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_DIV)
                 ! A div that aligns its text is a LaTeX environment
                 ! (center, flushright, flushleft), a list with the space of
                 ! one around it; one that only changes the type is a group.
                 sub = div_ctx(state, doc%nodes(c)%attr, ctx, aligns)
-                if (aligns > 0) call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call set_blocks(state, doc, c, sub)
-                call ts_end_par(state%engine)
-                if (aligns > 0) call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                if (aligns > 0) then
+                    call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+                    if (.not. status%ok()) return
+                end if
+                call set_blocks(state, doc, c, sub, status=status)
+                if (.not. status%ok()) return
+                call ts_end_par(state%engine, status=status)
+                if (.not. status%ok()) return
+                if (aligns > 0) then
+                    call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+                    if (.not. status%ok()) return
+                end if
             case (DOC_QUOTE)
-                call quote_block(state, doc, c, ctx)
+                call quote_block(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_LIST)
-                call list_block(state, doc, c, ctx)
+                call list_block(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_RULE)
-                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
-                call ts_end_par(state%engine)
-                call ts_rule(state%engine, 0.5_dp*(ts_hsize(state%engine) - ctx%left - ctx%right), 0.5_dp, ctx%color)
-                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+                if (.not. status%ok()) return
+                call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right, status=status)
+                if (.not. status%ok()) return
+                call ts_end_par(state%engine, status=status)
+                if (.not. status%ok()) return
+                call ts_rule(state%engine, 0.5_dp*(ts_hsize(state%engine) - ctx%left - ctx%right), 0.5_dp, ctx%color, status=status)
+                if (.not. status%ok()) return
+                call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+                if (.not. status%ok()) return
             case (DOC_RAW)
-                call raw_block(state, doc%nodes(c)%text, ctx)
+                call raw_block(state, doc%nodes(c)%text, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_FRAME)
-                if (state%graphics_base == 0) error stop "document: missing frame resources"
+                if (state%graphics_base == 0) then
+                    call status%set(ERROR_ARGUMENT, "document: missing frame resources")
+                    return
+                end if
                 call ts_place_frame(state%engine, state%graphics_base + doc%nodes(c)%num - 1, &
-                                    left=ctx%left, right=ctx%right, align=ctx%align)
+                                    left=ctx%left, right=ctx%right, align=ctx%align, status=status)
+                if (.not. status%ok()) return
             case (DOC_FIGURE)
-                call figure_block(state, doc, c, ctx)
+                call figure_block(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             case (DOC_TABLE)
-                call table_block(state, doc, c, ctx)
+                call table_block(state, doc, c, ctx, status=status)
+                if (.not. status%ok()) return
             end select
             c = doc%nodes(c)%next
         end do
@@ -451,7 +544,7 @@ contains
 
     ! Captions get their own workspace, but share the resolved reference
     ! values. They cannot disturb a report that is being laid out.
-    recursive subroutine caption_frame(state, doc, node, width, ctx, frame)
+    recursive subroutine caption_frame(state, doc, node, width, ctx, frame, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
@@ -460,8 +553,11 @@ contains
         type(frame_t), intent(out) :: frame
         type(layout_context_t) :: nested
         type(ctx_t) :: sub
-        call ts_reset(nested%engine)
-        call defaults(nested)
+        type(status_t), intent(out) :: status
+        call ts_reset(nested%engine, status=status)
+        if (.not. status%ok()) return
+        call defaults(nested, status=status)
+        if (.not. status%ok()) return
         nested%BASE = state%BASE
         nested%LEAD = state%LEAD
         nested%PARINDENT = 0.0_dp
@@ -479,15 +575,19 @@ contains
         sub%indent = .false.
         sub%align = ALIGN_CENTER
         sub%size = 0.9_dp*ctx%size
-        call ts_set_page(nested%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
-        call ts_set_font(nested%engine, sub%size, nested%LEAD*sub%size)
+        call ts_set_page(nested%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false., status=status)
+        if (.not. status%ok()) return
+        call ts_set_font(nested%engine, sub%size, nested%LEAD*sub%size, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(nested%engine, ts_glue_t())
-        call set_blocks(nested, doc, node, sub)
-        call ts_finish_frame(nested%engine, frame)
+        call set_blocks(nested, doc, node, sub, status=status)
+        if (.not. status%ok()) return
+        call ts_finish_frame(nested%engine, frame, status=status)
+        if (.not. status%ok()) return
         state%EQNO = nested%EQNO
     end subroutine caption_frame
 
-    recursive subroutine figure_block(state, doc, node, ctx)
+    recursive subroutine figure_block(state, doc, node, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
@@ -497,53 +597,86 @@ contains
         type(clip_t) :: clip
         real(dp) :: w, h, width, scale_, cw, ch, gap, available, matrix(6), left
         integer :: graphic, cap, handle
+        type(status_t), intent(out) :: status
         graphic = doc%nodes(node)%first
-        if (graphic == 0) error stop "document figure: missing graphics"
-        if (doc%nodes(graphic)%kind /= DOC_FRAME) error stop "document figure: expected a frame"
-        call doc%graphics%metrics(w, h, handle=doc%nodes(graphic)%num)
-        if (w <= 0.0_dp .or. h <= 0.0_dp) error stop "document figure: empty graphics"
+        if (graphic == 0) then
+            call status%set(ERROR_ARGUMENT, "document figure: missing graphics")
+            return
+        end if
+        if (doc%nodes(graphic)%kind /= DOC_FRAME) then
+            call status%set(ERROR_ARGUMENT, "document figure: expected a frame")
+            return
+        end if
+        call doc%graphics%metrics(w, h, handle=doc%nodes(graphic)%num, status=status)
+        if (.not. status%ok()) return
+        if (w <= 0.0_dp .or. h <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "document figure: empty graphics")
+            return
+        end if
         available = ts_hsize(state%engine) - ctx%left - ctx%right
         width = min(w, available)
         if (doc%nodes(node)%width > 0) width = min(doc%nodes(node)%width, available)
-        if (width <= 0.0_dp) error stop "document figure: no horizontal space"
+        if (width <= 0.0_dp) then
+            call status%set(ERROR_LAYOUT, "document figure: no horizontal space")
+            return
+        end if
         cap = doc%nodes(graphic)%next
         ch = 0.0_dp
         gap = 0.0_dp
         if (cap > 0) then
-            call caption_frame(state, doc, cap, width, ctx, caption)
-            call caption%metrics(cw, ch)
+            call caption_frame(state, doc, cap, width, ctx, caption, status=status)
+            if (.not. status%ok()) return
+            call caption%metrics(cw, ch, status=status)
+            if (.not. status%ok()) return
             gap = 0.5_dp*state%BASE
         end if
-        if (ch + gap >= ts_vsize(state%engine)) error stop "document figure: caption exceeds page height"
+        if (ch + gap >= ts_vsize(state%engine)) then
+            call status%set(ERROR_LAYOUT, "document figure: caption exceeds page height")
+            return
+        end if
         scale_ = min(width/w, (ts_vsize(state%engine) - ch - gap)/h)
         left = 0.5_dp*(width - scale_*w)
-        call recorder%open_canvas(width, scale_*h + gap + ch)
+        call recorder%open_canvas(width, scale_*h + gap + ch, status=status)
+        if (.not. status%ok()) return
         matrix = [scale_, 0.0_dp, 0.0_dp, scale_, left, 0.0_dp]
-        call recorder%begin_frame(matrix, clip)
-        call doc%graphics%draw(recorder, doc%nodes(graphic)%num)
-        call recorder%end_frame()
+        call recorder%begin_frame(matrix, clip, status=status)
+        if (.not. status%ok()) return
+        call doc%graphics%draw(recorder, doc%nodes(graphic)%num, status=status)
+        if (.not. status%ok()) return
+        call recorder%end_frame(status=status)
+        if (.not. status%ok()) return
         if (cap > 0) then
             matrix = IDENTITY
             matrix(6) = scale_*h + gap
-            call recorder%begin_frame(matrix, clip)
-            call caption%draw(recorder)
-            call recorder%end_frame()
+            call recorder%begin_frame(matrix, clip, status=status)
+            if (.not. status%ok()) return
+            call caption%draw(recorder, status=status)
+            if (.not. status%ok()) return
+            call recorder%end_frame(status=status)
+            if (.not. status%ok()) return
         end if
-        call recorder%close_canvas()
-        call recorder%take(frame)
-        call ts_end_par(state%engine)
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_import_frame(state%engine, frame, handle)
+        call recorder%close_canvas(status=status)
+        if (.not. status%ok()) return
+        call recorder%take(frame, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
+        call ts_import_frame(state%engine, frame, handle, status=status)
+        if (.not. status%ok()) return
         call ts_place_frame(state%engine, handle, left=ctx%left, right=ctx%right, &
-                            align=ALIGN_CENTER, interline=.false.)
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+                            align=ALIGN_CENTER, interline=.false., status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         state%NOINDENT = .true.
     end subroutine figure_block
 
     ! Plain data cells are measured before choosing column widths, then
     ! paragraphs are laid out to those widths. The core packs rows and
     ! paginates them, reserving repeated headers on continuation pages.
-    recursive subroutine table_block(state, doc, node, ctx)
+    recursive subroutine table_block(state, doc, node, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
@@ -554,8 +687,12 @@ contains
         real(dp), allocatable :: natural(:), minimum(:), widths(:)
         real(dp) :: available, fs, padding, nw, mw
         integer :: t, nc, nr, i, j, header, handle, align
+        type(status_t), intent(out) :: status
         t = doc%nodes(node)%num
-        if (t < 1 .or. t > doc%ntables) error stop "document table: invalid table"
+        if (t < 1 .or. t > doc%ntables) then
+            call status%set(ERROR_ARGUMENT, "document table: invalid table")
+            return
+        end if
         nc = size(doc%tables(t)%cells, 2)
         nr = size(doc%tables(t)%cells, 1)
         available = ts_hsize(state%engine) - ctx%left - ctx%right
@@ -566,35 +703,48 @@ contains
         minimum = 0.0_dp
         do j = 1, nc
             if (allocated(doc%tables(t)%headers)) then
-                call cell_widths(trim(doc%tables(t)%headers(j)), FACE_BOLD, fs, nw, mw)
+                call cell_widths(trim(doc%tables(t)%headers(j)), FACE_BOLD, fs, nw, mw, status=status)
+                if (.not. status%ok()) return
                 natural(j) = nw
                 minimum(j) = mw
             end if
             do i = 1, nr
-                call cell_widths(trim(doc%tables(t)%cells(i, j)), FACE_REGULAR, fs, nw, mw)
+                call cell_widths(trim(doc%tables(t)%cells(i, j)), FACE_REGULAR, fs, nw, mw, status=status)
+                if (.not. status%ok()) return
                 natural(j) = max(natural(j), nw)
                 minimum(j) = max(minimum(j), mw)
             end do
         end do
-        call grid_widths(natural, minimum, available, padding, widths)
-        call ts_end_par(state%engine)
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        call grid_widths(natural, minimum, available, padding, widths, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         if (doc%nodes(node)%first > 0) then
-            call caption_frame(state, doc, doc%nodes(node)%first, available, ctx, caption)
-            call ts_import_frame(state%engine, caption, handle)
-            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false.)
+            call caption_frame(state, doc, doc%nodes(node)%first, available, ctx, caption, status=status)
+            if (.not. status%ok()) return
+            call ts_import_frame(state%engine, caption, handle, status=status)
+            if (.not. status%ok()) return
+            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false., status=status)
+            if (.not. status%ok()) return
             call ts_penalty(state%engine, 10000)
-            call ts_vskip(state%engine, ts_glue_t(0.4_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(0.4_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
         end if
         header = 0
         if (allocated(doc%tables(t)%headers)) then
             do j = 1, nc
                 call cell_frame(cell_state, trim(doc%tables(t)%headers(j)), &
-                                widths(j) - 2*padding, FACE_BOLD, fs, ALIGN_LEFT, cells(j))
+                                widths(j) - 2*padding, FACE_BOLD, fs, ALIGN_LEFT, cells(j), status=status)
+                if (.not. status%ok()) return
             end do
-            call grid_row(cells, widths, padding, row, background=[238, 242, 247])
-            call ts_import_frame(state%engine, row, header)
-            call ts_place_frame(state%engine, header, left=ctx%left, interline=.false.)
+            call grid_row(cells, widths, padding, row, background=[238, 242, 247], status=status)
+            if (.not. status%ok()) return
+            call ts_import_frame(state%engine, row, header, status=status)
+            if (.not. status%ok()) return
+            call ts_place_frame(state%engine, header, left=ctx%left, interline=.false., status=status)
+            if (.not. status%ok()) return
             if (nr > 0) call ts_penalty(state%engine, 10000)
         end if
         align = ALIGN_LEFT
@@ -602,40 +752,55 @@ contains
         do i = 1, nr
             do j = 1, nc
                 call cell_frame(cell_state, trim(doc%tables(t)%cells(i, j)), &
-                                widths(j) - 2*padding, FACE_REGULAR, fs, align, cells(j))
+                                widths(j) - 2*padding, FACE_REGULAR, fs, align, cells(j), status=status)
+                if (.not. status%ok()) return
             end do
-            call grid_row(cells, widths, padding, row)
-            call ts_import_frame(state%engine, row, handle)
-            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false., repeat_before=header)
+            call grid_row(cells, widths, padding, row, status=status)
+            if (.not. status%ok()) return
+            call ts_import_frame(state%engine, row, handle, status=status)
+            if (.not. status%ok()) return
+            call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false., repeat_before=header, status=status)
+            if (.not. status%ok()) return
             call ts_penalty(state%engine, 0)
         end do
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         state%NOINDENT = .true.
     end subroutine table_block
 
-    subroutine cell_frame(state, text, width, face, fs, align, frame)
+    subroutine cell_frame(state, text, width, face, fs, align, frame, status)
         type(typeset_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         real(dp), intent(in) :: width, fs
         integer, intent(in) :: face, align
         type(frame_t), intent(out) :: frame
-        call ts_reset(state)
-        call ts_set_page(state, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false.)
-        call ts_set_font(state, fs, 1.2_dp*fs)
+        type(status_t), intent(out) :: status
+        call ts_reset(state, status=status)
+        if (.not. status%ok()) return
+        call ts_set_page(state, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false., status=status)
+        if (.not. status%ok()) return
+        call ts_set_font(state, fs, 1.2_dp*fs, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state, ts_glue_t())
-        call ts_begin_par(state, align, 0.0_dp, size=fs)
+        call ts_begin_par(state, align, 0.0_dp, size=fs, status=status)
+        if (.not. status%ok()) return
         call ts_strut(state, 0.7_dp*fs, 0.3_dp*fs)
-        call ts_text(state, text, face, fs)
-        call ts_finish_frame(state, frame)
+        call ts_text(state, text, face, fs, status=status)
+        if (.not. status%ok()) return
+        call ts_finish_frame(state, frame, status=status)
+        if (.not. status%ok()) return
     end subroutine cell_frame
 
-    subroutine cell_widths(text, face, fs, natural, minimum)
+    subroutine cell_widths(text, face, fs, natural, minimum, status)
         character(len=*), intent(in) :: text
         integer, intent(in) :: face
         real(dp), intent(in) :: fs
         real(dp), intent(out) :: natural, minimum
         character(len=:), allocatable :: line
         integer :: a, b, i, j, k
+        type(status_t), intent(out) :: status
+        real(dp) :: ts_word_width_value1
+        real(dp) :: ts_word_width_value2
         natural = 0.0_dp
         minimum = 0.0_dp
         a = 1
@@ -646,12 +811,16 @@ contains
             do k = 1, len(line)
                 if (line(k:k) == achar(9) .or. line(k:k) == achar(13)) line(k:k) = " "
             end do
-            natural = max(natural, ts_word_width(line, face, fs))
+            ts_word_width_value1 = ts_word_width(line, face, fs, status=status)
+            if (.not. status%ok()) return
+            natural = max(natural, ts_word_width_value1)
             i = 1
             do while (i <= len(line))
                 j = index(line(i:), " ")
                 if (j == 0) j = len(line) - i + 2
-                minimum = max(minimum, ts_word_width(line(i:i + j - 2), face, fs))
+                ts_word_width_value2 = ts_word_width(line(i:i + j - 2), face, fs, status=status)
+                if (.not. status%ok()) return
+                minimum = max(minimum, ts_word_width_value2)
                 i = i + j
             end do
             a = a + b
@@ -659,13 +828,14 @@ contains
     end subroutine cell_widths
 
     ! A paragraph of inline text in the context's settings.
-    subroutine paragraph(state, doc, k, ctx)
+    subroutine paragraph(state, doc, k, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         type(ctx_t), intent(in) :: ctx
         real(dp) :: ind
         integer :: c
+        type(status_t), intent(out) :: status
         ind = 0.0_dp
         if (ctx%indent .and. .not. state%NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = state%PARINDENT
         c = doc%nodes(k)%first
@@ -674,13 +844,17 @@ contains
         end if
         state%NOINDENT = .false.
         call ts_begin_par(state%engine, ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
-                          leading=state%LEAD*ctx%size)
+                          leading=state%LEAD*ctx%size, status=status)
+        if (.not. status%ok()) return
         if (len(state%PENDING_LABEL) > 0) then
-            call ts_label(state%engine, state%PENDING_LABEL, label_face(ctx), ctx%size, state%LABEL_SEP, ctx%color)
+            call ts_label(state%engine, state%PENDING_LABEL, label_face(ctx), ctx%size, state%LABEL_SEP, ctx%color, status=status)
+            if (.not. status%ok()) return
             state%PENDING_LABEL = ""
         end if
-        call set_inlines(state, doc, k, base_style(ctx))
-        call ts_end_par(state%engine)
+        call set_inlines(state, doc, k, base_style(ctx), status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
     end subroutine paragraph
 
     integer function label_face(ctx)
@@ -691,7 +865,7 @@ contains
 
     ! Headings: LaTeX's \section, \subsection and \subsubsection (and,
     ! for a book, \chapter for #).
-    subroutine heading(state, doc, node, ctx)
+    subroutine heading(state, doc, node, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
@@ -702,11 +876,15 @@ contains
         type(ts_glue_t) :: before, after
         integer :: lv
 
-        text = doc_plain(doc, node)
+        type(status_t), intent(out) :: status
+        real(dp) :: text_width_value1
+        text = doc_plain(doc, node, status=status)
+        if (.not. status%ok()) return
         ex = face_xheight(FACE_REGULAR)*state%BASE
         call heading_number(state, doc%nodes(node)%num, lv, num)
         if (state%BOOK .and. lv == 0) then
-            call chapter_heading(state, doc, node, text, ctx)
+            call chapter_heading(state, doc, node, text, ctx, status=status)
+            if (.not. status%ok()) return
             return
         end if
         if (.not. state%NUMBER_SECTIONS .or. lv > 3) num = ""
@@ -727,8 +905,10 @@ contains
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
-        call ts_addpenalty(state%engine, -300)
-        call ts_addvspace(state%engine, before)
+        call ts_addpenalty(state%engine, -300, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, before, status=status)
+        if (.not. status%ok()) return
         if (state%BOOK .and. lv == 1) then
             if (len(num) > 0) then
                 call ts_mark(state%engine, upper(num//".  "//text), .false., section=.true.)
@@ -740,31 +920,42 @@ contains
         st%bold = .true.
         st%size = size
         hang = 0.0_dp
-        if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
-        call ts_begin_par(state%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
-                          leading=lead, hang=hang, nobreak=.true.)
         if (len(num) > 0) then
-            call ts_word(state%engine, num, FACE_BOLD, size, ctx%color)
+            text_width_value1 = text_width(num, FACE_BOLD, size, status=status)
+            if (.not. status%ok()) return
+            hang = text_width_value1 + size
+        end if
+        call ts_begin_par(state%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
+                          leading=lead, hang=hang, nobreak=.true., status=status)
+        if (.not. status%ok()) return
+        if (len(num) > 0) then
+            call ts_word(state%engine, num, FACE_BOLD, size, ctx%color, status=status)
+            if (.not. status%ok()) return
             call ts_kern(state%engine, size)
         end if
-        call set_inlines(state, doc, node, st)
-        call ts_end_par(state%engine)
+        call set_inlines(state, doc, node, st, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         call ts_penalty(state%engine, 10000)
-        call ts_vskip(state%engine, after)
+        call ts_vskip(state%engine, after, status=status)
+        if (.not. status%ok()) return
         call ts_nobreak_next(state%engine)
         state%NOINDENT = .true.
     end subroutine heading
 
     ! LaTeX's \chapter in the book class: a new page, "Chapter n" and the
     ! title below it in large bold, and the chapter as the running head.
-    subroutine chapter_heading(state, doc, node, text, ctx)
+    subroutine chapter_heading(state, doc, node, text, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
         character(len=*), intent(in) :: text
         type(ctx_t), intent(in) :: ctx
         type(style_t) :: st
-        call ts_page_break(state%engine)
+        type(status_t), intent(out) :: status
+        call ts_page_break(state%engine, status=status)
+        if (.not. status%ok()) return
         ! The running heads are the book class's: in capitals,
         ! "CHAPTER 1. TITLE" and "1.2. SECTION".
         if (state%NUMBER_SECTIONS) then
@@ -772,25 +963,34 @@ contains
         else
             call ts_mark(state%engine, upper(text), .true.)
         end if
-        call ts_vkeep(state%engine, ts_glue_t(50.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_vkeep(state%engine, ts_glue_t(50.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         st = base_style(ctx)
         st%bold = .true.
         if (state%NUMBER_SECTIONS) then
             st%size = 2.074_dp*state%BASE
             call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=25.0_dp*state%BASE/10.0_dp, &
-                              skip=.false., nobreak=.true.)
-            call set_words(state, "Chapter "//itoa(state%CHAPTER), st)
-            call ts_end_par(state%engine)
+                              skip=.false., nobreak=.true., status=status)
+            if (.not. status%ok()) return
+            call set_words(state, "Chapter "//itoa(state%CHAPTER), st, status=status)
+            if (.not. status%ok()) return
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
             call ts_penalty(state%engine, 10000)
-            call ts_vskip(state%engine, ts_glue_t(20.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(20.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            if (.not. status%ok()) return
         end if
         st%size = 2.488_dp*state%BASE
         call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=30.0_dp*state%BASE/10.0_dp, &
-                          skip=.false., nobreak=.true.)
-        call set_inlines(state, doc, node, st)
-        call ts_end_par(state%engine)
+                          skip=.false., nobreak=.true., status=status)
+        if (.not. status%ok()) return
+        call set_inlines(state, doc, node, st, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         call ts_penalty(state%engine, 10000)
-        call ts_vskip(state%engine, ts_glue_t(40.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_vskip(state%engine, ts_glue_t(40.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (.not. status%ok()) return
         call ts_nobreak_next(state%engine)
         state%NOINDENT = .true.
     end subroutine chapter_heading
@@ -798,7 +998,7 @@ contains
     ! A list: LaTeX's itemize or enumerate, with its spacing at the depth
     ! it is at. A tight list (no blank lines between its items) is set as
     ! Pandoc's \tightlist sets it, without \itemsep and \parsep.
-    recursive subroutine list_block(state, doc, list, ctx)
+    recursive subroutine list_block(state, doc, list, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: list
@@ -808,6 +1008,7 @@ contains
         type(ts_glue_t) :: topsep, partopsep, itemsep, parsep
         real(dp) :: lm, f
 
+        type(status_t), intent(out) :: status
         f = state%BASE/10.0_dp
         lev = min(ctx%depth + 1, 4)
         select case (lev)
@@ -853,12 +1054,17 @@ contains
         ! After a blank line, the list starts a paragraph, and \partopsep
         ! comes too.
         if (doc%nodes(list)%spaced .and. .not. ts_in_par(state%engine)) then
-            call ts_addpenalty(state%engine, -51)
-            call ts_addvspace(state%engine, add_glue(topsep, partopsep))
+            call ts_addpenalty(state%engine, -51, status=status)
+            if (.not. status%ok()) return
+            call ts_addvspace(state%engine, add_glue(topsep, partopsep), status=status)
+            if (.not. status%ok()) return
         else
-            call ts_end_par(state%engine)
-            call ts_addpenalty(state%engine, -51)
-            call ts_addvspace(state%engine, topsep)
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
+            call ts_addpenalty(state%engine, -51, status=status)
+            if (.not. status%ok()) return
+            call ts_addvspace(state%engine, topsep, status=status)
+            if (.not. status%ok()) return
         end if
 
         num = doc%nodes(list)%num
@@ -867,74 +1073,96 @@ contains
         do while (it > 0)
             nitem = nitem + 1
             if (nitem > 1) then
-                call ts_addpenalty(state%engine, -51)
-                call ts_addvspace(state%engine, itemsep)
+                call ts_addpenalty(state%engine, -51, status=status)
+                if (.not. status%ok()) return
+                call ts_addvspace(state%engine, itemsep, status=status)
+                if (.not. status%ok()) return
             end if
             state%PENDING_LABEL = list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num)
             state%LABEL_SEP = 0.5_dp*state%BASE
             call ts_set_parskip(state%engine, parsep)
-            call set_blocks(state, doc, it, sub)
+            call set_blocks(state, doc, it, sub, status=status)
+            if (.not. status%ok()) return
             if (len(state%PENDING_LABEL) > 0) then
                 ! An item with no paragraph of its own still has its label.
                 call ts_begin_par(state%engine, sub%align, 0.0_dp, left=sub%left, right=sub%right, &
-                                  size=sub%size)
-                call ts_label(state%engine, state%PENDING_LABEL, FACE_REGULAR, sub%size, state%LABEL_SEP, sub%color)
+                                  size=sub%size, status=status)
+                if (.not. status%ok()) return
+                call ts_label(state%engine, state%PENDING_LABEL, FACE_REGULAR, sub%size, state%LABEL_SEP, sub%color, status=status)
+                if (.not. status%ok()) return
                 call ts_strut(state%engine, 0.7_dp*sub%size, 0.3_dp*sub%size)
-                call ts_end_par(state%engine)
+                call ts_end_par(state%engine, status=status)
+                if (.not. status%ok()) return
                 state%PENDING_LABEL = ""
             end if
             num = num + 1
             it = doc%nodes(it)%next
         end do
-        call ts_end_par(state%engine)
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, state%PARSKIP_G)
         if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
-        call ts_addpenalty(state%engine, -51)
+        call ts_addpenalty(state%engine, -51, status=status)
+        if (.not. status%ok()) return
         if (ctx%depth == 0) then
-            call ts_addvspace(state%engine, add_glue(topsep, partopsep))
+            call ts_addvspace(state%engine, add_glue(topsep, partopsep), status=status)
+            if (.not. status%ok()) return
         else
-            call ts_addvspace(state%engine, topsep)
+            call ts_addvspace(state%engine, topsep, status=status)
+            if (.not. status%ok()) return
         end if
     end subroutine list_block
 
     ! A block quote: LaTeX's quote environment, a list with no label and
     ! equal margins.
-    recursive subroutine quote_block(state, doc, node, ctx)
+    recursive subroutine quote_block(state, doc, node, ctx, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: node
         type(ctx_t), intent(in) :: ctx
         type(ctx_t) :: sub
+        type(status_t), intent(out) :: status
         sub = ctx
         sub%depth = ctx%depth + 1
         sub%left = ctx%left + 2.5_dp*state%BASE
         sub%right = ctx%right + 2.5_dp*state%BASE
         sub%indent = .false.
-        call ts_end_par(state%engine)
-        call ts_addpenalty(state%engine, -51)
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
+        call ts_addpenalty(state%engine, -51, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, parsep_of(state, sub%depth))
-        call set_blocks(state, doc, node, sub)
-        call ts_end_par(state%engine)
+        call set_blocks(state, doc, node, sub, status=status)
+        if (.not. status%ok()) return
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, state%PARSKIP_G)
         if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
-        call ts_addpenalty(state%engine, -51)
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_addpenalty(state%engine, -51, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
     end subroutine quote_block
 
     ! Code: each line (each ending with a newline) as it is, unbroken, its
     ! spaces kept.
-    subroutine code_block(state, text, ctx)
+    subroutine code_block(state, text, ctx, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
         type(ctx_t), intent(in) :: ctx
         integer :: a, b, i, j
         real(dp) :: sp
         character(len=:), allocatable :: s
-        call ts_end_par(state%engine)
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        type(status_t), intent(out) :: status
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
         call ts_set_parskip(state%engine, ts_glue_t())
-        sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size)
+        sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size, status=status)
+        if (.not. status%ok()) return
         a = 1
         do while (a <= len(text))
             b = index(text(a:), NL)
@@ -942,7 +1170,8 @@ contains
             s = text(a:a + b - 2)
             a = a + b
             call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*state%BASE, &
-                              right=ctx%right, size=0.9_dp*ctx%size, leading=state%LEAD*ctx%size)
+                              right=ctx%right, size=0.9_dp*ctx%size, leading=state%LEAD*ctx%size, status=status)
+            if (.not. status%ok()) return
             call ts_strut(state%engine, 0.7_dp*ctx%size, 0.3_dp*ctx%size)
             i = 1
             do while (i <= len(s))
@@ -956,48 +1185,60 @@ contains
                     if (s(j:j) == " ") exit
                     j = j + 1
                 end do
-                call ts_word(state%engine, s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
+                call ts_word(state%engine, s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL, status=status)
+                if (.not. status%ok()) return
                 i = j
             end do
-            call ts_end_par(state%engine)
+            call ts_end_par(state%engine, status=status)
+            if (.not. status%ok()) return
         end do
         call ts_set_parskip(state%engine, state%PARSKIP_G)
-        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
+        if (.not. status%ok()) return
     end subroutine code_block
 
     ! A TeX command on a line by itself: \newpage, \pagebreak,
     ! \clearpage, \vfill, \bigskip, \medskip, \smallskip, \vspace{...} and
     ! \vspace*{...}.
-    subroutine raw_block(state, t, ctx)
+    subroutine raw_block(state, t, ctx, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: t
         type(ctx_t), intent(in) :: ctx
         character(len=:), allocatable :: arg
         integer :: a, b
         real(dp) :: f
+        type(status_t), intent(out) :: status
         f = state%BASE/10.0_dp
-        call ts_end_par(state%engine)
+        call ts_end_par(state%engine, status=status)
+        if (.not. status%ok()) return
         if (starts(t, BS//"newpage") .or. starts(t, BS//"pagebreak") .or. &
             starts(t, BS//"clearpage")) then
-            call ts_page_break(state%engine)
+            call ts_page_break(state%engine, status=status)
+            if (.not. status%ok()) return
             state%NOINDENT = .false.
         else if (starts(t, BS//"vfill")) then
-            call ts_vfil(state%engine)
+            call ts_vfil(state%engine, status=status)
+            if (.not. status%ok()) return
         else if (starts(t, BS//"bigskip")) then
-            call ts_vskip(state%engine, ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0), status=status)
+            if (.not. status%ok()) return
         else if (starts(t, BS//"medskip")) then
-            call ts_vskip(state%engine, ts_glue_t(6.0_dp*f, 2.0_dp*f, 2.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(6.0_dp*f, 2.0_dp*f, 2.0_dp*f, 0, 0), status=status)
+            if (.not. status%ok()) return
         else if (starts(t, BS//"smallskip")) then
-            call ts_vskip(state%engine, ts_glue_t(3.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0))
+            call ts_vskip(state%engine, ts_glue_t(3.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0), status=status)
+            if (.not. status%ok()) return
         else if (starts(t, BS//"vspace")) then
             a = index(t, "{")
             b = index(t, "}", back=.true.)
             if (a > 0 .and. b > a) then
                 arg = trim(adjustl(t(a + 1:b - 1)))
                 if (index(t(1:a), "*") > 0) then
-                    call ts_vkeep(state%engine, skip_of(arg, ctx%size))
+                    call ts_vkeep(state%engine, skip_of(arg, ctx%size), status=status)
+                    if (.not. status%ok()) return
                 else
-                    call ts_vskip(state%engine, skip_of(arg, ctx%size))
+                    call ts_vskip(state%engine, skip_of(arg, ctx%size), status=status)
+                    if (.not. status%ok()) return
                 end if
             end if
         end if
@@ -1190,23 +1431,27 @@ contains
     end function face_of
 
     ! Set the inlines of node k, in style st, into the current paragraph.
-    subroutine set_inlines(state, doc, k, st)
+    subroutine set_inlines(state, doc, k, st, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
         type(style_t), intent(in) :: st
+        type(status_t), intent(out) :: status
         state%W = ""
         state%SPACE = .false.
-        call walk(state, doc, k, st)
-        call flush(state, st)
+        call walk(state, doc, k, st, status=status)
+        if (.not. status%ok()) return
+        call flush(state, st, status=status)
+        if (.not. status%ok()) return
     end subroutine set_inlines
 
     ! Words in style st, a space between each two.
-    subroutine set_words(state, s, st)
+    subroutine set_words(state, s, st, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st
         integer :: i, j
+        type(status_t), intent(out) :: status
         i = 1
         do while (i <= len(s))
             j = index(s(i:), " ")
@@ -1215,15 +1460,19 @@ contains
             else
                 j = i + j - 1
             end if
-            if (i > 1) call ts_space(state%engine, face_of(st), st%size)
-            call ts_word(state%engine, s(i:j - 1), face_of(st), st%size, st%color)
+            if (i > 1) then
+                call ts_space(state%engine, face_of(st), st%size, status=status)
+                if (.not. status%ok()) return
+            end if
+            call ts_word(state%engine, s(i:j - 1), face_of(st), st%size, st%color, status=status)
+            if (.not. status%ok()) return
             i = j + 1
         end do
     end subroutine set_words
 
     ! The children of node parent, in style st. A word goes out when
     ! something else than text comes, after the space before it.
-    recursive subroutine walk(state, doc, parent, st)
+    recursive subroutine walk(state, doc, parent, st, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
@@ -1232,25 +1481,31 @@ contains
         character(len=:), allocatable :: tag
         integer :: c, al
 
+        type(status_t), intent(out) :: status
         c = doc%nodes(parent)%first
         do while (c > 0)
             associate (nd => doc%nodes(c))
                 select case (nd%kind)
                 case (IN_STR)
-                    call add_text(state, nd%text, st)
+                    call add_text(state, nd%text, st, status=status)
+                    if (.not. status%ok()) return
                 case (IN_SPACE)
-                    call flush(state, st)
+                    call flush(state, st, status=status)
+                    if (.not. status%ok()) return
                     if (.not. state%SPACE) then
                         state%SP_FACE = face_of(st)
                         state%SP_SIZE = st%size
                     end if
                     state%SPACE = .true.
                 case (IN_BREAK)
-                    call flush(state, st)
-                    call ts_hard_break(state%engine)
+                    call flush(state, st, status=status)
+                    if (.not. status%ok()) return
+                    call ts_hard_break(state%engine, status=status)
+                    if (.not. status%ok()) return
                     state%SPACE = .false.
                 case (IN_EMPH, IN_STRONG, IN_SPAN, IN_LINK)
-                    call flush(state, st)
+                    call flush(state, st, status=status)
+                    if (.not. status%ok()) return
                     sx = st
                     select case (nd%kind)
                     case (IN_EMPH)
@@ -1264,37 +1519,51 @@ contains
                     case (IN_LINK)
                         sx%color = LINK_COL
                     end select
-                    call walk(state, doc, c, sx)
-                    call flush(state, sx)
+                    call walk(state, doc, c, sx, status=status)
+                    if (.not. status%ok()) return
+                    call flush(state, sx, status=status)
+                    if (.not. status%ok()) return
                 case (IN_CODE)
-                    call flush(state, st)
-                    call flush_space(state)
-                    call set_code(state, nd%text, st%size)
+                    call flush(state, st, status=status)
+                    if (.not. status%ok()) return
+                    call flush_space(state, status=status)
+                    if (.not. status%ok()) return
+                    call set_code(state, nd%text, st%size, status=status)
+                    if (.not. status%ok()) return
                 case (IN_MATH)
-                    call flush(state, st)
+                    call flush(state, st, status=status)
+                    if (.not. status%ok()) return
                     if (nd%display) then
                         tag = display_tag(state, doc, c)
                         call ts_math(state%engine, strip_math_labels(nd%text), st%size, st%color, &
-                                     display=.true., tag=tag)
+                                     display=.true., tag=tag, status=status)
+                        if (.not. status%ok()) return
                         state%SPACE = .false.
                     else
-                        call flush_space(state)
-                        call ts_math(state%engine, nd%text, st%size, st%color)
+                        call flush_space(state, status=status)
+                        if (.not. status%ok()) return
+                        call ts_math(state%engine, nd%text, st%size, st%color, status=status)
+                        if (.not. status%ok()) return
                     end if
                 case (IN_RAW)
                     select case (nd%text)
                     case ("hfill")
-                        call flush(state, st)
+                        call flush(state, st, status=status)
+                        if (.not. status%ok()) return
                         call ts_hfil(state%engine)
                         state%SPACE = .false.
                     case ("quad", "qquad")
-                        call flush(state, st)
+                        call flush(state, st, status=status)
+                        if (.not. status%ok()) return
                         call ts_kern(state%engine, merge(1.0_dp, 2.0_dp, nd%text == "quad")*st%size)
                         state%SPACE = .false.
                     case ("TeX", "LaTeX")
-                        call flush(state, st)
-                        call flush_space(state)
-                        call tex_logo(state, st, nd%text == "LaTeX")
+                        call flush(state, st, status=status)
+                        if (.not. status%ok()) return
+                        call flush_space(state, status=status)
+                        if (.not. status%ok()) return
+                        call tex_logo(state, st, nd%text == "LaTeX", status=status)
+                        if (.not. status%ok()) return
                     end select
                 case (IN_REF)
                     state%W = state%W//ref_text(state, nd%id, nd%num)
@@ -1305,18 +1574,21 @@ contains
     end subroutine walk
 
     ! Text onto the word; a no-break space is glue that does not break.
-    subroutine add_text(state, s, st)
+    subroutine add_text(state, s, st, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st
         integer :: i, j
+        type(status_t), intent(out) :: status
         i = 1
         do
             j = index(s(i:), NBSP)
             if (j == 0) exit
             state%W = state%W//s(i:i + j - 2)
-            call flush(state, st)
-            call ts_nbsp(state%engine, face_of(st), st%size)
+            call flush(state, st, status=status)
+            if (.not. status%ok()) return
+            call ts_nbsp(state%engine, face_of(st), st%size, status=status)
+            if (.not. status%ok()) return
             state%SPACE = .false.
             i = i + j + 1
         end do
@@ -1324,31 +1596,40 @@ contains
     end subroutine add_text
 
     ! The word so far goes out, after a space if one came before it.
-    subroutine flush(state, st)
+    subroutine flush(state, st, status)
         type(layout_context_t), intent(inout) :: state
         type(style_t), intent(in) :: st
+        type(status_t), intent(out) :: status
         if (len(state%W) == 0) return
-        call flush_space(state)
-        call ts_word(state%engine, state%W, face_of(st), st%size, st%color)
+        call flush_space(state, status=status)
+        if (.not. status%ok()) return
+        call ts_word(state%engine, state%W, face_of(st), st%size, st%color, status=status)
+        if (.not. status%ok()) return
         state%W = ""
     end subroutine flush
 
-    subroutine flush_space(state)
+    subroutine flush_space(state, status)
         type(layout_context_t), intent(inout) :: state
-        if (state%SPACE) call ts_space(state%engine, state%SP_FACE, state%SP_SIZE)
+        type(status_t), intent(out) :: status
+        if (state%SPACE) then
+            call ts_space(state%engine, state%SP_FACE, state%SP_SIZE, status=status)
+            if (.not. status%ok()) return
+        end if
         state%SPACE = .false.
     end subroutine flush_space
 
     ! Code, as it is: its words upright, its spaces glue.
-    subroutine set_code(state, t, size)
+    subroutine set_code(state, t, size, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: t
         real(dp), intent(in) :: size
         integer :: i, j
+        type(status_t), intent(out) :: status
         i = 1
         do while (i <= len(t))
             if (t(i:i) == " ") then
-                call ts_space(state%engine, FACE_REGULAR, size)
+                call ts_space(state%engine, FACE_REGULAR, size, status=status)
+                if (.not. status%ok()) return
                 i = i + 1
                 cycle
             end if
@@ -1357,34 +1638,41 @@ contains
                 if (t(j:j) == " ") exit
                 j = j + 1
             end do
-            call ts_word(state%engine, t(i:j - 1), FACE_REGULAR, size, CODE_COL)
+            call ts_word(state%engine, t(i:j - 1), FACE_REGULAR, size, CODE_COL, status=status)
+            if (.not. status%ok()) return
             i = j
         end do
     end subroutine set_code
 
     ! The TeX and LaTeX logos, as plain TeX and LaTeX draw them.
-    subroutine tex_logo(state, st, la)
+    subroutine tex_logo(state, st, la, status)
         type(layout_context_t), intent(inout) :: state
         type(style_t), intent(in) :: st
         logical, intent(in) :: la
         real(dp) :: em, ex
         integer :: f
+        type(status_t), intent(out) :: status
         f = face_of(st)
         em = st%size
         ex = face_xheight(FACE_REGULAR)*st%size
         if (la) then
             ! The A at the script size, its top at the T's.
-            call ts_word(state%engine, "L", f, st%size, st%color)
+            call ts_word(state%engine, "L", f, st%size, st%color, status=status)
+            if (.not. status%ok()) return
             call ts_kern(state%engine, -0.36_dp*em)
             call ts_word(state%engine, "A", f, 0.7_dp*st%size, st%color, &
-                         raise=0.3_dp*face_capheight(FACE_REGULAR)*st%size)
+                         raise=0.3_dp*face_capheight(FACE_REGULAR)*st%size, status=status)
+            if (.not. status%ok()) return
             call ts_kern(state%engine, -0.15_dp*em)
         end if
-        call ts_word(state%engine, "T", f, st%size, st%color)
+        call ts_word(state%engine, "T", f, st%size, st%color, status=status)
+        if (.not. status%ok()) return
         call ts_kern(state%engine, -0.1667_dp*em)
-        call ts_word(state%engine, "E", f, st%size, st%color, raise=-0.5_dp*ex)
+        call ts_word(state%engine, "E", f, st%size, st%color, raise=-0.5_dp*ex, status=status)
+        if (.not. status%ok()) return
         call ts_kern(state%engine, -0.125_dp*em)
-        call ts_word(state%engine, "X", f, st%size, st%color)
+        call ts_word(state%engine, "X", f, st%size, st%color, status=status)
+        if (.not. status%ok()) return
     end subroutine tex_logo
 
     ! The formula without \label{...}, \tag{...}, \notag and \nonumber,
@@ -1486,19 +1774,22 @@ contains
     ! The labels of the headings and displays under node parent, with
     ! their numbers, found before anything is set, so that a reference may
     ! come before what it refers to.
-    recursive subroutine labels(state, doc, parent)
+    recursive subroutine labels(state, doc, parent, status)
         type(layout_context_t), intent(inout) :: state
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
         character(len=:), allocatable :: num, name, src
         integer :: c, lv, a, b
+        type(status_t), intent(out) :: status
         c = doc%nodes(parent)%first
         do while (c > 0)
             select case (doc%nodes(c)%kind)
             case (DOC_HEADING)
                 call heading_number(state, doc%nodes(c)%num, lv, num)
-                if (len(doc%nodes(c)%id) > 0 .and. len(num) > 0) &
-                    call add_label(state, doc%nodes(c)%id, num)
+                if (len(doc%nodes(c)%id) > 0 .and. len(num) > 0) then
+                    call add_label(state, doc%nodes(c)%id, num, status=status)
+                    if (.not. status%ok()) return
+                end if
             case (IN_MATH)
                 if (doc%nodes(c)%display) then
                     num = display_tag(state, doc, c)
@@ -1509,13 +1800,21 @@ contains
                         b = index(src(a:), "}")
                         if (b > 0) name = src(a + 7:a + b - 2)
                     end if
-                    if (len(name) > 0 .and. len(num) > 0) call add_label(state, name, num)
+                    if (len(name) > 0 .and. len(num) > 0) then
+                        call add_label(state, name, num, status=status)
+                        if (.not. status%ok()) return
+                    end if
                 end if
             case (DOC_FIGURE, DOC_TABLE)
-                if (len(doc%nodes(c)%id) > 0) call add_label(state, doc%nodes(c)%id, doc%nodes(c)%number)
-                call labels(state, doc, c)
+                if (len(doc%nodes(c)%id) > 0) then
+                    call add_label(state, doc%nodes(c)%id, doc%nodes(c)%number, status=status)
+                    if (.not. status%ok()) return
+                end if
+                call labels(state, doc, c, status=status)
+                if (.not. status%ok()) return
             case default
-                call labels(state, doc, c)
+                call labels(state, doc, c, status=status)
+                if (.not. status%ok()) return
             end select
             c = doc%nodes(c)%next
         end do
@@ -1543,13 +1842,17 @@ contains
         end if
     end function ref_text
 
-    subroutine add_label(state, name, text)
+    subroutine add_label(state, name, text, status)
         type(layout_context_t), intent(inout) :: state
         character(len=*), intent(in) :: name, text
         type(label_t), allocatable :: tmp(:)
         integer :: k
+        type(status_t), intent(out) :: status
         do k = 1, state%NLAB
-            if (state%label(k)%name == name) error stop "document: duplicate label"
+            if (state%label(k)%name == name) then
+                call status%set(ERROR_LAYOUT, "document: duplicate label")
+                return
+            end if
         end do
         if (state%NLAB == size(state%label)) then
             allocate (tmp(2*size(state%label)))
@@ -1762,12 +2065,16 @@ contains
     end function roman
 
     ! The width of a string in a face, as the engine measures words.
-    real(dp) function text_width(s, face, size)
+    real(dp) function text_width(s, face, size, status)
         use fplotlib_text, only: tw => text_width
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
         real(dp), intent(in) :: size
-        text_width = tw(s, size, face)
+        type(status_t), intent(out) :: status
+
+        text_width = 0.0_dp
+        text_width = tw(s, size, face, status=status)
+        if (.not. status%ok()) return
     end function text_width
 
 end module fplotlib_docclass

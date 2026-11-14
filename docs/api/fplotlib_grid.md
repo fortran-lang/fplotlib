@@ -11,5 +11,9 @@ and an optional `repeat_before` header-frame handle. It reserves and draws that
 header when a row starts a continuation page. Rows are unbreakable; a row that
 cannot fit with its repeated header is rejected rather than clipped.
 
+Both functions require `status_t`. An unsuccessful `grid_widths` call leaves
+its output unallocated, rather than returning a partially fitted grid.
+Colors are integer RGB triples in `[0, 255]`.
+
 ```{f:module} fplotlib_grid
 ```

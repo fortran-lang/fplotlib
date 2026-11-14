@@ -1,4 +1,6 @@
 module test_report
+    use fplotlib_status
+    use test_status
     use fplotlib, only: dp, markdown, new_report, include_figure, include_table, save, render_report, &
                         figure, plot, title, clf, render_png
     use fplotlib_report, only: report_t
@@ -91,34 +93,50 @@ contains
         real(dp) :: numbers(1, 2)
         integer :: counts(1, 2), u, n
         character(len=:), allocatable :: text, label, data
+        type(status_t) :: status
+        character(len=:), allocatable :: source_text_value1
         label = "tab:"//repeat("long_label_", 8)//"end"
-        call a%markdown("See Table @"//label//".")
+        call a%markdown("See Table @"//label//".", status=status)
+        call require_ok(status)
         numbers(1, :) = [1.25_dp, 2.5_dp]
-        call a%include_table(numbers, columns=["Left ", "Right"], label=label, caption="Numeric values.")
+        call a%include_table(numbers, columns=["Left ", "Right"], label=label, caption="Numeric values.", status=status)
+        call require_ok(status)
         numbers = -99.0_dp
         counts(1, :) = [7, 11]
-        call a%include_table(counts, columns=["Left ", "Right"], caption="Integer values.")
-        call a%export("svg", before)
-        call b%markdown("Another report.")
-        call b%clear()
+        call a%include_table(counts, columns=["Left ", "Right"], caption="Integer values.", status=status)
+        call require_ok(status)
+        call a%export("svg", before, status=status)
+        call require_ok(status)
+        call b%markdown("Another report.", status=status)
+        call require_ok(status)
+        call b%clear(status=status)
+        call require_ok(status)
         call markdown("Default report remains independent.")
-        call a%export("svg", after)
+        call a%export("svg", after, status=status)
+        call require_ok(status)
         call check(before(1)%bytes == after(1)%bytes, "explicit reports do not share the default session", nfail)
-        call a%page_frame(1, page)
-        text = page%source_text()
+        call a%page_frame(1, page, status=status)
+        call require_ok(status)
+        text = page%source_text(status=status)
+        call require_ok(status)
         call check(index(text, "See Table 1.") > 0, "long named table reference is retained", nfail)
         call check(index(text, "1.25000") > 0 .and. index(text, "-99") == 0, "numeric values are snapshotted", nfail)
         call check(index(text, "7") > 0 .and. index(text, "11") > 0, "integer tables reach layout", nfail)
-        call a%save("tests/out/explicit_report.pdf")
-        call a%export("pdf", after)
+        call a%save("tests/out/explicit_report.pdf", status=status)
+        call require_ok(status)
+        call a%export("pdf", after, status=status)
+        call require_ok(status)
         inquire (file="tests/out/explicit_report.pdf", size=n)
         allocate (character(len=n) :: data)
         open (newunit=u, file="tests/out/explicit_report.pdf", access="stream", form="unformatted", status="old")
         read (u) data
         close (u)
         call check(data == after(1)%bytes, "explicit save uses the report's cached pages", nfail)
-        call a%clear()
-        call check(index(page%source_text(), "See Table 1.") > 0, "exported page outlives report reset", nfail)
+        call a%clear(status=status)
+        call require_ok(status)
+        source_text_value1 = page%source_text(status=status)
+        call require_ok(status)
+        call check(index(source_text_value1, "See Table 1.") > 0, "exported page outlives report reset", nfail)
         call new_report()
     end subroutine independent_reports
 
@@ -130,20 +148,26 @@ contains
         character(len=8) :: row
         character(len=:), allocatable :: text, all_text
         integer :: i, p, pages
+        type(status_t) :: status
         do i = 1, size(cells, 1)
             write (cells(i, 1), "(a,i3.3)") "ROW", i
             cells(i, 2) = "A description which can wrap within its column."
         end do
         call report%markdown([character(len=32) :: "---", "paper: a6", "margin: 12pt", &
-                              "fontsize: 9pt", "pagenumbers: false", "---", "", "Introductory paragraph."])
-        call report%include_table(cells, columns=["Index      ", "Description"], caption="Rows across pages.")
+                              "fontsize: 9pt", "pagenumbers: false", "---", "", "Introductory paragraph."], status=status)
+        call require_ok(status)
+        call report%include_table(cells, columns=["Index      ", "Description"], caption="Rows across pages.", status=status)
+        call require_ok(status)
         cells = "Overwritten"
-        pages = report%page_count()
+        pages = report%page_count(status=status)
+        call require_ok(status)
         call check(pages > 1, "long table paginates", nfail)
         all_text = ""
         do p = 1, pages
-            call report%page_frame(p, page)
-            text = page%source_text()
+            call report%page_frame(p, page, status=status)
+            call require_ok(status)
+            text = page%source_text(status=status)
+            call require_ok(status)
             call check(occurrences(text, "Index") == 1, "table header repeats exactly once per page", nfail)
             all_text = all_text//text
         end do
