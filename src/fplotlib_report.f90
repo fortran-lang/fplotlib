@@ -5,13 +5,13 @@ module fplotlib_report
     use fplotlib_style, only: dp
     use fplotlib_doctree
     use fplotlib_markdown, only: md_parse, md_append
-    use fplotlib_docclass, only: layout_context_t, doc_typeset
+    use fplotlib_docclass, only: layout_context_t, doc_typeset, doc_fragment
     use fplotlib_scene, only: frame_t, paged_document_t
     use fplotlib_document, only: document_asset_t, export_document, save_document
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
-    public :: report_t
+    public :: report_t, layout_markdown, layout_fragment
 
     type :: report_t
         private
@@ -35,6 +35,30 @@ module fplotlib_report
     end type report_t
 
 contains
+
+    subroutine layout_markdown(state, text, document, status)
+        type(layout_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        type(paged_document_t), intent(out) :: document
+        type(status_t), intent(out) :: status
+        type(doc_t) :: parsed
+        call md_parse(text, parsed, status)
+        if (.not. status%ok()) return
+        call doc_typeset(state, parsed, document, status)
+    end subroutine layout_markdown
+
+    subroutine layout_fragment(state, text, width, frame, font_size, status)
+        type(layout_context_t), intent(inout) :: state
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width
+        type(frame_t), intent(out) :: frame
+        real(dp), intent(in), optional :: font_size
+        type(status_t), intent(out) :: status
+        type(doc_t) :: parsed
+        call md_parse(text, parsed, status)
+        if (.not. status%ok()) return
+        call doc_fragment(state, parsed, width, frame, font_size, status)
+    end subroutine layout_fragment
 
     subroutine report_clear(self, status)
         class(report_t), intent(inout) :: self
@@ -99,7 +123,8 @@ contains
         integer :: node, child
         real(dp) :: frame_width, frame_height
         type(status_t), intent(out) :: status
-        call validate_caption(caption, status)
+        type(doc_t) :: parsed_caption
+        call parse_caption(caption, parsed_caption, status)
         if (.not. status%ok()) return
         call initialize(self, status=status)
         if (.not. status%ok()) return
@@ -121,7 +146,7 @@ contains
         if (present(width)) self%content%nodes(node)%width = width
         child = doc_add_frame(self%content, node, frame, status=status)
         if (.not. status%ok()) return
-        call add_caption(self%content, node, caption, status=status)
+        call add_caption(self%content, node, caption, parsed_caption, status)
         if (.not. status%ok()) return
         self%dirty = .true.
     end subroutine report_include_frame
@@ -196,24 +221,28 @@ contains
         logical, intent(in) :: numeric
         integer :: node
         type(status_t), intent(out) :: status
-        call validate_caption(caption, status)
+        type(doc_t) :: parsed_caption
+        call parse_caption(caption, parsed_caption, status)
         if (.not. status%ok()) return
         call initialize(self, status=status)
         if (.not. status%ok()) return
         node = doc_add_table(self%content, 1, cells, columns, numeric, status=status)
         if (.not. status%ok()) return
         if (present(label)) self%content%nodes(node)%id = label
-        call add_caption(self%content, node, caption, status=status)
+        call add_caption(self%content, node, caption, parsed_caption, status)
         if (.not. status%ok()) return
         self%dirty = .true.
     end subroutine append_table
 
-    subroutine validate_caption(caption, status)
+    subroutine parse_caption(caption, parsed, status)
         character(len=*), intent(in), optional :: caption
+        type(doc_t), intent(out) :: parsed
         type(status_t), intent(out) :: status
-        type(doc_t) :: parsed
         integer :: i
-        if (.not. present(caption)) return
+        if (.not. present(caption)) then
+            call doc_init(parsed, status)
+            return
+        end if
         call md_parse(caption, parsed, status)
         if (.not. status%ok()) return
         if (parsed%nmeta > 0) then
@@ -226,12 +255,14 @@ contains
                 return
             end if
         end do
-    end subroutine validate_caption
+        call doc_validate(parsed, status)
+    end subroutine parse_caption
 
-    subroutine add_caption(tree, parent, caption, status)
+    subroutine add_caption(tree, parent, caption, parsed, status)
         type(doc_t), intent(inout) :: tree
         integer, intent(in) :: parent
         character(len=*), intent(in), optional :: caption
+        type(doc_t), intent(in) :: parsed
         integer :: node
         type(status_t), intent(out) :: status
         if (.not. present(caption)) return
@@ -239,7 +270,7 @@ contains
         node = doc_add(tree, parent, DOC_DIV, status=status)
         if (.not. status%ok()) return
         tree%nodes(node)%text = caption
-        call md_append(caption, tree, node, status=status)
+        call doc_append_children(tree, node, parsed, 1, status)
         if (.not. status%ok()) return
     end subroutine add_caption
 

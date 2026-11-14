@@ -4,7 +4,7 @@ module test_typeset_core
     use fplotlib_style, only: dp
     use fplotlib_typeset
     use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
-    use fplotlib_docclass, only: layout_context_t, layout_fragment, layout_markdown, doc_typeset
+    use fplotlib_docclass, only: layout_context_t, doc_typeset
     use fplotlib_doctree, only: doc_t, doc_add_frame, doc_init
     use fplotlib_markdown, only: md_parse, md_append
     use fplotlib_document, only: document_asset_t, export_document
@@ -15,7 +15,7 @@ module test_typeset_core
     use fplotlib_artist, only: append_text
     use fplotlib, only: figure, plot, clf, render_png
     use fplotlib_draw, only: render_frame
-    use fplotlib_report, only: report_t
+    use fplotlib_report, only: report_t, layout_fragment, layout_markdown
     use fplotlib_grid, only: grid_widths
     use fplotlib_hyph, only: hyph_points
     use fplotlib_backend_png, only: png_renderer_t

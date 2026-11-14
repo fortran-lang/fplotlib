@@ -14,7 +14,8 @@ program plot_frame_composition
     use fplotlib_draw, only: render_frame
     use fplotlib_doctree, only: doc_t, doc_add, doc_add_frame, DOC_DIV
     use fplotlib_markdown, only: md_parse, md_append
-    use fplotlib_docclass, only: doc_typeset, layout_context_t, layout_fragment
+    use fplotlib_docclass, only: doc_typeset, layout_context_t
+    use fplotlib_report, only: layout_fragment
     use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
     use fplotlib_document, only: save_document
     use fplotlib_render, only: paint_t, clip_t

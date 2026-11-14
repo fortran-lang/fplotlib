@@ -360,15 +360,18 @@ spacing of its article and book classes:
 - displays get `\abovedisplayskip` or the short skips, equation numbers
   at the right margin, and the paragraph goes on after them unindented.
 
-A document goes through three layers: a reader
-(`fplotlib_markdown`) reads the text into a tree of blocks and inlines
-(`fplotlib_doctree`); a native template (`fplotlib_docclass`) sets
-the tree, numbering sections and equations from a first
-pass over it as LaTeX does from its `.aux` file; and the engine
-(`fplotlib_typeset`) works at the level of TeX's primitives: words, glue,
-kerns, penalties, paragraphs, formulas, marks, and the page builder with
-its output routine. A program
-can also build a tree itself and give it to the class.
+The frontend has explicit **parse → resolve → layout** stages.
+`fplotlib_markdown` reads blocks and inlines into `fplotlib_doctree`.
+`fplotlib_docresolve` prepares an owned copy: typed settings, selected parts,
+numbering, reference displays and equation tags. `fplotlib_docclass` lays out
+that resolved content without parsing Markdown or interpreting raw metadata.
+Native template defaults, part styles and ordering are declared once in
+`fplotlib_doctemplate` and shared by resolution and layout.
+
+`fplotlib_typeset` works at the level of TeX's primitives: words, glue, kerns,
+penalties, paragraphs, formulas, marks and page building. A program can build
+a frontend tree itself, or bypass this small frontend entirely. The resolved
+representation is internal; it is not another public universal document IR.
 
 Layout state is explicit (`layout_context_t`, or `typeset_context_t` for
 the primitive API). The result is an owned `paged_document_t`, not a view
@@ -380,7 +383,8 @@ those frames without knowing how they were laid out.
 subroutine write_report(status)
     use fplotlib, only: dp
     use fplotlib_status, only: status_t
-    use fplotlib_docclass, only: layout_context_t, layout_markdown, layout_fragment
+    use fplotlib_docclass, only: layout_context_t
+    use fplotlib_report, only: layout_markdown, layout_fragment
     use fplotlib_scene, only: paged_document_t, frame_t
     use fplotlib_document, only: save_document
 
@@ -403,6 +407,8 @@ end subroutine write_report
 
 The `fplotlib` module exposes the high-level facade; explicit layout, frame,
 and export APIs are imported from their own modules.
+The Markdown layout adapters `layout_markdown` and `layout_fragment` belong
+to `fplotlib_report`; parsed-tree layout belongs to `fplotlib_docclass`.
 `fplotlib_draw:render_frame(frame, status=...)` captures the current plot without
 serializing an image. A frame's `import_frame(child, handle, status)` imports an
 owned copy; `place(handle, matrix, clip, status)` can reuse it at several positions. The six

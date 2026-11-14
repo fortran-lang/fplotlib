@@ -9,8 +9,9 @@ shared top-left, y-down coordinate system.
 The low-level interface is a work in progress. It does not yet expose arbitrary
 inline frames or general horizontal glue, penalties and discretionaries;
 `ts_penalty` currently affects the vertical list. Math input is still a TeX
-string, not a public programmatic math tree. `layout_fragment` in
-`fplotlib_docclass` uses a very tall temporary page rather than an unbounded
+string, not a public programmatic math tree. `doc_fragment` in
+`fplotlib_docclass` (also used by the Markdown adapter in `fplotlib_report`)
+uses a very tall temporary page rather than an unbounded
 flow constraint. These are interface gaps, not promises of complete
 TeX/Typst compatibility.
 

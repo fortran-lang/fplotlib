@@ -23,6 +23,10 @@ All builder operations have a required `status_t` argument, including
 This module never aborts. The implicit `fplotlib` wrappers abort on a failed
 status instead of requiring application code to pass an error argument.
 
+`layout_markdown` and `layout_fragment` are explicit Markdown adapters for
+callers that already own a `layout_context_t`. They parse once and delegate to
+the parsed-tree resolution/layout pipeline; they do not use the implicit report.
+
 See the [complete API inventory](typesetting_api.md) for signatures.
 
 ```{f:module} fplotlib_report

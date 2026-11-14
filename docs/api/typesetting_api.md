@@ -63,12 +63,16 @@ call document%page_frame(1, frame, status)
 The report's `save` and `export` shortcuts use its cache without making an
 extra document copy.
 
-## Frontend tree and document-class policy
+## Frontend parsing, resolution and layout
 
 These are the small report frontend, not the universal positioned-graphics IR.
 An independent frontend can bypass them.
 
 ```text
+fplotlib_report
+  layout_markdown(state, text, document, status)
+  layout_fragment(state, text, width, frame, [font_size], status)
+
 fplotlib_markdown
   md_parse(text, doc, status)
   md_append(text, doc, [parent], status)
@@ -80,19 +84,35 @@ fplotlib_doctree
   doc_add_frame(doc, parent, frame, status) -> node
   doc_add_table(doc, parent, cells, [columns, numeric], status) -> node
   doc_add_meta(doc, key, value, node, status)
+  doc_append_children(doc, parent, source, source_parent, status)
   doc_plain(doc, k, status) -> text
   doc_validate(doc, status)
 
 fplotlib_docclass
   doc_typeset(state, doc, document, status)
-  layout_markdown(state, text, document, status)
-  layout_fragment(state, text, width, frame, [font_size], status)
+  doc_fragment(state, doc, width, frame, [font_size], status)
 ```
+
+The Markdown adapters compose the parser and parsed-tree layout API; the parser
+itself has no layout dependency. `doc_append_children` copies between distinct
+owners, including table/frame resources but not document metadata. Captions
+and link/reference displays are parsed once and their nodes reused.
+
+Before layout, internal `fplotlib_docresolve` prepares an owned tree copy with
+typed settings, selected template parts, numbers and expanded reference nodes.
+The caller's parsed tree is unchanged. The layout pass does not parse MyST
+strings or interpret metadata keys. `fplotlib_doctemplate` supplies one
+definition of each template's defaults, allowed parts, styles and ordering
+for both resolution and layout. These internal records are not a new public IR
+or template-extension API.
 
 The types are `doc_t`, `doc_node_t`, `doc_meta_t`, `doc_table_t` and
 `layout_context_t`. The tree uses `DOC_*` block kinds, `IN_*` inline kinds and
 `REF_AUTO`, `REF_TITLE`, `REF_EQ` reference forms. Reference display text is
-independent of the reference kind. `DOC_MATH` and `DOC_PART` represent display
+independent of the reference kind. The reader stores parsed custom display
+children on reference nodes; programmatic builders can supply inline children
+or literal display text, not an implicitly parsed Markdown string.
+`DOC_MATH` and `DOC_PART` represent display
 equations and template parts; metadata retains `META_*` scalar/container kinds
 and tables may carry per-column `l`/`c`/`r` alignment. There are no raw-document
 or free-form style-attribute nodes. Its validator rejects invalid links and
@@ -100,7 +120,7 @@ cycles without imposing node-allocation order on valid trees.
 
 This is a prototype **frontend tree**, not the positioned graphics IR or an
 implementation of all MyST AST nodes. The [native MyST profile](fplotlib_markdown.md)
-defines the reader, reference and template contracts. `layout_fragment` rejects
+defines the reader, reference and template contracts. Both fragment adapters reject
 document-level metadata, parts and page breaks rather than silently ignoring them.
 
 ## Positioned frames, pages and export

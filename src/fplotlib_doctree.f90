@@ -17,7 +17,7 @@ module fplotlib_doctree
 
     public :: doc_t, doc_node_t, doc_meta_t, doc_table_t
     public :: doc_init, doc_add, doc_add_text, doc_add_meta, doc_plain, doc_add_frame, doc_add_table
-    public :: doc_validate
+    public :: doc_validate, doc_append_children
     public :: DOC_ROOT, DOC_PARA, DOC_HEADING, DOC_LIST, DOC_ITEM, DOC_QUOTE, DOC_CODE, &
               DOC_RULE, DOC_DIV, DOC_PART, DOC_INLINES, DOC_FRAME, DOC_FIGURE, DOC_TABLE, DOC_MATH
     public :: IN_STR, IN_SPACE, IN_BREAK, IN_EMPH, IN_STRONG, IN_CODE, IN_MATH, IN_LINK, IN_REF
@@ -228,6 +228,66 @@ contains
         doc%nodes(k)%num = i
     end function doc_add_table
 
+    ! Copy parsed children without serializing or reparsing their source.
+    ! Source and destination are distinct owners; document metadata is not copied.
+    subroutine doc_append_children(doc, parent, source, source_parent, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, source_parent
+        type(doc_t), intent(in) :: source
+        type(status_t), intent(out) :: status
+        integer :: frame_base
+        call doc_validate(doc, status)
+        if (.not. status%ok()) return
+        call doc_validate(source, status)
+        if (.not. status%ok()) return
+        if (parent < 1 .or. parent > doc%n .or. source_parent < 1 .or. source_parent > source%n) then
+            call status%set(ERROR_ARGUMENT, "doc_append_children: invalid parent")
+            return
+        end if
+        frame_base = 0
+        if (source%ngraphics > 0) then
+            call doc%graphics%import_frame(source%graphics, frame_base, status)
+            if (.not. status%ok()) return
+            doc%ngraphics = doc%ngraphics + source%ngraphics
+        end if
+        call copy_children(doc, parent, source, source_parent, frame_base, status)
+    end subroutine doc_append_children
+
+    recursive subroutine copy_children(doc, parent, source, source_parent, frame_base, status)
+        type(doc_t), intent(inout) :: doc
+        integer, intent(in) :: parent, source_parent, frame_base
+        type(doc_t), intent(in) :: source
+        type(status_t), intent(out) :: status
+        integer :: child, node, old_table, new_table
+        child = source%nodes(source_parent)%first
+        do while (child > 0)
+            new_table = 0
+            if (source%nodes(child)%kind == DOC_TABLE) then
+                old_table = source%nodes(child)%num
+                node = doc_add_table(doc, parent, source%tables(old_table)%cells, source%tables(old_table)%headers, &
+                                     source%tables(old_table)%numeric, status)
+                if (.not. status%ok()) return
+                new_table = doc%nodes(node)%num
+                if (allocated(source%tables(old_table)%alignment)) then
+                    allocate (doc%tables(new_table)%alignment(size(source%tables(old_table)%alignment)))
+                    doc%tables(new_table)%alignment = source%tables(old_table)%alignment
+                end if
+            else
+                node = doc_add(doc, parent, source%nodes(child)%kind, status)
+                if (.not. status%ok()) return
+            end if
+            doc%nodes(node) = source%nodes(child)
+            doc%nodes(node)%first = 0
+            doc%nodes(node)%last = 0
+            doc%nodes(node)%next = 0
+            if (new_table > 0) doc%nodes(node)%num = new_table
+            if (source%nodes(child)%kind == DOC_FRAME) doc%nodes(node)%num = frame_base + source%nodes(child)%num - 1
+            call copy_children(doc, node, source, child, frame_base, status)
+            if (.not. status%ok()) return
+            child = source%nodes(child)%next
+        end do
+    end subroutine copy_children
+
     ! A key of the front matter, its value, and the value as inlines (a
     ! DOC_INLINES node, not in the document, or 0).
     subroutine doc_add_meta(doc, key, value, node, status)
@@ -317,6 +377,7 @@ contains
         type(doc_t), intent(in) :: doc
         type(status_t), intent(out) :: status
         integer :: i, first, last, next, kind, head, count, node, link, j
+        real(dp) :: width, height
         integer, allocatable :: incoming(:), order(:), chain_end(:)
         call check_parent(doc, 0, status)
         if (.not. status%ok()) return
@@ -351,6 +412,19 @@ contains
             if (kind == IN_REF .and. (doc%nodes(i)%num < REF_AUTO .or. doc%nodes(i)%num > REF_EQ)) then
                 call status%set(ERROR_ARGUMENT, "document: invalid reference form")
                 return
+            end if
+            if (kind == DOC_TABLE) then
+                if (doc%nodes(i)%num < 1 .or. doc%nodes(i)%num > doc%ntables) then
+                    call status%set(ERROR_ARGUMENT, "document: invalid table handle")
+                    return
+                end if
+            else if (kind == DOC_FRAME) then
+                if (doc%ngraphics == 0) then
+                    call status%set(ERROR_ARGUMENT, "document: missing frame resources")
+                    return
+                end if
+                call doc%graphics%metrics(width, height, handle=doc%nodes(i)%num, status=status)
+                if (.not. status%ok()) return
             end if
         end do
         ! Validate the traversal graph without restricting node allocation or

@@ -366,7 +366,7 @@ contains
         integer, intent(in), optional :: level
         type(delimiter_t), allocatable :: delimiters(:)
         type(doc_t) :: link_text
-        character(len=:), allocatable :: plain, value, url, role, label
+        character(len=:), allocatable :: plain, value, url, role, label, display_text
         integer :: i, j, k, n, count, node, nd, prev, next, depth, finish, mark
         logical :: left, right, image
         depth = 0
@@ -511,6 +511,11 @@ contains
                                         end if
                                     end if
                                     doc%nodes(node)%id = md_label(label)
+                                    display_text = doc%nodes(node)%text
+                                    if (len(display_text) > 0) then
+                                        call md_inlines(doc, node, display_text, status, depth + 1)
+                                        if (.not. status%ok()) return
+                                    end if
                                 case default
                                     call status%set(ERROR_UNSUPPORTED, "MyST: unsupported role: "//role)
                                 end select
@@ -568,10 +573,9 @@ contains
                                         if (mark > j + 1) then
                                             doc%nodes(node)%text = text(j + 1:mark - 1)
                                         end if
-                                    else
-                                        call md_inlines(doc, node, text(j + 1:mark - 1), status, depth + 1)
-                                        if (.not. status%ok()) return
                                     end if
+                                    call doc_append_children(doc, node, link_text, 1, status)
+                                    if (.not. status%ok()) return
                                     i = finish
                                     cycle
                                 end if

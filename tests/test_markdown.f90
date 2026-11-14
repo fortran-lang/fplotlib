@@ -4,7 +4,9 @@ program test_markdown
     use fplotlib_doctree
     use fplotlib_markdown
     use fplotlib_myst_metadata, only: read_scalar, read_block_metadata
-    use fplotlib_docclass, only: layout_context_t, doc_typeset, layout_fragment
+    use fplotlib_docclass, only: layout_context_t, doc_typeset
+    use fplotlib_report, only: layout_fragment
+    use fplotlib_docresolve, only: resolve_document, resolved_document_t
     use fplotlib_scene, only: paged_document_t, frame_t
     implicit none
     character, parameter :: NL = achar(10), BS = achar(92)
@@ -19,6 +21,8 @@ program test_markdown
 
     failures = 0
     call oracle_cases()
+    call resolution_check()
+    call parsed_copy_check()
     call read_scalar("2026-11-14", text, kind, status)
     call ok()
     call expect(kind == META_STRING .and. text == "2026-11-14", "ISO dates are strings, not decimal numbers")
@@ -191,7 +195,8 @@ program test_markdown
     call expect(index(text, "First abstract paragraph.") > 0 .and. index(text, "Second abstract paragraph.") > 0, &
                 "multiple abstract blocks are retained")
     call parse("---"//NL//"abstract: |"//NL//"  (same)="//NL//"  # Visible"//NL//"---"//NL// &
-               "+++ {""part"": ""abstract""}"//NL//"(same)="//NL//"# Hidden"//NL//"+++"//NL//"See {ref}`same`.")
+               "+++ {""part"": ""abstract""}"//NL//"(same)="//NL//"# Hidden"//NL//NL//"@missing"//NL// &
+               "+++"//NL//"See {ref}`same`.")
     call doc_typeset(context, doc, pages, status)
     call ok()
     call pages%page_frame(1, page, status)
@@ -219,6 +224,90 @@ program test_markdown
     if (failures /= 0) error stop "MyST frontend failed"
 
 contains
+
+    subroutine resolution_check()
+        type(resolved_document_t) :: resolved
+        integer :: heading, paragraph, reference, child, old_n
+        call doc_init(doc, status)
+        call ok()
+        heading = doc_add(doc, 1, DOC_HEADING, status)
+        call ok()
+        doc%nodes(heading)%num = 1
+        doc%nodes(heading)%id = "literal"
+        child = doc_add_text(doc, heading, IN_STR, "*literal*", status)
+        call ok()
+        paragraph = doc_add(doc, 1, DOC_PARA, status)
+        call ok()
+        reference = doc_add(doc, paragraph, IN_REF, status)
+        call ok()
+        doc%nodes(reference)%id = "literal"
+        doc%nodes(reference)%num = REF_TITLE
+        old_n = doc%n
+        call resolve_document(doc, resolved, status)
+        call ok()
+        call expect(doc%n == old_n .and. doc%nodes(reference)%kind == IN_REF, "resolution preserves the source tree")
+        child = resolved%content%nodes(reference)%first
+        call expect(resolved%content%nodes(reference)%kind == DOC_INLINES .and. child > 0, &
+                    "references lower to resolved inline content")
+        call expect(resolved%content%nodes(child)%kind == IN_STR .and. &
+                    resolved%content%nodes(child)%text == "*literal*", "programmatic titles are not parsed as Markdown")
+        call doc_typeset(context, doc, pages, status)
+        call ok()
+        call pages%page_frame(1, page, status)
+        call ok()
+        text = page%source_text(status)
+        call ok()
+        call expect(index(text, "*literal*", back=.true.) > index(text, "*literal*"), &
+                    "literal programmatic title survives reference layout")
+
+        call parse("(heading)="//NL//"# Heading"//NL//NL//"[`{number}`](#heading)")
+        call doc_typeset(context, doc, pages, status)
+        call ok()
+        call pages%page_frame(1, page, status)
+        call ok()
+        text = page%source_text(status)
+        call ok()
+        call expect(index(text, "{number}") > 0, "code-span placeholders do not require a target number")
+
+        call parse("$$ x^2 \label{energy} $$")
+        child = doc%nodes(1)%first
+        before = doc%nodes(child)%text
+        call resolve_document(doc, resolved, status)
+        call ok()
+        call expect(doc%nodes(child)%text == before, "equation preparation does not strip labels from source")
+        call expect(index(resolved%content%nodes(child)%text, "\label") == 0 .and. &
+                    resolved%nodes(child)%number == "1", "layout receives prepared math and its number")
+    end subroutine resolution_check
+
+    subroutine parsed_copy_check()
+        type(doc_t) :: source
+        type(frame_t) :: graphics
+        integer :: child
+        call parse("Existing."//NL//NL//"| C | D |"//NL//"|---|---|"//NL//"| old | cells |")
+        call md_parse("**Copied** text."//NL//NL//"| A | B |"//NL//"|:--|--:|"//NL//"| one | two |", source, status)
+        call ok()
+        call graphics%init(11.0_dp, 13.0_dp, status=status)
+        call ok()
+        child = doc_add_frame(source, 1, graphics, status)
+        call ok()
+        call doc_append_children(doc, 1, source, 1, status)
+        call ok()
+        call doc_init(source, status)
+        call ok()
+        call graphics%set_size(99.0_dp, 99.0_dp, status)
+        call ok()
+        call doc_validate(doc, status)
+        call ok()
+        call expect(doc%ntables == 2 .and. doc%tables(2)%cells(1, 1) == "one", "parsed tables are copied with new handles")
+        call expect(all(doc%tables(2)%alignment == ["l", "r"]), "parsed table alignment survives copying")
+        child = doc%nodes(1)%last
+        call doc%graphics%metrics(w, h, handle=doc%nodes(child)%num, status=status)
+        call ok()
+        call expect(w == 11.0_dp .and. h == 13.0_dp, "copied graphics handles retain owned source dimensions")
+        text = doc_plain(doc, 1, status)
+        call ok()
+        call expect(index(text, "Copied text.") > 0, "parsed inline children survive source reset")
+    end subroutine parsed_copy_check
 
     subroutine bad_layout(metadata, code)
         character(len=*), intent(in) :: metadata

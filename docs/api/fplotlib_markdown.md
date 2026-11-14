@@ -9,6 +9,10 @@ layout belongs to native templates, not a second document command language.
 continue a paragraph, open fence or document part from a previous call.
 Front matter belongs to the first call. `md_parse` and `md_append` are the
 explicit-context reader API; a failed append preserves the previous tree.
+The reader retains parsed caption and reference-display nodes. Semantic
+preparation works on an owned tree copy before layout; layout does not reparse
+Markdown display strings. The explicit Markdown layout adapters are imported
+from `fplotlib_report`.
 
 ## Content
 

@@ -1,20 +1,16 @@
-! Native article, book, letter and invitation templates for the MyST frontend.
-! Template policy owns typography and physical layout, while the document
-! supplies standard metadata, parts and content. References are resolved in
-! a first pass, independently of identifier spelling.
+! Layout of the report frontend's resolved content. Syntax and semantic
+! preparation live outside this module; only typed settings and nodes enter
+! the paragraph, page and frame algorithms below.
 module fplotlib_docclass
     use fplotlib_status
     use fplotlib_style, only: dp
-    use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight, &
                                face_capheight
     use fplotlib_text, only: text_width
     use fplotlib_doctree
     use fplotlib_doctemplate
-    use fplotlib_markdown, only: md_parse
-    use fplotlib_myst_inline, only: md_inlines, md_label
-    use fplotlib_myst_metadata, only: decimal_number, author_name_key
-    use fplotlib_render_checks, only: check_finite
+    use fplotlib_docresolve, only: resolve_document, resolved_document_t, document_settings_t, &
+                                   resolved_node_t, resolved_part_t
     use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
     use fplotlib_render, only: clip_t
     use fplotlib_grid, only: grid_widths, grid_row
@@ -24,9 +20,9 @@ module fplotlib_docclass
 
     public :: layout_context_t
 
-    public :: doc_typeset, layout_markdown, layout_fragment
+    public :: doc_typeset, doc_fragment
 
-    character, parameter :: BS = achar(92), NL = achar(10)
+    character, parameter :: NL = achar(10)
     character(len=2), parameter :: NBSP = achar(194)//achar(160)
 
     ! The style of inline text.
@@ -53,11 +49,6 @@ module fplotlib_docclass
         logical :: indent = .true.
     end type ctx_t
 
-    type :: label_t
-        character(len=:), allocatable :: name, title, number
-        integer :: kind = 0
-    end type label_t
-
     ! The document's settings.
     integer, parameter :: LINK_COL(3) = [26, 95, 180], CODE_COL(3) = [80, 80, 80]
 
@@ -65,25 +56,10 @@ module fplotlib_docclass
         private
         type(typeset_context_t) :: engine
         integer :: graphics_base = 0
-        real(dp) :: BASE = 10.0_dp, LEAD = 1.2_dp
-        real(dp) :: PARINDENT = 15.0_dp
-        type(ts_glue_t) :: PARSKIP_G
-        integer :: DOC_ALIGN = ALIGN_JUSTIFY
-        logical :: NUMBER_SECTIONS = .false., BOOK = .false., NUMBER_EQS = .false.
-        logical :: NUMBER_FIGURES = .true., NUMBER_TABLES = .true.
+        type(document_settings_t) :: settings
         type(template_t) :: template
-        integer :: FIGURE_NO = 0, TABLE_NO = 0, REF_DEPTH = 0
-        ! The title block's inlines: nodes of the front matter, 0 for none.
-        integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
-        integer :: NAUTHOR = 0
-        integer, allocatable :: AUTHORS(:)
-        integer :: TEXT_COL(3) = 0, PAGE_COL(3) = 255
-
-        ! Counters and cross references.
-        integer :: SEC(6) = 0, CHAPTER = 0, EQNO = 0
-        integer :: NLAB = 0
-        type(label_t), allocatable :: label(:)
-        integer, allocatable :: NODE_TARGET(:)
+        type(resolved_node_t), allocatable :: node_info(:)
+        type(resolved_part_t), allocatable :: parts(:)
 
         ! Paragraph indentation and a pending list-item label.
         logical :: NOINDENT = .false.
@@ -110,518 +86,105 @@ contains
         type(doc_t), intent(in) :: doc
         type(paged_document_t), intent(out) :: document
         type(ctx_t) :: ctx
-
+        type(resolved_document_t) :: resolved
         type(status_t), intent(out) :: status
-        call doc_validate(doc, status=status)
+        call resolve_document(doc, resolved, status)
         if (.not. status%ok()) return
-        call ts_reset(state%engine, status=status)
+        call prepare_layout(state, resolved, status)
         if (.not. status%ok()) return
-        call defaults(state, status=status)
-        if (.not. status%ok()) return
-        if (doc%ngraphics > 0) then
-            call ts_import_frame(state%engine, doc%graphics, state%graphics_base, status=status)
-            if (.not. status%ok()) return
-        end if
-        call settings(state, doc, status=status)
-        if (.not. status%ok()) return
-        call validate_parts(state, doc, status)
-        if (.not. status%ok()) return
-        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE, status=status)
-        if (.not. status%ok()) return
-        call ts_set_parskip(state%engine, state%PARSKIP_G)
-        call ts_set_colors(state%engine, state%TEXT_COL, state%PAGE_COL, status=status)
-        if (.not. status%ok()) return
-        call prepare_labels(state, doc, status)
-        if (.not. status%ok()) return
-        state%SEC = 0
-        state%CHAPTER = 0
-        state%EQNO = 0
-        ctx%size = state%BASE
-        ctx%color = state%TEXT_COL
-        ctx%align = state%DOC_ALIGN
-        call template_document(state, doc, ctx, status)
+        ctx%size = state%settings%BASE
+        ctx%color = state%settings%TEXT_COL
+        ctx%align = state%settings%DOC_ALIGN
+        call template_document(state, resolved%content, ctx, status)
         if (.not. status%ok()) return
         call ts_finish(state%engine, document, status=status)
         if (.not. status%ok()) return
     end subroutine doc_typeset
 
-    subroutine layout_markdown(state, text, document, status)
+    subroutine doc_fragment(state, doc, width, frame, font_size, status)
         type(layout_context_t), intent(inout) :: state
-        character(len=*), intent(in) :: text
-        type(paged_document_t), intent(out) :: document
-        type(doc_t) :: tree
-        type(status_t), intent(out) :: status
-        call md_parse(text, tree, status=status)
-        if (.not. status%ok()) return
-        call doc_typeset(state, tree, document, status=status)
-        if (.not. status%ok()) return
-    end subroutine layout_markdown
-
-    ! A width-constrained fragment for an annotation or another layout engine.
-    ! It uses the same block/inline layout without title or page furniture.
-    subroutine layout_fragment(state, text, width, frame, font_size, status)
-        type(layout_context_t), intent(inout) :: state
-        character(len=*), intent(in) :: text
+        type(doc_t), intent(in) :: doc
         real(dp), intent(in) :: width
         type(frame_t), intent(out) :: frame
         real(dp), intent(in), optional :: font_size
-        type(doc_t) :: tree
+        type(status_t), intent(out) :: status
+        type(resolved_document_t) :: resolved
         type(ctx_t) :: ctx
         integer :: i
-        type(status_t), intent(out) :: status
         if (width <= 0.0_dp) then
-            call status%set(ERROR_ARGUMENT, "layout_fragment: width must be positive")
+            call status%set(ERROR_ARGUMENT, "doc_fragment: width must be positive")
             return
         end if
-        call md_parse(text, tree, status=status)
+        call doc_validate(doc, status)
         if (.not. status%ok()) return
-        if (tree%nmeta > 0) then
-            call status%set(ERROR_UNSUPPORTED, "layout_fragment: document metadata requires a report")
+        if (doc%nmeta > 0) then
+            call status%set(ERROR_UNSUPPORTED, "doc_fragment: document metadata requires a report")
             return
         end if
-        do i = 1, tree%n
-            if (tree%nodes(i)%kind == DOC_PART .or. tree%nodes(i)%break_before /= 0) then
-                call status%set(ERROR_UNSUPPORTED, "layout_fragment: document parts and page breaks require a report")
+        do i = 1, doc%n
+            if (doc%nodes(i)%kind == DOC_PART .or. doc%nodes(i)%break_before /= 0) then
+                call status%set(ERROR_UNSUPPORTED, "doc_fragment: document parts and page breaks require a report")
                 return
             end if
         end do
-        call ts_reset(state%engine, status=status)
+        call resolve_document(doc, resolved, status)
         if (.not. status%ok()) return
-        call defaults(state, status=status)
-        if (.not. status%ok()) return
-        if (present(font_size)) state%BASE = font_size
-        if (state%BASE <= 0.0_dp) then
-            call status%set(ERROR_ARGUMENT, "layout_fragment: font size must be positive")
+        if (present(font_size)) resolved%settings%BASE = font_size
+        if (resolved%settings%BASE <= 0.0_dp) then
+            call status%set(ERROR_ARGUMENT, "doc_fragment: font size must be positive")
             return
         end if
-        call ts_set_page(state%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false., status=status)
+        resolved%settings%page_width = width
+        resolved%settings%page_height = 1.0e6_dp
+        resolved%settings%margins = 0.0_dp
+        resolved%settings%page_numbers = .false.
+        resolved%settings%PARINDENT = 0.0_dp
+        call prepare_layout(state, resolved, status)
         if (.not. status%ok()) return
-        call ts_set_font(state%engine, state%BASE, state%LEAD*state%BASE, status=status)
-        if (.not. status%ok()) return
-        call ts_set_parskip(state%engine, state%PARSKIP_G)
-        state%PARINDENT = 0.0_dp
-        ctx%size = state%BASE
+        ctx%size = state%settings%BASE
         ctx%indent = .false.
-        call prepare_labels(state, tree, status)
+        call set_blocks(state, resolved%content, 1, ctx, status)
         if (.not. status%ok()) return
-        state%SEC = 0
-        state%CHAPTER = 0
-        state%EQNO = 0
-        call set_blocks(state, tree, 1, ctx, status=status)
-        if (.not. status%ok()) return
-        call ts_finish_frame(state%engine, frame, status=status)
-        if (.not. status%ok()) return
-    end subroutine layout_fragment
+        call ts_finish_frame(state%engine, frame, status)
+    end subroutine doc_fragment
 
-    subroutine defaults(state, status)
+    subroutine reset_workspace(state)
         type(layout_context_t), intent(inout) :: state
-        type(status_t), intent(out) :: status
-        call native_template("article", state%template, status)
-        if (.not. status%ok()) return
-        call template_style(state)
-        state%NUMBER_SECTIONS = .false.
-        state%NUMBER_EQS = .true.
-        state%NUMBER_FIGURES = .true.
-        state%NUMBER_TABLES = .true.
-        state%FIGURE_NO = 0
-        state%TABLE_NO = 0
-        state%REF_DEPTH = 0
-        state%TITLE = 0
-        state%SUBTITLE = 0
-        state%NAUTHOR = 0
-        if (.not. allocated(state%AUTHORS)) allocate (state%AUTHORS(16))
-        state%DATE = 0
-        state%ABSTRACT = 0
-        state%NLAB = 0
-        if (.not. allocated(state%label)) allocate (state%label(16))
-        if (allocated(state%NODE_TARGET)) deallocate (state%NODE_TARGET)
-        state%SEC = 0
-        state%CHAPTER = 0
-        state%EQNO = 0
         state%NOINDENT = .false.
         state%graphics_base = 0
         state%PENDING_LABEL = ""
         state%W = ""
         state%SPACE = .false.
-        call ts_set_page(state%engine, state%template%body%page_width, state%template%body%page_height, &
-                         state%template%body%margins(1), state%template%body%margins(2), &
-                         state%template%body%margins(3), state%template%body%margins(4), status=status)
-        if (.not. status%ok()) return
-    end subroutine defaults
+    end subroutine reset_workspace
 
-    subroutine template_style(state)
+    subroutine prepare_layout(state, resolved, status)
         type(layout_context_t), intent(inout) :: state
-        state%BASE = state%template%body%BASE
-        state%LEAD = state%template%body%LEAD
-        state%PARINDENT = state%template%body%PARINDENT
-        state%PARSKIP_G = state%template%body%PARSKIP_G
-        state%DOC_ALIGN = state%template%body%DOC_ALIGN
-        state%TEXT_COL = state%template%body%TEXT_COL
-        state%PAGE_COL = state%template%body%PAGE_COL
-        state%BOOK = state%template%body%BOOK
-    end subroutine template_style
-
-    ! Standard MyST metadata plus declared options of one native print template.
-    subroutine settings(state, doc, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_t), intent(in) :: doc
-        integer :: i, j
-        character(len=:), allocatable :: key, val, name
-        real(dp) :: pw, ph, margins(4), m
-        logical :: numbers, flag, have_margin(4), have_indent, have_parskip
-        integer, allocatable :: grown(:)
+        type(resolved_document_t), intent(in) :: resolved
         type(status_t), intent(out) :: status
-
-        name = state%template%name
-        do i = 1, doc%nmeta
-            if (doc%meta(i)%key == "exports.1.template") then
-                if (doc%meta(i)%kind /= META_STRING) then
-                    call status%set(ERROR_ARGUMENT, "MyST: template must be a string")
-                    return
-                end if
-                if (len(doc%meta(i)%value) > len(state%template%name)) then
-                    call status%set(ERROR_UNSUPPORTED, "MyST: unsupported native template")
-                    return
-                end if
-                name = doc%meta(i)%value
-            end if
-        end do
-        call native_template(name, state%template, status)
+        call ts_reset(state%engine, status)
         if (.not. status%ok()) return
-        call template_style(state)
-        pw = state%template%body%page_width
-        ph = state%template%body%page_height
-        margins = state%template%body%margins
-        numbers = state%template%body%page_numbers
-        ! Mapping order does not affect relative lengths.
-        do i = 1, doc%nmeta
-            if (doc%meta(i)%key /= "exports.1.fontsize") cycle
-            call read_length(doc%meta(i)%value, state%BASE, m, status)
+        call reset_workspace(state)
+        state%settings = resolved%settings
+        state%template = resolved%template
+        if (allocated(state%node_info)) deallocate (state%node_info)
+        if (allocated(state%parts)) deallocate (state%parts)
+        allocate (state%node_info(size(resolved%nodes)), state%parts(size(resolved%parts)))
+        state%node_info = resolved%nodes
+        state%parts = resolved%parts
+        if (resolved%content%ngraphics > 0) then
+            call ts_import_frame(state%engine, resolved%content%graphics, state%graphics_base, status)
             if (.not. status%ok()) return
-            if (m <= 0.0_dp) then
-                call status%set(ERROR_ARGUMENT, "MyST: fontsize must be positive")
-                return
-            end if
-            state%BASE = m
-        end do
-        have_margin = .false.
-        have_indent = .false.
-        have_parskip = .false.
-        m = -1.0_dp
-        do i = 1, doc%nmeta
-            key = doc%meta(i)%key
-            val = doc%meta(i)%value
-            if (key == "exports" .or. key == "exports.1") then
-                if (key == "exports" .and. doc%meta(i)%kind /= META_SEQUENCE) then
-                    call status%set(ERROR_UNSUPPORTED, "MyST: exports must be one block-style export entry")
-                    return
-                end if
-                if (key == "exports.1" .and. doc%meta(i)%kind /= META_MAP) then
-                    call status%set(ERROR_ARGUMENT, "MyST: a native export entry must be a mapping")
-                    return
-                end if
-                cycle
-            end if
-            if (starts(key, "exports.")) then
-                if (.not. starts(key, "exports.1.")) then
-                    call status%set(ERROR_UNSUPPORTED, "MyST: the native renderer accepts one print export profile")
-                    return
-                end if
-                key = key(11:)
-                select case (key)
-                case ("template", "fontsize", "id")
-                case ("output")
-                    call status%set(ERROR_UNSUPPORTED, "MyST: select the output filename with save(), not front matter")
-                    return
-                case ("format")
-                    if (val /= "pdf") then
-                        call status%set(ERROR_UNSUPPORTED, "MyST: the native print profile uses format: pdf")
-                        return
-                    end if
-                case ("paper")
-                    call native_paper(val, pw, ph, status)
-                case ("margin")
-                    call read_length(val, state%BASE, m, status)
-                case ("margin-left", "margin-right", "margin-top", "margin-bottom")
-                    j = 1
-                    if (key == "margin-right") j = 2
-                    if (key == "margin-top") j = 3
-                    if (key == "margin-bottom") j = 4
-                    call read_length(val, state%BASE, margins(j), status)
-                    have_margin(j) = .true.
-                case ("parskip")
-                    call read_length(val, state%BASE, state%PARSKIP_G%w, status)
-                    state%PARSKIP_G%st = 0.2_dp*state%PARSKIP_G%w
-                    have_parskip = .true.
-                case ("indent")
-                    have_indent = .true.
-                    if (doc%meta(i)%kind == META_BOOL) then
-                        state%PARINDENT = merge(1.5_dp*state%BASE, 0.0_dp, val == "true")
-                    else
-                        call read_length(val, state%BASE, state%PARINDENT, status)
-                    end if
-                case ("linestretch")
-                    if (.not. decimal_number(val)) then
-                        call status%set(ERROR_ARGUMENT, "MyST: linestretch must be a number")
-                        return
-                    end if
-                    read (val, *, iostat=j) state%LEAD
-                    if (j /= 0) then
-                        call status%set(ERROR_ARGUMENT, "MyST: linestretch must be a number")
-                        return
-                    end if
-                    call check_finite([state%LEAD], status)
-                    if (.not. status%ok()) return
-                    if (state%LEAD <= 0.0_dp) then
-                        call status%set(ERROR_ARGUMENT, "MyST: linestretch must be positive")
-                        return
-                    end if
-                    state%LEAD = 1.2_dp*state%LEAD
-                case ("align")
-                    select case (val)
-                    case ("left"); state%DOC_ALIGN = ALIGN_LEFT
-                    case ("right"); state%DOC_ALIGN = ALIGN_RIGHT
-                    case ("center"); state%DOC_ALIGN = ALIGN_CENTER
-                    case ("justify"); state%DOC_ALIGN = ALIGN_JUSTIFY
-                    case default
-                        call status%set(ERROR_ARGUMENT, "MyST: invalid template alignment")
-                        return
-                    end select
-                case ("pagenumbers")
-                    call metadata_boolean(doc%meta(i), numbers, status)
-                case ("color")
-                    call native_color(val, state%TEXT_COL, status)
-                case ("pagecolor")
-                    call native_color(val, state%PAGE_COL, status)
-                case default
-                    call status%set(ERROR_UNSUPPORTED, "MyST: unsupported native template option: "//key)
-                    return
-                end select
-                if (.not. status%ok()) return
-                cycle
-            end if
-            select case (key)
-            case ("title", "subtitle", "date", "abstract")
-                if (doc%meta(i)%kind /= META_STRING .and. doc%meta(i)%kind /= META_NULL) then
-                    call status%set(ERROR_ARGUMENT, "MyST: "//key//" must be a string")
-                    return
-                end if
-            end select
-            select case (key)
-            case ("title")
-                state%TITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
-            case ("subtitle")
-                state%SUBTITLE = merge(doc%meta(i)%node, 0, len(val) > 0)
-            case ("date")
-                state%DATE = merge(doc%meta(i)%node, 0, len(val) > 0)
-            case ("abstract")
-                state%ABSTRACT = merge(doc%meta(i)%node, 0, len(val) > 0)
-            case ("numbering")
-                if (doc%meta(i)%kind == META_MAP) cycle
-                call metadata_boolean(doc%meta(i), flag, status)
-                if (.not. status%ok()) return
-                state%NUMBER_SECTIONS = flag
-                state%NUMBER_EQS = flag
-                state%NUMBER_FIGURES = flag
-                state%NUMBER_TABLES = flag
-            case ("numbering.headings", "numbering.equations", "numbering.figures", "numbering.tables")
-                call metadata_boolean(doc%meta(i), flag, status)
-                if (.not. status%ok()) return
-                select case (key)
-                case ("numbering.headings"); state%NUMBER_SECTIONS = flag
-                case ("numbering.equations"); state%NUMBER_EQS = flag
-                case ("numbering.figures"); state%NUMBER_FIGURES = flag
-                case ("numbering.tables"); state%NUMBER_TABLES = flag
-                end select
-            case ("parts")
-                if (doc%meta(i)%kind /= META_MAP) then
-                    call status%set(ERROR_ARGUMENT, "MyST: parts must be a mapping")
-                    return
-                end if
-            case default
-                if (starts(key, "parts.")) then
-                    if (doc%meta(i)%kind /= META_STRING) then
-                        call status%set(ERROR_ARGUMENT, "MyST: native parts must contain Markdown strings")
-                        return
-                    end if
-                else if (key == "authors" .or. starts(key, "authors.")) then
-                    if (.not. author_name_key(key)) then
-                        call status%set(ERROR_UNSUPPORTED, "MyST: native authors support names only")
-                        return
-                    end if
-                    if (key == "authors" .and. doc%meta(i)%kind == META_MAP) then
-                        call status%set(ERROR_ARGUMENT, "MyST: use a sequence for author mappings")
-                        return
-                    end if
-                    if (doc%meta(i)%node > 0) then
-                        if (state%NAUTHOR == size(state%AUTHORS)) then
-                            allocate (grown(2*size(state%AUTHORS)))
-                            grown(1:state%NAUTHOR) = state%AUTHORS(1:state%NAUTHOR)
-                            call move_alloc(grown, state%AUTHORS)
-                        end if
-                        state%NAUTHOR = state%NAUTHOR + 1
-                        state%AUTHORS(state%NAUTHOR) = doc%meta(i)%node
-                    else if (doc%meta(i)%kind /= META_MAP .and. doc%meta(i)%kind /= META_SEQUENCE .and. &
-                             doc%meta(i)%kind /= META_NULL) then
-                        call status%set(ERROR_UNSUPPORTED, "MyST: native authors support names only")
-                        return
-                    end if
-                else
-                    call status%set(ERROR_UNSUPPORTED, "MyST: unsupported native front matter key: "//key)
-                    return
-                end if
-            end select
-        end do
-        if (have_parskip .and. .not. have_indent) state%PARINDENT = 0.0_dp
-        if (state%PARINDENT < 0.0_dp) state%PARINDENT = 1.5_dp*state%BASE
-        if (m >= 0.0_dp) then
-            do j = 1, 4
-                if (.not. have_margin(j)) margins(j) = m
-            end do
         end if
-        call ts_set_page(state%engine, pw, ph, margins(1), margins(2), margins(3), margins(4), &
-                         numbers, state%BOOK, state%BOOK, status=status)
+        call ts_set_page(state%engine, state%settings%page_width, state%settings%page_height, &
+                         state%settings%margins(1), state%settings%margins(2), state%settings%margins(3), &
+                         state%settings%margins(4), state%settings%page_numbers, state%settings%BOOK, &
+                         state%settings%BOOK, status)
         if (.not. status%ok()) return
-    end subroutine settings
-
-    subroutine metadata_boolean(meta, value, status)
-        type(doc_meta_t), intent(in) :: meta
-        logical, intent(out) :: value
-        type(status_t), intent(out) :: status
-        value = .false.
-        if (meta%kind /= META_BOOL) then
-            call status%set(ERROR_ARGUMENT, "MyST: "//meta%key//" must be a boolean")
-            return
-        end if
-        value = meta%value == "true"
-    end subroutine metadata_boolean
-
-    subroutine read_length(text, size, value, status)
-        character(len=*), intent(in) :: text
-        real(dp), intent(in) :: size
-        real(dp), intent(out) :: value
-        type(status_t), intent(out) :: status
-        character(len=:), allocatable :: t, unit
-        integer :: n, ios
-        t = trim(adjustl(text))
-        unit = "bp"
-        n = len(t)
-        if (n >= 2) then
-            select case (t(n - 1:n))
-            case ("bp", "pt", "in", "cm", "mm", "em", "ex")
-                unit = t(n - 1:n)
-                t = trim(t(1:n - 2))
-            end select
-        end if
-        if (.not. decimal_number(t)) then
-            call status%set(ERROR_ARGUMENT, "MyST: invalid native-template length: "//text)
-            return
-        end if
-        read (t, *, iostat=ios) value
-        if (ios /= 0) then
-            call status%set(ERROR_ARGUMENT, "MyST: invalid native-template length: "//text)
-            return
-        end if
-        select case (unit)
-        case ("in"); value = value*72.0_dp
-        case ("cm"); value = value*72.0_dp/2.54_dp
-        case ("mm"); value = value*72.0_dp/25.4_dp
-        case ("em"); value = value*size
-        case ("ex"); value = value*size*face_xheight(FACE_REGULAR)
-        end select
-        call check_finite([value], status)
+        call ts_set_font(state%engine, state%settings%BASE, state%settings%LEAD*state%settings%BASE, status)
         if (.not. status%ok()) return
-        if (value < 0.0_dp) call status%set(ERROR_ARGUMENT, "MyST: native-template lengths must be nonnegative")
-    end subroutine read_length
-
-    subroutine native_paper(text, width, height, status)
-        character(len=*), intent(in) :: text
-        real(dp), intent(out) :: width, height
-        type(status_t), intent(out) :: status
-        integer :: split
-        select case (text)
-        case ("a4"); width = 595.2756_dp; height = 841.8898_dp
-        case ("a5"); width = 419.5276_dp; height = 595.2756_dp
-        case ("a6"); width = 297.6378_dp; height = 419.5276_dp
-        case ("letter"); width = 612.0_dp; height = 792.0_dp
-        case ("legal"); width = 612.0_dp; height = 1008.0_dp
-        case ("b5"); width = 498.8976_dp; height = 708.6614_dp
-        case default
-            split = index(text, "x")
-            if (split == 0) then
-                call status%set(ERROR_ARGUMENT, "MyST: unknown native paper size: "//text)
-                return
-            end if
-            call read_length(text(1:split - 1), 10.0_dp, width, status)
-            if (.not. status%ok()) return
-            call read_length(text(split + 1:), 10.0_dp, height, status)
-        end select
-    end subroutine native_paper
-
-    subroutine native_color(text, rgb, status)
-        character(len=*), intent(in) :: text
-        integer, intent(out) :: rgb(3)
-        type(status_t), intent(out) :: status
-        character(len=:), allocatable :: t
-        integer :: value, ios
-        t = trim(text)
-        if (len(t) == 0) then
-            call status%set(ERROR_ARGUMENT, "MyST: empty color; quote YAML hex colors")
-            return
-        end if
-        if (t(1:1) /= "#") t = trim(color_from_name(t))
-        if (len(t) == 4) t = "#"//t(2:2)//t(2:2)//t(3:3)//t(3:3)//t(4:4)//t(4:4)
-        if (len(t) /= 7) then
-            call status%set(ERROR_ARGUMENT, "MyST: unsupported color: "//text)
-            return
-        end if
-        if (verify(t(2:), "0123456789abcdefABCDEF") /= 0) then
-            call status%set(ERROR_ARGUMENT, "MyST: invalid hex color: "//text)
-            return
-        end if
-        read (t(2:), "(z6)", iostat=ios) value
-        if (ios /= 0) then
-            call status%set(ERROR_ARGUMENT, "MyST: invalid hex color: "//text)
-            return
-        end if
-        rgb = [ishft(value, -16), iand(ishft(value, -8), 255), iand(value, 255)]
-    end subroutine native_color
-
-    subroutine validate_parts(state, doc, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_t), intent(in) :: doc
-        type(status_t), intent(out) :: status
-        integer :: i, j, k, part
-        integer, allocatable :: nodes(:)
-        do i = 1, doc%nmeta
-            k = doc%meta(i)%node
-            if (k == 0) cycle
-            if (doc%nodes(k)%kind /= DOC_PART) cycle
-            do j = 1, i - 1
-                if (doc%meta(j)%node == 0) cycle
-                if (doc%nodes(doc%meta(j)%node)%kind /= DOC_PART) cycle
-                if (doc%nodes(doc%meta(j)%node)%part == doc%nodes(k)%part) then
-                    call status%set(ERROR_ARGUMENT, "MyST: duplicate front-matter part: "//doc%nodes(k)%part)
-                    return
-                end if
-            end do
-        end do
-        do i = 1, doc%n
-            if (doc%nodes(i)%kind /= DOC_PART) cycle
-            if (template_part_index(state%template, doc%nodes(i)%part) == 0) then
-                call status%set(ERROR_UNSUPPORTED, "MyST: native template "//trim(state%template%name)// &
-                                " does not declare part "//doc%nodes(i)%part)
-                return
-            end if
-        end do
-        state%ABSTRACT = 0
-        do i = 1, size(state%template%steps)
-            if (state%template%steps(i)%kind /= STEP_TITLE_BLOCK) cycle
-            part = state%template%steps(i)%part
-            call part_nodes(doc, trim(state%template%parts(part)%name), nodes)
-            if (size(nodes) > 0) state%ABSTRACT = nodes(1)
-        end do
-    end subroutine validate_parts
+        call ts_set_parskip(state%engine, state%settings%PARSKIP_G)
+        call ts_set_colors(state%engine, state%settings%TEXT_COL, state%settings%PAGE_COL, status)
+    end subroutine prepare_layout
 
     recursive subroutine template_document(state, doc, ctx, status)
         type(layout_context_t), intent(inout) :: state
@@ -641,13 +204,13 @@ contains
             case (STEP_TITLE_BLOCK)
                 call title_block(state, doc, ctx, part, status)
             case (STEP_TITLE)
-                if (state%TITLE == 0) cycle
+                if (state%settings%TITLE == 0) cycle
                 title_context = part_context(state%template%title, ctx)
                 title_style = base_style(title_context)
                 call ts_begin_par(state%engine, title_context%align, 0.0_dp, size=title_style%size, &
-                                  leading=state%LEAD*title_style%size, status=status)
+                                  leading=state%settings%LEAD*title_style%size, status=status)
                 if (.not. status%ok()) return
-                call set_inlines(state, doc, state%TITLE, title_style, status)
+                call set_inlines(state, doc, state%settings%TITLE, title_style, status)
                 if (.not. status%ok()) return
                 call ts_end_par(state%engine, status)
             case (STEP_FILL)
@@ -679,20 +242,18 @@ contains
         type(ctx_t) :: sub
         type(part_style_t) :: style
         integer :: i, node
-        integer, allocatable :: parts(:)
         real(dp) :: before, after
-        call part_nodes(doc, trim(state%template%parts(part)%name), parts)
-        if (size(parts) == 0) return
+        if (size(state%parts(part)%nodes) == 0) return
         style = state%template%parts(part)%style
         sub = part_context(style, ctx)
-        before = style%before_fixed + style%before_base*state%BASE
-        after = style%after_fixed + style%after_base*state%BASE
+        before = style%before_fixed + style%before_base*state%settings%BASE
+        after = style%after_fixed + style%after_base*state%settings%BASE
         if (before > 0.0_dp) then
             call ts_vskip(state%engine, ts_glue_t(before, 0.0_dp, 0.0_dp, 0, 0), status)
             if (.not. status%ok()) return
         end if
-        do i = 1, size(parts)
-            node = parts(i)
+        do i = 1, size(state%parts(part)%nodes)
+            node = state%parts(part)%nodes(i)
             call block_page_break(state, doc%nodes(node)%break_before, status)
             if (.not. status%ok()) return
             call set_blocks(state, doc, node, sub, status)
@@ -700,38 +261,6 @@ contains
         end do
         if (after > 0.0_dp) call ts_vskip(state%engine, ts_glue_t(after, 0.0_dp, 0.0_dp, 0, 0), status)
     end subroutine named_part
-
-    subroutine part_nodes(doc, name, parts)
-        type(doc_t), intent(in) :: doc
-        character(len=*), intent(in) :: name
-        integer, allocatable, intent(out) :: parts(:)
-        integer :: i, node, n
-        do i = 1, doc%nmeta
-            node = doc%meta(i)%node
-            if (node == 0) cycle
-            if (doc%nodes(node)%kind /= DOC_PART) cycle
-            if (doc%nodes(node)%part /= name) cycle
-            allocate (parts(1))
-            parts(1) = node
-            return
-        end do
-        n = 0
-        node = doc%nodes(1)%first
-        do while (node > 0)
-            if (doc%nodes(node)%kind == DOC_PART .and. doc%nodes(node)%part == name) n = n + 1
-            node = doc%nodes(node)%next
-        end do
-        allocate (parts(n))
-        i = 0
-        node = doc%nodes(1)%first
-        do while (node > 0)
-            if (doc%nodes(node)%kind == DOC_PART .and. doc%nodes(node)%part == name) then
-                i = i + 1
-                parts(i) = node
-            end if
-            node = doc%nodes(node)%next
-        end do
-    end subroutine part_nodes
 
     ! LaTeX's \maketitle and abstract, for the article class.
     subroutine title_block(state, doc, ctx, abstract_part, status)
@@ -742,63 +271,63 @@ contains
         type(style_t) :: st
         integer :: i
         type(status_t), intent(out) :: status
-        if (state%TITLE == 0) then
+        if (state%settings%TITLE == 0) then
             call abstract_block(state, doc, ctx, abstract_part, status)
             return
         end if
         st = base_style(ctx)
-        call ts_vkeep(state%engine, ts_glue_t(2.0_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_vkeep(state%engine, ts_glue_t(2.0_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
         if (.not. status%ok()) return
-        st%size = 1.728_dp*state%BASE
-        call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*state%BASE/10.0_dp, &
+        st%size = 1.728_dp*state%settings%BASE
+        call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*state%settings%BASE/10.0_dp, &
                           skip=.false., status=status)
         if (.not. status%ok()) return
-        call set_inlines(state, doc, state%TITLE, st, status=status)
+        call set_inlines(state, doc, state%settings%TITLE, st, status=status)
         if (.not. status%ok()) return
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
-        if (state%SUBTITLE > 0) then
-            st%size = 1.2_dp*state%BASE
-            call ts_vskip(state%engine, ts_glue_t(0.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (state%settings%SUBTITLE > 0) then
+            st%size = 1.2_dp*state%settings%BASE
+            call ts_vskip(state%engine, ts_glue_t(0.5_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
             if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+                              leading=14.0_dp*state%settings%BASE/10.0_dp, skip=.false., status=status)
             if (.not. status%ok()) return
-            call set_inlines(state, doc, state%SUBTITLE, st, status=status)
+            call set_inlines(state, doc, state%settings%SUBTITLE, st, status=status)
             if (.not. status%ok()) return
             call ts_end_par(state%engine, status=status)
             if (.not. status%ok()) return
         end if
-        st%size = 1.2_dp*state%BASE
-        if (state%NAUTHOR > 0) then
-            call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        st%size = 1.2_dp*state%settings%BASE
+        if (state%settings%NAUTHOR > 0) then
+            call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
             if (.not. status%ok()) return
-            do i = 1, state%NAUTHOR
+            do i = 1, state%settings%NAUTHOR
                 call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                  leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+                                  leading=14.0_dp*state%settings%BASE/10.0_dp, skip=.false., status=status)
                 if (.not. status%ok()) return
-                call set_inlines(state, doc, state%AUTHORS(i), st, status=status)
+                call set_inlines(state, doc, state%settings%AUTHORS(i), st, status=status)
                 if (.not. status%ok()) return
                 call ts_end_par(state%engine, status=status)
                 if (.not. status%ok()) return
             end do
         end if
-        if (state%DATE > 0) then
-            call ts_vskip(state%engine, ts_glue_t(state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        if (state%settings%DATE > 0) then
+            call ts_vskip(state%engine, ts_glue_t(state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
             if (.not. status%ok()) return
             call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*state%BASE/10.0_dp, skip=.false., status=status)
+                              leading=14.0_dp*state%settings%BASE/10.0_dp, skip=.false., status=status)
             if (.not. status%ok()) return
-            call set_inlines(state, doc, state%DATE, st, status=status)
+            call set_inlines(state, doc, state%settings%DATE, st, status=status)
             if (.not. status%ok()) return
             call ts_end_par(state%engine, status=status)
             if (.not. status%ok()) return
         end if
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
         if (.not. status%ok()) return
-        call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_vskip(state%engine, ts_glue_t(1.5_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         call abstract_block(state, doc, ctx, abstract_part, status)
         if (.not. status%ok()) return
@@ -814,34 +343,34 @@ contains
         type(style_t) :: heading_style
         type(ctx_t) :: sub
         real(dp) :: saved_indent, saved_leading
-        if (state%ABSTRACT == 0) return
+        if (state%settings%ABSTRACT == 0) return
         heading_style = base_style(ctx)
-        heading_style%size = 0.9_dp*state%BASE
+        heading_style%size = 0.9_dp*state%settings%BASE
         heading_style%bold = .true.
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status)
         if (.not. status%ok()) return
         call ts_begin_par(state%engine, ALIGN_CENTER, 0.0_dp, size=heading_style%size, &
-                          leading=1.1_dp*state%BASE, skip=.false., status=status)
+                          leading=1.1_dp*state%settings%BASE, skip=.false., status=status)
         if (.not. status%ok()) return
         call set_words(state, "Abstract", heading_style, status)
         if (.not. status%ok()) return
         call ts_end_par(state%engine, status)
         if (.not. status%ok()) return
-        call ts_vskip(state%engine, ts_glue_t(0.05_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status)
+        call ts_vskip(state%engine, ts_glue_t(0.05_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status)
         if (.not. status%ok()) return
         sub = ctx
-        sub%size = 0.9_dp*state%BASE
-        sub%left = 2.5_dp*state%BASE
+        sub%size = 0.9_dp*state%settings%BASE
+        sub%left = 2.5_dp*state%settings%BASE
         sub%right = sub%left
         sub%align = ALIGN_JUSTIFY
         sub%indent = .true.
-        saved_indent = state%PARINDENT
-        saved_leading = state%LEAD
-        state%PARINDENT = 1.5_dp*sub%size
-        state%LEAD = 11.0_dp/9.0_dp
+        saved_indent = state%settings%PARINDENT
+        saved_leading = state%settings%LEAD
+        state%settings%PARINDENT = 1.5_dp*sub%size
+        state%settings%LEAD = 11.0_dp/9.0_dp
         call named_part(state, doc, part, sub, status)
-        state%PARINDENT = saved_indent
-        state%LEAD = saved_leading
+        state%settings%PARINDENT = saved_indent
+        state%settings%LEAD = saved_leading
         if (.not. status%ok()) return
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status)
     end subroutine abstract_block
@@ -906,7 +435,7 @@ contains
                                   size=ctx%size, skip=.false., status=status)
                 if (.not. status%ok()) return
                 tag = target_number(state, c)
-                call ts_math(state%engine, strip_math_labels(doc%nodes(c)%text), ctx%size, ctx%color, &
+                call ts_math(state%engine, doc%nodes(c)%text, ctx%size, ctx%color, &
                              display=.true., tag=tag, status=status)
                 if (.not. status%ok()) return
                 call ts_end_par(state%engine, status)
@@ -961,23 +490,11 @@ contains
         integer :: first
         call ts_reset(nested%engine, status=status)
         if (.not. status%ok()) return
-        call defaults(nested, status=status)
-        if (.not. status%ok()) return
-        nested%BASE = state%BASE
-        nested%LEAD = state%LEAD
-        nested%PARINDENT = 0.0_dp
-        nested%NUMBER_EQS = state%NUMBER_EQS
-        nested%BOOK = state%BOOK
-        nested%CHAPTER = state%CHAPTER
-        nested%EQNO = state%EQNO
-        nested%NLAB = state%NLAB
-        deallocate (nested%label)
-        allocate (nested%label(max(16, state%NLAB)))
-        nested%label(1:state%NLAB) = state%label(1:state%NLAB)
-        if (allocated(state%NODE_TARGET)) then
-            allocate (nested%NODE_TARGET(size(state%NODE_TARGET)))
-            nested%NODE_TARGET = state%NODE_TARGET
-        end if
+        call reset_workspace(nested)
+        nested%settings = state%settings
+        nested%settings%PARINDENT = 0.0_dp
+        allocate (nested%node_info(size(state%node_info)))
+        nested%node_info = state%node_info
         sub = ctx
         sub%left = 0.0_dp
         sub%right = 0.0_dp
@@ -986,7 +503,7 @@ contains
         sub%size = 0.9_dp*ctx%size
         call ts_set_page(nested%engine, width, 1.0e6_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, numbers=.false., status=status)
         if (.not. status%ok()) return
-        call ts_set_font(nested%engine, sub%size, nested%LEAD*sub%size, status=status)
+        call ts_set_font(nested%engine, sub%size, nested%settings%LEAD*sub%size, status=status)
         if (.not. status%ok()) return
         call ts_set_parskip(nested%engine, ts_glue_t())
         first = doc%nodes(node)%first
@@ -1003,7 +520,6 @@ contains
         if (.not. status%ok()) return
         call ts_finish_frame(nested%engine, frame, status=status)
         if (.not. status%ok()) return
-        state%EQNO = nested%EQNO
     end subroutine caption_frame
 
     recursive subroutine figure_block(state, doc, node, ctx, status)
@@ -1050,7 +566,7 @@ contains
             if (.not. status%ok()) return
             call caption%metrics(cw, ch, status=status)
             if (.not. status%ok()) return
-            gap = 0.5_dp*state%BASE
+            gap = 0.5_dp*state%settings%BASE
         end if
         if (ch + gap >= ts_vsize(state%engine)) then
             call status%set(ERROR_LAYOUT, "document figure: caption exceeds page height")
@@ -1083,14 +599,14 @@ contains
         if (.not. status%ok()) return
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         call ts_import_frame(state%engine, frame, handle, status=status)
         if (.not. status%ok()) return
         call ts_place_frame(state%engine, handle, left=ctx%left, right=ctx%right, &
                             align=ALIGN_CENTER, interline=.false., status=status)
         if (.not. status%ok()) return
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         state%NOINDENT = .true.
     end subroutine figure_block
@@ -1142,7 +658,7 @@ contains
         if (.not. status%ok()) return
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         if (doc%nodes(node)%first > 0) then
             prefix = target_number(state, node)
@@ -1154,7 +670,7 @@ contains
             call ts_place_frame(state%engine, handle, left=ctx%left, interline=.false., status=status)
             if (.not. status%ok()) return
             call ts_penalty(state%engine, 10000)
-            call ts_vskip(state%engine, ts_glue_t(0.4_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            call ts_vskip(state%engine, ts_glue_t(0.4_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
             if (.not. status%ok()) return
         end if
         header = 0
@@ -1188,7 +704,7 @@ contains
             if (.not. status%ok()) return
             call ts_penalty(state%engine, 0)
         end do
-        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_addvspace(state%engine, ts_glue_t(0.6_dp*state%settings%BASE, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         state%NOINDENT = .true.
     end subroutine table_block
@@ -1278,10 +794,10 @@ contains
         type(status_t), intent(out) :: status
         character(len=*), intent(in), optional :: prefix
         ind = 0.0_dp
-        if (ctx%indent .and. .not. state%NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = state%PARINDENT
+        if (ctx%indent .and. .not. state%NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = state%settings%PARINDENT
         state%NOINDENT = .false.
         call ts_begin_par(state%engine, ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
-                          leading=state%LEAD*ctx%size, status=status)
+                          leading=state%settings%LEAD*ctx%size, status=status)
         if (.not. status%ok()) return
         if (present(prefix)) then
             call ts_text(state%engine, prefix, FACE_BOLD, ctx%size, ctx%color, status)
@@ -1323,28 +839,29 @@ contains
         real(dp) :: text_width_value1
         text = doc_plain(doc, node, status=status)
         if (.not. status%ok()) return
-        ex = face_xheight(FACE_REGULAR)*state%BASE
-        call heading_number(state, doc%nodes(node)%num, lv, num)
-        if (state%BOOK .and. lv == 0) then
+        ex = face_xheight(FACE_REGULAR)*state%settings%BASE
+        lv = state%node_info(node)%level
+        num = target_number(state, node)
+        if (state%settings%BOOK .and. lv == 0) then
             call chapter_heading(state, doc, node, text, ctx, status=status)
             if (.not. status%ok()) return
             return
         end if
-        if (.not. state%NUMBER_SECTIONS .or. lv > 3) num = ""
+        if (.not. state%settings%NUMBER_SECTIONS .or. lv > 3) num = ""
         select case (lv)
         case (1)
-            size = 1.44_dp*state%BASE
-            lead = 18.0_dp*state%BASE/10.0_dp
+            size = 1.44_dp*state%settings%BASE
+            lead = 18.0_dp*state%settings%BASE/10.0_dp
             before = ts_glue_t(3.5_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(2.3_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case (2)
-            size = 1.2_dp*state%BASE
-            lead = 14.0_dp*state%BASE/10.0_dp
+            size = 1.2_dp*state%settings%BASE
+            lead = 14.0_dp*state%settings%BASE/10.0_dp
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case default
-            size = state%BASE
-            lead = state%LEAD*state%BASE
+            size = state%settings%BASE
+            lead = state%settings%LEAD*state%settings%BASE
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
@@ -1352,7 +869,7 @@ contains
         if (.not. status%ok()) return
         call ts_addvspace(state%engine, before, status=status)
         if (.not. status%ok()) return
-        if (state%BOOK .and. lv == 1) then
+        if (state%settings%BOOK .and. lv == 1) then
             if (len(num) > 0) then
                 call ts_mark(state%engine, upper(num//".  "//text), .false., section=.true.)
             else
@@ -1401,30 +918,30 @@ contains
         if (.not. status%ok()) return
         ! The running heads are the book class's: in capitals,
         ! "CHAPTER 1. TITLE" and "1.2. SECTION".
-        if (state%NUMBER_SECTIONS) then
-            call ts_mark(state%engine, upper("Chapter "//itoa(state%CHAPTER)//".  "//text), .true.)
+        if (state%settings%NUMBER_SECTIONS) then
+            call ts_mark(state%engine, upper("Chapter "//itoa(state%node_info(node)%chapter)//".  "//text), .true.)
         else
             call ts_mark(state%engine, upper(text), .true.)
         end if
-        call ts_vkeep(state%engine, ts_glue_t(50.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_vkeep(state%engine, ts_glue_t(50.0_dp*state%settings%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         st = base_style(ctx)
         st%bold = .true.
-        if (state%NUMBER_SECTIONS) then
-            st%size = 2.074_dp*state%BASE
-            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=25.0_dp*state%BASE/10.0_dp, &
+        if (state%settings%NUMBER_SECTIONS) then
+            st%size = 2.074_dp*state%settings%BASE
+            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=25.0_dp*state%settings%BASE/10.0_dp, &
                               skip=.false., nobreak=.true., status=status)
             if (.not. status%ok()) return
-            call set_words(state, "Chapter "//itoa(state%CHAPTER), st, status=status)
+            call set_words(state, "Chapter "//itoa(state%node_info(node)%chapter), st, status=status)
             if (.not. status%ok()) return
             call ts_end_par(state%engine, status=status)
             if (.not. status%ok()) return
             call ts_penalty(state%engine, 10000)
-            call ts_vskip(state%engine, ts_glue_t(20.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+            call ts_vskip(state%engine, ts_glue_t(20.0_dp*state%settings%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
             if (.not. status%ok()) return
         end if
-        st%size = 2.488_dp*state%BASE
-        call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=30.0_dp*state%BASE/10.0_dp, &
+        st%size = 2.488_dp*state%settings%BASE
+        call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, size=st%size, leading=30.0_dp*state%settings%BASE/10.0_dp, &
                           skip=.false., nobreak=.true., status=status)
         if (.not. status%ok()) return
         call set_inlines(state, doc, node, st, status=status)
@@ -1432,7 +949,7 @@ contains
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
         call ts_penalty(state%engine, 10000)
-        call ts_vskip(state%engine, ts_glue_t(40.0_dp*state%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
+        call ts_vskip(state%engine, ts_glue_t(40.0_dp*state%settings%BASE/10.0_dp, 0.0_dp, 0.0_dp, 0, 0), status=status)
         if (.not. status%ok()) return
         call ts_nobreak_next(state%engine)
         state%NOINDENT = .true.
@@ -1452,29 +969,29 @@ contains
         real(dp) :: lm, f
 
         type(status_t), intent(out) :: status
-        f = state%BASE/10.0_dp
+        f = state%settings%BASE/10.0_dp
         lev = min(ctx%depth + 1, 4)
         select case (lev)
         case (1)
             topsep = ts_glue_t(8.0_dp*f, 2.0_dp*f, 4.0_dp*f, 0, 0)
             parsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.5_dp*state%BASE
+            lm = 2.5_dp*state%settings%BASE
         case (2)
             topsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.2_dp*state%BASE
+            lm = 2.2_dp*state%settings%BASE
         case (3)
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.87_dp*state%BASE
+            lm = 1.87_dp*state%settings%BASE
         case default
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.7_dp*state%BASE
+            lm = 1.7_dp*state%settings%BASE
         end select
         partopsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
 
@@ -1522,7 +1039,7 @@ contains
                 if (.not. status%ok()) return
             end if
             state%PENDING_LABEL = list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num)
-            state%LABEL_SEP = 0.5_dp*state%BASE
+            state%LABEL_SEP = 0.5_dp*state%settings%BASE
             call ts_set_parskip(state%engine, parsep)
             call set_blocks(state, doc, it, sub, status=status)
             if (.not. status%ok()) return
@@ -1543,7 +1060,7 @@ contains
         end do
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
-        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        call ts_set_parskip(state%engine, state%settings%PARSKIP_G)
         if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
         call ts_addpenalty(state%engine, -51, status=status)
         if (.not. status%ok()) return
@@ -1567,8 +1084,8 @@ contains
         type(status_t), intent(out) :: status
         sub = ctx
         sub%depth = ctx%depth + 1
-        sub%left = ctx%left + 2.5_dp*state%BASE
-        sub%right = ctx%right + 2.5_dp*state%BASE
+        sub%left = ctx%left + 2.5_dp*state%settings%BASE
+        sub%right = ctx%right + 2.5_dp*state%settings%BASE
         sub%indent = .false.
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
@@ -1581,7 +1098,7 @@ contains
         if (.not. status%ok()) return
         call ts_end_par(state%engine, status=status)
         if (.not. status%ok()) return
-        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        call ts_set_parskip(state%engine, state%settings%PARSKIP_G)
         if (ctx%depth > 0) call ts_set_parskip(state%engine, parsep_of(state, ctx%depth))
         call ts_addpenalty(state%engine, -51, status=status)
         if (.not. status%ok()) return
@@ -1612,8 +1129,8 @@ contains
             if (b == 0) b = len(text) - a + 2
             s = text(a:a + b - 2)
             a = a + b
-            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*state%BASE, &
-                              right=ctx%right, size=0.9_dp*ctx%size, leading=state%LEAD*ctx%size, status=status)
+            call ts_begin_par(state%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*state%settings%BASE, &
+                              right=ctx%right, size=0.9_dp*ctx%size, leading=state%settings%LEAD*ctx%size, status=status)
             if (.not. status%ok()) return
             call ts_strut(state%engine, 0.7_dp*ctx%size, 0.3_dp*ctx%size)
             i = 1
@@ -1635,7 +1152,7 @@ contains
             call ts_end_par(state%engine, status=status)
             if (.not. status%ok()) return
         end do
-        call ts_set_parskip(state%engine, state%PARSKIP_G)
+        call ts_set_parskip(state%engine, state%settings%PARSKIP_G)
         call ts_addvspace(state%engine, scale(state, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)), status=status)
         if (.not. status%ok()) return
     end subroutine code_block
@@ -1645,7 +1162,7 @@ contains
         integer, intent(in) :: depth
         type(ts_glue_t) :: g
         real(dp) :: f
-        f = state%BASE/10.0_dp
+        f = state%settings%BASE/10.0_dp
         select case (depth)
         case (1)
             g = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
@@ -1758,7 +1275,7 @@ contains
         integer, intent(in) :: parent
         type(style_t), intent(in) :: st
         type(style_t) :: sx
-        character(len=:), allocatable :: tag, reference
+        character(len=:), allocatable :: tag
         integer :: c
 
         type(status_t), intent(out) :: status
@@ -1811,7 +1328,7 @@ contains
                     if (.not. status%ok()) return
                     if (nd%display) then
                         tag = target_number(state, c)
-                        call ts_math(state%engine, strip_math_labels(nd%text), st%size, st%color, &
+                        call ts_math(state%engine, nd%text, st%size, st%color, &
                                      display=.true., tag=tag, status=status)
                         if (.not. status%ok()) return
                         state%SPACE = .false.
@@ -1821,13 +1338,14 @@ contains
                         call ts_math(state%engine, nd%text, st%size, st%color, status=status)
                         if (.not. status%ok()) return
                     end if
-                case (IN_REF)
+                case (DOC_INLINES)
                     call flush(state, st, status)
                     if (.not. status%ok()) return
-                    call reference_text(state, nd%id, nd%num, nd%text, reference, status)
+                    call walk(state, doc, c, st, status)
                     if (.not. status%ok()) return
-                    call reference_inline(state, reference, st, status)
-                    if (.not. status%ok()) return
+                case (IN_REF)
+                    call status%set(ERROR_STATE, "layout: unresolved reference reached the layout pass")
+                    return
                 end select
             end associate
             c = doc%nodes(c)%next
@@ -1909,30 +1427,6 @@ contains
 
     ! The formula without \label{...}, \tag{...}, \notag and \nonumber,
     ! which are for the numbering.
-    function strip_math_labels(src) result(r)
-        character(len=*), intent(in) :: src
-        character(len=:), allocatable :: r
-        integer :: a, b
-        r = src
-        do
-            a = index(r, BS//"label{")
-            if (a == 0) a = index(r, BS//"tag{")
-            if (a == 0) exit
-            b = index(r(a:), "}")
-            if (b == 0) exit
-            r = r(1:a - 1)//r(a + b:)
-        end do
-        do
-            a = index(r, BS//"notag")
-            if (a == 0) exit
-            r = r(1:a - 1)//r(a + 6:)
-        end do
-        do
-            a = index(r, BS//"nonumber")
-            if (a == 0) exit
-            r = r(1:a - 1)//r(a + 9:)
-        end do
-    end function strip_math_labels
 
     ! ------------------------------------------------------------------
     ! Numbers and cross references.
@@ -1941,369 +1435,19 @@ contains
     ! The number of the next heading of the level: lv is its depth among
     ! sections (0 for a chapter of a book), num its number, 1.2.3 (empty
     ! below \subsubsection's level).
-    subroutine heading_number(state, level, lv, num)
-        type(layout_context_t), intent(inout) :: state
-        integer, intent(in) :: level
-        integer, intent(out) :: lv
-        character(len=:), allocatable, intent(out) :: num
-        integer :: k
-        lv = level
-        if (state%BOOK) lv = level - 1
-        num = ""
-        if (lv == 0) then
-            state%CHAPTER = state%CHAPTER + 1
-            state%SEC = 0
-            state%EQNO = 0
-            num = itoa(state%CHAPTER)
-            return
-        end if
-        if (lv > size(state%SEC)) return
-        state%SEC(lv) = state%SEC(lv) + 1
-        state%SEC(lv + 1:) = 0
-        if (state%BOOK) then
-            num = itoa(state%CHAPTER)
-        else
-            num = itoa(state%SEC(1))
-        end if
-        do k = merge(1, 2, state%BOOK), lv
-            num = num//"."//itoa(state%SEC(k))
-        end do
-    end subroutine heading_number
-
-    subroutine prepare_labels(state, doc, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_t), intent(in) :: doc
-        type(status_t), intent(out) :: status
-        integer :: i, part
-        state%NLAB = 0
-        state%SEC = 0
-        state%CHAPTER = 0
-        state%EQNO = 0
-        state%FIGURE_NO = 0
-        state%TABLE_NO = 0
-        if (allocated(state%NODE_TARGET)) deallocate (state%NODE_TARGET)
-        allocate (state%NODE_TARGET(doc%n))
-        state%NODE_TARGET = 0
-        do i = 1, size(state%template%steps)
-            part = state%template%steps(i)%part
-            if (state%template%steps(i)%kind == STEP_BODY) then
-                call collect_targets(state, doc, 1, status)
-            else if (part > 0) then
-                call collect_part_targets(state, doc, trim(state%template%parts(part)%name), status)
-            end if
-            if (.not. status%ok()) return
-        end do
-    end subroutine prepare_labels
-
-    subroutine collect_part_targets(state, doc, name, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_t), intent(in) :: doc
-        character(len=*), intent(in) :: name
-        type(status_t), intent(out) :: status
-        integer, allocatable :: parts(:)
-        integer :: i, node
-        call part_nodes(doc, name, parts)
-        do i = 1, size(parts)
-            node = parts(i)
-            if (len(doc%nodes(node)%id) > 0) then
-                call add_target(state, node, DOC_PART, md_label(doc%nodes(node)%id), "", "", status)
-                if (.not. status%ok()) return
-            end if
-            call collect_targets(state, doc, node, status)
-            if (.not. status%ok()) return
-        end do
-    end subroutine collect_part_targets
-
-    recursive subroutine collect_targets(state, doc, parent, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_t), intent(in) :: doc
-        integer, intent(in) :: parent
-        type(status_t), intent(out) :: status
-        integer :: node, kind, level, cap
-        character(len=:), allocatable :: name, title, number
-        node = doc%nodes(parent)%first
-        do while (node > 0)
-            kind = doc%nodes(node)%kind
-            if (kind == DOC_PART) then
-                node = doc%nodes(node)%next
-                cycle
-            end if
-            name = md_label(doc%nodes(node)%id)
-            title = ""
-            number = ""
-            select case (kind)
-            case (DOC_HEADING)
-                call heading_number(state, doc%nodes(node)%num, level, number)
-                if (.not. state%NUMBER_SECTIONS) number = ""
-                title = doc%nodes(node)%text
-            case (DOC_MATH, IN_MATH)
-                if (kind == DOC_MATH .or. doc%nodes(node)%display) then
-                    kind = DOC_MATH
-                    call math_target(state, doc%nodes(node), name, number, status)
-                    if (.not. status%ok()) return
-                end if
-            case (DOC_FIGURE)
-                if (state%NUMBER_FIGURES) then
-                    state%FIGURE_NO = state%FIGURE_NO + 1
-                    number = itoa(state%FIGURE_NO)
-                end if
-                cap = doc%nodes(node)%first
-                if (cap > 0) cap = doc%nodes(cap)%next
-                if (cap > 0) title = doc%nodes(cap)%text
-            case (DOC_TABLE)
-                if (state%NUMBER_TABLES) then
-                    state%TABLE_NO = state%TABLE_NO + 1
-                    number = itoa(state%TABLE_NO)
-                end if
-                cap = doc%nodes(node)%first
-                if (cap > 0) title = doc%nodes(cap)%text
-            end select
-            if (kind /= IN_REF .and. (len(name) > 0 .or. kind == DOC_MATH .or. kind == DOC_HEADING .or. &
-                                     kind == DOC_FIGURE .or. kind == DOC_TABLE)) then
-                call add_target(state, node, kind, name, title, number, status)
-                if (.not. status%ok()) return
-            end if
-            call collect_targets(state, doc, node, status)
-            if (.not. status%ok()) return
-            node = doc%nodes(node)%next
-        end do
-    end subroutine collect_targets
-
-    subroutine math_target(state, node, name, number, status)
-        type(layout_context_t), intent(inout) :: state
-        type(doc_node_t), intent(in) :: node
-        character(len=:), allocatable, intent(inout) :: name
-        character(len=:), allocatable, intent(out) :: number
-        type(status_t), intent(out) :: status
-        character(len=:), allocatable :: label
-        integer :: a, b
-        logical :: numbered
-        number = ""
-        a = index(node%text, BS//"label{")
-        if (a > 0) then
-            b = index(node%text(a:), "}")
-            if (b < 8) then
-                call status%set(ERROR_ARGUMENT, "MyST: malformed equation label")
-                return
-            end if
-            label = md_label(node%text(a + 7:a + b - 2))
-            if (len(name) > 0 .and. name /= label) then
-                call status%set(ERROR_ARGUMENT, "MyST: conflicting equation labels")
-                return
-            end if
-            name = label
-            if (index(node%text(a + b:), BS//"label{") > 0) then
-                call status%set(ERROR_UNSUPPORTED, "MyST: multiple labels on one equation are unsupported")
-                return
-            end if
-        end if
-        numbered = state%NUMBER_EQS
-        if (node%enum_set) numbered = node%enumerated
-        if (index(node%text, BS//"notag") > 0 .or. index(node%text, BS//"nonumber") > 0) numbered = .false.
-        a = index(node%text, BS//"tag{")
-        if (a > 0) then
-            b = index(node%text(a:), "}")
-            if (b < 6) then
-                call status%set(ERROR_ARGUMENT, "MyST: malformed equation tag")
-                return
-            end if
-            number = node%text(a + 5:a + b - 2)
-        else if (numbered) then
-            state%EQNO = state%EQNO + 1
-            number = itoa(state%EQNO)
-            if (state%BOOK .and. state%CHAPTER > 0) number = itoa(state%CHAPTER)//"."//number
-        end if
-    end subroutine math_target
-
-    subroutine add_target(state, node, kind, name, title, number, status)
-        type(layout_context_t), intent(inout) :: state
-        integer, intent(in) :: node, kind
-        character(len=*), intent(in) :: name, title, number
-        type(status_t), intent(out) :: status
-        type(label_t), allocatable :: grown(:)
-        integer :: i
-        call check_identifier(name, status)
-        if (.not. status%ok()) return
-        do i = 1, state%NLAB
-            if (len(name) > 0 .and. state%label(i)%name == name) then
-                call status%set(ERROR_LAYOUT, "MyST: duplicate target: "//name)
-                return
-            end if
-        end do
-        if (state%NLAB == size(state%label)) then
-            allocate (grown(2*size(state%label)))
-            grown(1:state%NLAB) = state%label(1:state%NLAB)
-            call move_alloc(grown, state%label)
-        end if
-        state%NLAB = state%NLAB + 1
-        i = state%NLAB
-        state%label(i)%name = name
-        state%label(i)%title = title
-        state%label(i)%number = number
-        state%label(i)%kind = kind
-        state%NODE_TARGET(node) = i
-    end subroutine add_target
-
-    subroutine check_identifier(name, status)
-        character(len=*), intent(in) :: name
-        type(status_t), intent(out) :: status
-        integer :: i
-        do i = 1, len(name)
-            if (iachar(name(i:i)) < 32 .or. iachar(name(i:i)) > 126) then
-                call status%set(ERROR_UNSUPPORTED, "MyST: the native profile currently requires ASCII target identifiers")
-                return
-            end if
-        end do
-    end subroutine check_identifier
-
-    function target_number(state, node) result(number)
-        type(layout_context_t), intent(in) :: state
-        integer, intent(in) :: node
-        character(len=:), allocatable :: number
-        integer :: target
-        number = ""
-        if (.not. allocated(state%NODE_TARGET)) return
-        if (node < 1 .or. node > size(state%NODE_TARGET)) return
-        target = state%NODE_TARGET(node)
-        if (target > 0) number = state%label(target)%number
-    end function target_number
-
-    subroutine reference_text(state, id, form, custom, text, status)
-        type(layout_context_t), intent(inout) :: state
-        character(len=*), intent(in) :: id, custom
-        integer, intent(in) :: form
-        character(len=:), allocatable, intent(out) :: text
-        type(status_t), intent(out) :: status
-        integer :: i
-        character(len=:), allocatable :: title, number
-        if (len(md_label(id)) == 0) then
-            call status%set(ERROR_ARGUMENT, "MyST: empty reference target")
-            return
-        end if
-        call check_identifier(md_label(id), status)
-        if (.not. status%ok()) return
-        i = find_label(state, md_label(id))
-        if (i == 0) then
-            call status%set(ERROR_LAYOUT, "MyST: unresolved target: "//id)
-            return
-        end if
-        title = state%label(i)%title
-        number = state%label(i)%number
-        if (form == REF_EQ .and. state%label(i)%kind /= DOC_MATH) then
-            call status%set(ERROR_ARGUMENT, "MyST: eq role requires an equation target")
-            return
-        end if
-        if (len(custom) > 0) then
-            text = custom
-            if (len(number) == 0 .and. (index(text, "%s") > 0 .or. index(text, "{number}") > 0)) then
-                call status%set(ERROR_LAYOUT, "MyST: target has no number: "//id)
-                return
-            end if
-            if (len(title) == 0) title = id
-            call replace_reference_fields(text, number, title)
-        else if (form == REF_TITLE .and. len(title) > 0) then
-            text = title
-        else if (len(number) > 0) then
-            select case (state%label(i)%kind)
-            case (DOC_MATH); text = "("//number//")"
-            case (DOC_FIGURE); text = "Figure "//number
-            case (DOC_TABLE); text = "Table "//number
-            case (DOC_HEADING); text = "Section "//number
-            case default; text = number
-            end select
-        else if (state%label(i)%kind == DOC_MATH) then
-            call status%set(ERROR_LAYOUT, "MyST: equation target is not numbered: "//id)
-        else if (len(title) > 0) then
-            text = title
-        else
-            text = id
-        end if
-    end subroutine reference_text
-
-    subroutine replace_reference_fields(text, number, title)
-        character(len=:), allocatable, intent(inout) :: text
-        character(len=*), intent(in) :: number, title
-        character(len=:), allocatable :: result
-        integer :: i, count, j
-        result = ""
-        i = 1
-        do while (i <= len(text))
-            if (text(i:i) == "`") then
-                count = 1
-                do while (i + count <= len(text))
-                    if (text(i + count:i + count) /= "`") exit
-                    count = count + 1
-                end do
-                j = index(text(i + count:), repeat("`", count))
-                if (j > 0) then
-                    j = i + count + j - 1 + count
-                    result = result//text(i:j - 1)
-                    i = j
-                    cycle
-                end if
-            end if
-            if (starts(text(i:), "{number}")) then
-                result = result//number
-                i = i + 8
-            else if (starts(text(i:), "{name}")) then
-                result = result//title
-                i = i + 6
-            else if (starts(text(i:), "%s")) then
-                result = result//number
-                i = i + 2
-            else
-                result = result//text(i:i)
-                i = i + 1
-            end if
-        end do
-        text = result
-    end subroutine replace_reference_fields
-
-    recursive subroutine reference_inline(state, text, style, status)
-        type(layout_context_t), intent(inout) :: state
-        character(len=*), intent(in) :: text
-        type(style_t), intent(in) :: style
-        type(status_t), intent(out) :: status
-        type(doc_t) :: tree
-        integer :: node
-        if (state%REF_DEPTH >= 16) then
-            call status%set(ERROR_LAYOUT, "MyST: cyclic reference display text")
-            return
-        end if
-        call doc_init(tree, status)
-        if (.not. status%ok()) return
-        node = doc_add(tree, 1, DOC_PARA, status)
-        if (.not. status%ok()) return
-        call md_inlines(tree, node, text, status)
-        if (.not. status%ok()) return
-        state%REF_DEPTH = state%REF_DEPTH + 1
-        call walk(state, tree, node, style, status)
-        state%REF_DEPTH = state%REF_DEPTH - 1
-    end subroutine reference_inline
-
-    integer function find_label(state, name)
-        type(layout_context_t), intent(inout) :: state
-        character(len=*), intent(in) :: name
-        integer :: k
-        find_label = 0
-        do k = 1, state%NLAB
-            if (state%label(k)%name == name) then
-                find_label = k
-                return
-            end if
-        end do
-    end function find_label
 
     ! ------------------------------------------------------------------
     ! Small things.
     ! ------------------------------------------------------------------
 
-    pure logical function starts(s, p)
-        character(len=*), intent(in) :: s, p
-        starts = .false.
-        if (len(s) < len(p)) return
-        starts = s(1:len(p)) == p
-    end function starts
+    function target_number(state, node) result(number)
+        type(layout_context_t), intent(in) :: state
+        integer, intent(in) :: node
+        character(len=:), allocatable :: number
+        number = ""
+        if (node < 1 .or. node > size(state%node_info)) return
+        if (allocated(state%node_info(node)%number)) number = state%node_info(node)%number
+    end function target_number
 
     ! Capitals, for the running heads: the ASCII and Latin-1 letters.
     function upper(s) result(t)
@@ -2332,7 +1476,7 @@ contains
         type(ts_glue_t), intent(in) :: g
         type(ts_glue_t) :: r
         real(dp) :: f
-        f = state%BASE/10.0_dp
+        f = state%settings%BASE/10.0_dp
         r = ts_glue_t(g%w*f, g%st*f, g%sh*f, g%sto, g%sho)
     end function scale
 
