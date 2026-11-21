@@ -764,31 +764,28 @@ contains
         type(pathbuf_t) :: out
         real(dp), allocatable :: dx(:), dy(:)
         integer :: s, b, n, nd
-        real(dp) :: hw, cover
+        real(dp) :: hw, cover, bx0, bx1, by0, by1
+        logical :: walk
 
         hw = 0.5_dp*paint%line_width*cv%scale
         if (hw <= 0.0_dp) return
         call pb_reset(out)
-        ! Butt ends add nothing to a dash, so a pattern too fine to draw
-        ! covers the line in the proportion of its dashes; round and square
-        ! ends, a pen's width long, close the gaps of so fine a pattern.
-        cover = 1.0_dp
-        if (paint%n_dash > 0 .and. paint%cap == CAP_BUTT) then
-            if (sum(paint%dash(1:paint%n_dash))*cv%scale < 0.5_dp) &
-                cover = on_fraction(paint)
-        end if
+        ! The box a dash has to reach into to be seen: the canvas, widened
+        ! by the pen.
+        bx0 = -hw - 2.0_dp
+        bx1 = real(cv%w, dp) + hw + 2.0_dp
+        by0 = -hw - 2.0_dp
+        by1 = real(cv%h, dp) + hw + 2.0_dp
+        call dash_plan(paint, hw, cv%scale, walk, cover)
 
         do s = 1, pb%ns
             b = pb%sub_beg(s)
             n = pb%sub_len(s)
             if (n < 1) cycle
             call gather(pb, b, n, pb%sub_closed(s), dx, dy, nd)
-            ! A pattern shorter than half a pixel cannot be told from a
-            ! line of its average cover, and would take forever to walk.
-            if (paint%n_dash > 0 .and. sum(paint%dash(1:max(paint%n_dash, 1)))*cv%scale >= 0.5_dp) then
-                call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, &
-                                   -hw - 2.0_dp, real(cv%w, dp) + hw + 2.0_dp, &
-                                   -hw - 2.0_dp, real(cv%h, dp) + hw + 2.0_dp)
+            if (walk) then
+                call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, bx0, bx1, by0, by1, &
+                                   real(cv%w, dp), real(cv%h, dp))
             else
                 call stroke_run(out, dx, dy, nd, hw, paint, pb%sub_closed(s))
             end if
@@ -796,6 +793,29 @@ contains
 
         call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha*cover, paint%clip)
     end subroutine stroke_path_buf
+
+    ! Whether a dashed stroke is walked dash by dash, or drawn as a solid
+    ! line of the cover its pattern would give: when the pattern is finer
+    ! than half a pixel, or when round or square ends a pen's width long
+    ! close every gap.
+    subroutine dash_plan(paint, hw, scale, walk, cover)
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: hw, scale
+        logical, intent(out) :: walk
+        real(dp), intent(out) :: cover
+
+        walk = .false.
+        cover = 1.0_dp
+        if (paint%n_dash == 0) return
+        if (paint%cap /= CAP_BUTT) then
+            if (2.0_dp*hw >= maxval(paint%dash(1:paint%n_dash))*scale) return
+        end if
+        if (sum(paint%dash(1:paint%n_dash))*scale < 0.5_dp) then
+            if (paint%cap == CAP_BUTT) cover = on_fraction(paint)
+            return
+        end if
+        walk = .true.
+    end subroutine dash_plan
 
     ! The share of a dash pattern that is dash rather than gap.
     pure function on_fraction(paint) result(f)
@@ -839,24 +859,37 @@ contains
     ! pen, is only walked where it is inside: the rest just moves the
     ! pattern along, so that a line far longer than the canvas costs no
     ! more than one across it.
-    subroutine stroke_dashed(out, px, py, n, hw, paint, scale, bx0, bx1, by0, by1)
+    !
+    ! A pen wider than the canvas widens that box past the canvas many
+    ! times over. Its dashes are then walked only where their place along
+    ! the line falls within the canvas's span along it (and a cap's length
+    ! beyond): a dash anywhere else cannot touch the canvas, however wide.
+    subroutine stroke_dashed(out, px, py, n, hw, paint, scale, bx0, bx1, by0, by1, cw, ch)
         type(pathbuf_t), intent(inout) :: out
-        real(dp), intent(in) :: px(:), py(:), hw, scale, bx0, bx1, by0, by1
+        real(dp), intent(in) :: px(:), py(:), hw, scale, bx0, bx1, by0, by1, cw, ch
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
         real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l, ta, tb
-        real(dp) :: qx, qy, ax, ay, fx, fy
+        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk
         real(dp), allocatable :: rx(:), ry(:)
-        integer :: i, di, nr
-        logical :: on, inside, visible, cut0, cut1
+        integer :: i, di, nr, c
+        logical :: on, inside, visible, cut0, cut1, wide
 
         allocate (rx(2*n + 4), ry(2*n + 4))
         di = 1
         rem = paint%dash(1)*scale
         on = .true.
         nr = 0
-        ! The pattern begins dash_offset into itself, as in SVG and PDF.
-        if (paint%dash_offset > 0.0_dp) call dash_advance(paint%dash_offset*scale, paint, scale, di, rem, on)
+        ! The pattern begins dash_offset into itself, as in SVG and PDF; a
+        ! negative offset is the same distance back from a whole period.
+        if (paint%dash_offset /= 0.0_dp) then
+            ! In points, then scaled, so that equal phases give equal
+            ! pictures to the last bit.
+            period = sum(paint%dash(1:paint%n_dash))
+            if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
+            if (abs(paint%dash_offset) < 1.0e15_dp*period) &
+                call dash_advance(modulo(paint%dash_offset, period)*scale, paint, scale, di, rem, on)
+        end if
 
         do i = 1, n - 1
             sx = px(i); sy = py(i)
@@ -865,13 +898,44 @@ contains
             if (l <= 0.0_dp) cycle
             t0 = 0.0_dp
             tb = l
+            wide = hw > max(cw, ch)
             inside = sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
-                     qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1
+                     qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1 .and. .not. wide
             if (.not. inside) then
                 ! What lies outside is skipped, ending any dash under way;
                 ! the walk then runs over the visible piece alone.
                 call clip_segment(sx, sy, qx, qy, bx0, bx1, by0, by1, &
                                   ax, ay, fx, fy, visible, cut0, cut1)
+                if (visible .and. wide) then
+                    ! Narrowed to the canvas's span along the line.
+                    lp = hypot(fx - ax, fy - ay)
+                    if (lp > 0.0_dp) then
+                        ux = (fx - ax)/lp
+                        uy = (fy - ay)/lp
+                        ce = 0.0_dp
+                        if (paint%cap /= CAP_BUTT) ce = hw
+                        p0 = huge(1.0_dp)
+                        p1 = -huge(1.0_dp)
+                        do c = 0, 3
+                            pk = (merge(cw, 0.0_dp, c == 1 .or. c == 2) - ax)*ux + &
+                                 (merge(ch, 0.0_dp, c >= 2) - ay)*uy
+                            p0 = min(p0, pk)
+                            p1 = max(p1, pk)
+                        end do
+                        p0 = max(0.0_dp, p0 - ce - 2.0_dp)
+                        p1 = min(lp, p1 + ce + 2.0_dp)
+                        if (p1 <= p0) then
+                            visible = .false.
+                        else
+                            if (p0 > 0.0_dp) cut0 = .true.
+                            if (p1 < lp) cut1 = .true.
+                            fx = ax + ux*p1
+                            fy = ay + uy*p1
+                            ax = ax + ux*p0
+                            ay = ay + uy*p0
+                        end if
+                    end if
+                end if
                 ! A dash under way goes on through an end the box does not
                 ! cut, keeping its join there.
                 if (.not. visible .or. cut0) then

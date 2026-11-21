@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 26
+    integer, parameter :: NCASE = 28
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -47,8 +47,10 @@ module test_contract
         "fplotlib: plot: dashes must be finite and nonnegative", &
         "fplotlib: errorbar: yerr must not be negative", &
         "fplotlib: figure: figsize must be positive and at most 1e9 inches", &
-        "fplotlib: hist: bins must be at least 1, got 0", &
-        "fplotlib: streamplot: density must be at most 100"]
+        "fplotlib: hist: bins must be from 1 to 1000000, got 0", &
+        "fplotlib: streamplot: density must be at most 10", &
+        "fplotlib: secondary_xaxis: scale must be finite", &
+        "fplotlib: tick_format: decimals must be from 0 to 17, got 25"]
 
 contains
 
@@ -62,6 +64,8 @@ contains
         type(paint_t) :: p
         character(len=:), allocatable :: b
         real(dp) :: nan, w
+        type(axes), allocatable :: axs(:, :)
+        type(axes) :: sec
 
         nan = ieee_value(nan, ieee_quiet_nan)
         p%filled = .true.
@@ -129,6 +133,12 @@ contains
         case (26)
             call streamplot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), &
                             reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), density=1000.0_dp)
+        case (27)
+            ! A method of type(axes) checks as its free function does.
+            call subplots(1, 1, axs)
+            sec = axs(1, 1)%secondary_xaxis(scale=nan)
+        case (28)
+            call tick_format(style="percent", decimals=25)
         end select
     end subroutine contract_case
 

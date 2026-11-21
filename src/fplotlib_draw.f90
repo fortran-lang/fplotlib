@@ -4568,7 +4568,7 @@ contains
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
-        real(dp) :: W, H, vx, vy, vw, vh, bpad
+        real(dp) :: W, H, vx, vy, vw, vh, bpad, lim
         character(len=512) :: esc
         character(len=7) :: face
         logical :: clear
@@ -4616,10 +4616,32 @@ contains
                     vy = vy - 0.5_dp*(1.0_dp - vh)
                     vh = 1.0_dp
                 end if
+                ! Decorations placed absurdly far out (a labelpad of 1e20, say)
+                ! may not take the canvas past what a renderer takes: the
+                ! window keeps to a billion inches about the figure.
+                lim = 1.0e9_dp*PT_PER_IN
+                if (vx < -lim) then
+                    vw = vw - (-lim - vx)
+                    vx = -lim
+                end if
+                if (vy < -lim) then
+                    vh = vh - (-lim - vy)
+                    vy = -lim
+                end if
+                vw = max(1.0_dp, min(vw, lim + W - vx))
+                vh = max(1.0_dp, min(vh, lim + H - vy))
             else if (len_trim(bbox_inches) > 0) then
                 call contract_error("savefig: bbox_inches must be 'tight'")
             end if
         end if
+
+        ! The cropped canvas of a PNG has to fit the encoder, as the figure
+        ! itself does (savefig checks that before rendering).
+        select type (b)
+        type is (png_renderer_t)
+            if (max(1.0_dp, vw*b%dpi/72.0_dp)*max(1.0_dp, vh*b%dpi/72.0_dp) > real(huge(1)/8, dp)) &
+                call contract_error("savefig: the cropped figure has too many pixels at this dpi")
+        end select
 
         ! transparent drops the figure patch entirely
         if (clear) then

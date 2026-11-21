@@ -207,10 +207,10 @@ contains
             nfail = nfail + 1
         end if
         ! Everything drawn lies within the clip box around the canvas, ten
-        ! canvases wide and widened by what a stroke reaches, however far
-        ! off the data was.
+        ! canvases out and widened by what a stroke reaches (at most ten
+        ! half widths, at a mitred corner), however far off the data was.
         call render_figure(r)
-        if (r%far > 12.0_dp*max(r%width, r%height, 72.0_dp) + 1.0e5_dp + 6.0_dp*r%widest) then
+        if (r%far > 11.0_dp*max(r%width, r%height, 72.0_dp) + 10.0_dp*r%widest + 10.0_dp) then
             print "(a, i0, a, es10.3)", "missing data case ", k, ": drew as far out as ", r%far
             nfail = nfail + 1
         end if
@@ -288,7 +288,9 @@ contains
         type(paint_t), intent(in) :: paint
         call see(self, x)
         call see(self, y)
-        if (paint%stroked) self%widest = max(self%widest, paint%line_width)
+        ! A fill clipped apart from its stroke still carries the width
+        ! the clip box was widened by.
+        self%widest = max(self%widest, paint%line_width)
     end subroutine ext_path
 
     subroutine ext_rect(self, x, y, w, h, paint, radius)

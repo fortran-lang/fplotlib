@@ -26,8 +26,10 @@ Each real argument is one of:
   own       checked by hand in the procedure itself
 
 and each integer argument one of:
-  count     at least 1                         (bins, columns, grid sizes)
-  nonneg    not negative                       (decimals, minimum counts)
+  count     1 to a million                     (bins, columns, ticks)
+  grid      1 to a thousand                    (the side of a 2D grid of cells)
+  nonneg    not negative                       (minimum counts)
+  digits    0 to 17                            (decimals; a double has no more)
   any       any value
   own       checked by hand in the procedure itself
 """
@@ -82,7 +84,7 @@ BY_PROC = {
     ('quiver3d', 'length'): 'finite',
 }
 ARRAYS = {
-    'width_ratios': 'positive', 'height_ratios': 'positive', 'bbox_to_anchor': 'finite',
+    'bounds': 'finite', 'width_ratios': 'positive', 'height_ratios': 'positive', 'bbox_to_anchor': 'finite',
     'vals': 'finite', 'extent': 'finite', 'boundaries': 'finite', 'col_widths': 'size',
     'levels': 'finite', 'explode': 'finite', 'dashes': 'dashes', 'bin_edges': 'finite',
     'figsize': 'own', 'rect': 'own',
@@ -99,24 +101,29 @@ DATA_ARRAYS = {
 }
 INTS = {
     'ncol': 'count', 'nbins': 'count', 'markevery': 'count', 'bins': 'count',
-    'gridsize': 'count', 'nrows': 'count', 'ncols': 'count', 'colspan': 'count',
-    'rowspan': 'count', 'mincnt': 'nonneg', 'decimals': 'nonneg',
+    'gridsize': 'grid', 'nrows': 'count', 'ncols': 'count', 'colspan': 'count',
+    'rowspan': 'count', 'mincnt': 'nonneg', 'decimals': 'digits',
     'scilimits': 'any', 'ij': 'any', 'm': 'own', 'n': 'own', 'i': 'own',
     'num': 'own', 'loc': 'own', 'shape': 'own',
 }
-IHELPER = {'count': 'check_count_arg', 'nonneg': 'check_nonneg_arg'}
-IAHELPER = {'count': 'check_count_args'}
+INTS_BY_PROC = {('spy', 'm'): 'count', ('spy', 'n'): 'count', ('hist2d', 'bins'): 'grid'}
+IHELPER = {'count': 'check_count_arg', 'grid': 'check_grid_arg', 'nonneg': 'check_nonneg_arg',
+           'digits': 'check_digits_arg'}
+IAHELPER = {'count': 'check_count_args', 'grid': 'check_grid_args'}
 HELPER = {'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
           'finite': 'check_finite_arg', 'margin': 'check_margin_arg'}
 AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
-GEN = re.compile(r'^        call check_(unit|size|finite|positive|margin|dashes|errors|count|nonneg)_args?\("')
+# Each block the script writes starts with this line; only such blocks are
+# ever removed, so a check written by hand is left alone.
+MARK = '        ! Arguments checked as tools/gen_arg_checks.py tables them.'
+GEN = re.compile(r'^        call check_\w+_args?\("')
 
 # Drop what an earlier run generated, and the blank line it added.
 out = []
 i = 0
 while i < len(L):
-    if GEN.match(L[i]):
-        j = i
+    if L[i] == MARK:
+        j = i + 1
         while j < len(L) and GEN.match(L[j]): j += 1
         if out and out[-1].strip() == '' and j < len(L) and L[j].strip() == '':
             out.pop()
@@ -162,7 +169,11 @@ while i < len(L):
     name = m.group(2)
     user = spec2gen.get(name, name)
     out.append(l); i += 1
-    if user not in public or name.startswith('ax_'):
+    # The methods of type(axes), ax_plot and the rest, are checked too,
+    # under the name of the call they stand for.
+    if name.startswith('ax_'):
+        user = spec2gen.get(name[3:], name[3:])
+    elif user not in public:
         continue
     while out[-1].rstrip().endswith('&'):
         out.append(L[i]); i += 1
@@ -174,7 +185,7 @@ while i < len(L):
         if d.strip().startswith('integer') and 'intent(in)' in d:
             for part in split_names(d):
                 arg = part.split('(')[0].strip()
-                kind = INTS.get(arg)
+                kind = INTS_BY_PROC.get((user, arg), INTS.get(arg))
                 if kind is None:
                     unknown.append((user, arg)); continue
                 if kind in ('any', 'own'): continue
@@ -204,6 +215,7 @@ while i < len(L):
             calls.append(f'        call {HELPER[kind]}("{user}", "{arg}", {arg})')
     if calls:
         if out[-1].strip() != '': out.append('')
+        out.append(MARK)
         out.extend(calls)
         if i < len(L) and L[i].strip() != '': out.append('')
 open(p, 'w').write('\n'.join(out))

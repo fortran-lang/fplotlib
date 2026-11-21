@@ -481,6 +481,7 @@ contains
         character(len=*), intent(in), optional :: grid_color, text_color
         character(len=7), intent(in), optional :: color_cycle(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("rc", "fontsize", fontsize)
         call check_size_arg("rc", "linewidth", linewidth)
 
@@ -564,6 +565,7 @@ contains
     subroutine subplots_adjust(left, right, bottom, top, wspace, hspace)
         real(dp), intent(in), optional :: left, right, bottom, top, wspace, hspace
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("subplots_adjust", "left", left)
         call check_finite_arg("subplots_adjust", "right", right)
         call check_finite_arg("subplots_adjust", "bottom", bottom)
@@ -669,6 +671,9 @@ contains
         type(axes) :: h
         integer :: parent
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("inset_axes", "bounds", bounds)
+
         parent = self%idx
         call push_axes()
         ax(cur_i)%inset_of = parent
@@ -682,6 +687,11 @@ contains
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("secondary_xaxis", "scale", scale)
+        call check_finite_arg("secondary_xaxis", "offset", offset)
+
         h = add_secondary(self%idx, .true., location, scale, offset)
     end function ax_secondary_xaxis
 
@@ -690,6 +700,11 @@ contains
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("secondary_yaxis", "scale", scale)
+        call check_finite_arg("secondary_yaxis", "offset", offset)
+
         h = add_secondary(self%idx, .false., location, scale, offset)
     end function ax_secondary_yaxis
 
@@ -698,6 +713,7 @@ contains
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("secondary_xaxis", "scale", scale)
         call check_finite_arg("secondary_xaxis", "offset", offset)
 
@@ -710,6 +726,7 @@ contains
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("secondary_yaxis", "scale", scale)
         call check_finite_arg("secondary_yaxis", "offset", offset)
 
@@ -767,6 +784,7 @@ contains
         real(dp), intent(in), optional :: width_ratios(:), height_ratios(:)
         integer :: k
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_positive_args("gridspec", "width_ratios", width_ratios)
         call check_positive_args("gridspec", "height_ratios", height_ratios)
 
@@ -792,6 +810,7 @@ contains
         type(axes_t), allocatable :: tmp(:)
         integer :: rs, cs
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_count_arg("subplot2grid", "rowspan", rowspan)
         call check_count_arg("subplot2grid", "colspan", colspan)
 
@@ -899,6 +918,7 @@ contains
         logical, intent(in), optional :: sharex, sharey
         integer :: r, c
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_count_arg("subplots", "nrows", nrows)
         call check_count_arg("subplots", "ncols", ncols)
 
@@ -917,6 +937,7 @@ contains
         logical, intent(in), optional :: sharex, sharey
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_count_arg("subplots", "nrows", nrows)
         call check_count_arg("subplots", "ncols", ncols)
 
@@ -993,6 +1014,15 @@ contains
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
         real(dp), intent(in), optional :: dashes(:)
         integer, intent(in), optional :: markevery
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+        call check_size_arg("plot", "markersize", markersize)
+        call check_size_arg("plot", "markeredgewidth", markeredgewidth)
+        call check_dashes_arg("plot", "dashes", dashes)
+        call check_count_arg("plot", "markevery", markevery)
+
         call ax_sca(self)
         call plot(x, y, fmt, label, lw, color, marker, linestyle, alpha, &
                   markersize, markerfacecolor, markeredgecolor, &
@@ -1010,6 +1040,15 @@ contains
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
         real(dp), intent(in), optional :: dashes(:)
         integer, intent(in), optional :: markevery
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+        call check_size_arg("plot", "markersize", markersize)
+        call check_size_arg("plot", "markeredgewidth", markeredgewidth)
+        call check_dashes_arg("plot", "dashes", dashes)
+        call check_count_arg("plot", "markevery", markevery)
+
         call ax_sca(self)
         call plot(ydata, fmt, label, lw, color, marker, linestyle, alpha, &
                   markersize, markerfacecolor, markeredgecolor, &
@@ -1023,6 +1062,11 @@ contains
         real(dp), intent(in) :: y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+
         call ax_sca(self)
         call plot(cats, y, fmt, label, lw, color, marker, linestyle, alpha)
     end subroutine ax_plot_cat
@@ -1035,6 +1079,12 @@ contains
         real(dp), intent(in), optional :: width, alpha, bottom(:), linewidth
         character(len=*), intent(in), optional :: color, label, edgecolor
         character(len=*), intent(in), optional :: colors(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("bar", "width", width)
+        call check_unit_arg("bar", "alpha", alpha)
+        call check_size_arg("bar", "linewidth", linewidth)
+
         call ax_sca(self)
         call bar(cats, height, width, color, label, alpha, bottom, colors, &
                  edgecolor, linewidth)
@@ -1048,6 +1098,12 @@ contains
         real(dp), intent(in), optional :: height, alpha, left(:), linewidth
         character(len=*), intent(in), optional :: color, label, edgecolor
         character(len=*), intent(in), optional :: colors(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("barh", "height", height)
+        call check_unit_arg("barh", "alpha", alpha)
+        call check_size_arg("barh", "linewidth", linewidth)
+
         call ax_sca(self)
         call barh(cats, width, height, color, label, alpha, left, colors, &
                   edgecolor, linewidth)
@@ -1060,6 +1116,13 @@ contains
         real(dp), intent(in), optional :: s, alpha, vmin, vmax
         real(dp), intent(in), optional :: sizes(:), cvals(:)
         character(len=*), intent(in), optional :: c, marker, label, cmap
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("scatter", "s", s)
+        call check_unit_arg("scatter", "alpha", alpha)
+        call check_finite_arg("scatter", "vmin", vmin)
+        call check_finite_arg("scatter", "vmax", vmax)
+
         call ax_sca(self)
         call scatter(x, y, s, c, marker, label, alpha, sizes, cvals, cmap, vmin, vmax)
     end subroutine ax_scatter
@@ -1074,6 +1137,14 @@ contains
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:), align, ecolor
         character(len=*), intent(in), optional :: tick_label(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("bar", "width", width)
+        call check_unit_arg("bar", "alpha", alpha)
+        call check_size_arg("bar", "linewidth", linewidth)
+        call check_errors_arg("bar", "yerr", yerr)
+        call check_size_arg("bar", "capsize", capsize)
+
         call ax_sca(self)
         call bar(x, height, width, color, label, alpha, bottom, colors, &
                  edgecolor, linewidth, hatch, yerr, align, tick_label, &
@@ -1087,6 +1158,12 @@ contains
         real(dp), intent(in), optional :: height, alpha, left(:), linewidth
         character(len=*), intent(in), optional :: color, label, edgecolor
         character(len=*), intent(in), optional :: colors(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("barh", "height", height)
+        call check_unit_arg("barh", "alpha", alpha)
+        call check_size_arg("barh", "linewidth", linewidth)
+
         call ax_sca(self)
         call barh(y, width, height, color, label, alpha, left, colors, &
                   edgecolor, linewidth)
@@ -1096,6 +1173,11 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in), optional :: fmt
         real(dp), intent(in), optional :: padding, fontsize
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("bar_label", "padding", padding)
+        call check_size_arg("bar_label", "fontsize", fontsize)
+
         call ax_sca(self)
         call bar_label(fmt, padding, fontsize)
     end subroutine ax_bar_label
@@ -1110,6 +1192,13 @@ contains
         character(len=*), intent(in), optional :: orientation
         real(dp), intent(in), optional :: alpha, bin_edges(:), weights(:), rwidth
         logical, intent(in), optional :: density, cumulative, stacked, log
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_count_arg("hist", "bins", bins)
+        call check_unit_arg("hist", "alpha", alpha)
+        call check_finite_args("hist", "bin_edges", bin_edges)
+        call check_size_arg("hist", "rwidth", rwidth)
+
         call ax_sca(self)
         call hist(x, bins, color, label, alpha, bin_edges, density, &
                   cumulative, histtype, weights, stacked, orientation, &
@@ -1124,6 +1213,10 @@ contains
         character(len=*), intent(in), optional :: color, label, hatch, edgecolor
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("fill_between", "alpha", alpha)
+
         call ax_sca(self)
         call fill_between(x, y1, y2, color, label, alpha, where, hatch, edgecolor)
     end subroutine ax_fill_between
@@ -1136,6 +1229,10 @@ contains
         character(len=*), intent(in), optional :: color, label, hatch, edgecolor
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("fill_betweenx", "alpha", alpha)
+
         call ax_sca(self)
         call fill_betweenx(y, x1, x2, color, label, alpha, where, hatch, edgecolor)
     end subroutine ax_fill_betweenx
@@ -1145,6 +1242,10 @@ contains
         real(dp), intent(in) :: x(:), y(:, :)
         character(len=*), intent(in), optional :: labels(:), colors(:)
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("stackplot", "alpha", alpha)
+
         call ax_sca(self)
         call stackplot(x, y, labels, colors, alpha)
     end subroutine ax_stackplot
@@ -1158,6 +1259,16 @@ contains
         real(dp), intent(in), optional :: xerr_lo(:), xerr_hi(:)
         character(len=*), intent(in), optional :: fmt, color, label, marker
         real(dp), intent(in), optional :: capsize
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_errors_arg("errorbar", "yerr", yerr)
+        call check_errors_arg("errorbar", "xerr", xerr)
+        call check_errors_arg("errorbar", "yerr_lo", yerr_lo)
+        call check_errors_arg("errorbar", "yerr_hi", yerr_hi)
+        call check_errors_arg("errorbar", "xerr_lo", xerr_lo)
+        call check_errors_arg("errorbar", "xerr_hi", xerr_hi)
+        call check_size_arg("errorbar", "capsize", capsize)
+
         call ax_sca(self)
         call errorbar(x, y, yerr, fmt, color, label, capsize, marker, xerr, &
                       yerr_lo, yerr_hi, xerr_lo, xerr_hi)
@@ -1168,6 +1279,11 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: where, label, color, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("step", "lw", lw)
+        call check_unit_arg("step", "alpha", alpha)
+
         call ax_sca(self)
         call step(x, y, where, label, color, lw, linestyle, alpha)
     end subroutine ax_step
@@ -1185,6 +1301,14 @@ contains
         real(dp), intent(in), optional :: angle, lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor, hatch
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("add_rectangle", "width", width)
+        call check_finite_arg("add_rectangle", "height", height)
+        call check_finite_arg("add_rectangle", "angle", angle)
+        call check_size_arg("add_rectangle", "lw", lw)
+        call check_unit_arg("add_rectangle", "alpha", alpha)
+
         call ax_sca(self)
         call add_rectangle(xy, width, height, angle, facecolor, edgecolor, lw, &
                            alpha, fill, hatch)
@@ -1196,6 +1320,12 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("add_circle", "radius", radius)
+        call check_size_arg("add_circle", "lw", lw)
+        call check_unit_arg("add_circle", "alpha", alpha)
+
         call ax_sca(self)
         call add_circle(xy, radius, facecolor, edgecolor, lw, alpha, fill)
     end subroutine ax_add_circle
@@ -1207,6 +1337,14 @@ contains
         real(dp), intent(in), optional :: angle, lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("add_ellipse", "width", width)
+        call check_finite_arg("add_ellipse", "height", height)
+        call check_finite_arg("add_ellipse", "angle", angle)
+        call check_size_arg("add_ellipse", "lw", lw)
+        call check_unit_arg("add_ellipse", "alpha", alpha)
+
         call ax_sca(self)
         call add_ellipse(xy, width, height, angle, facecolor, edgecolor, lw, alpha, fill)
     end subroutine ax_add_ellipse
@@ -1217,6 +1355,11 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor, hatch
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("add_polygon", "lw", lw)
+        call check_unit_arg("add_polygon", "alpha", alpha)
+
         call ax_sca(self)
         call add_polygon(x, y, facecolor, edgecolor, lw, alpha, fill, hatch)
     end subroutine ax_add_polygon
@@ -1224,6 +1367,10 @@ contains
     subroutine ax_set_zorder(self, z)
         class(axes), intent(in) :: self
         real(dp), intent(in) :: z
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("set_zorder", "z", z)
+
         call ax_sca(self)
         call set_zorder(z)
     end subroutine ax_set_zorder
@@ -1231,6 +1378,11 @@ contains
     subroutine ax_axes3d(self, elev, azim)
         class(axes), intent(in) :: self
         real(dp), intent(in), optional :: elev, azim
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("axes3d", "elev", elev)
+        call check_finite_arg("axes3d", "azim", azim)
+
         call ax_sca(self)
         call axes3d(elev, azim)
     end subroutine ax_axes3d
@@ -1240,6 +1392,10 @@ contains
         real(dp), intent(in) :: y(:)
         real(dp), intent(in), optional :: position, width
         character(len=*), intent(in), optional :: color, label
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("boxplot", "width", width)
+
         call ax_sca(self)
         call boxplot(y, position, width, color, label)
     end subroutine ax_boxplot
@@ -1249,6 +1405,10 @@ contains
         real(dp), intent(in) :: y(:)
         real(dp), intent(in), optional :: position, width
         character(len=*), intent(in), optional :: color, label
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("violinplot", "width", width)
+
         call ax_sca(self)
         call violinplot(y, position, width, color, label)
     end subroutine ax_violinplot
@@ -1258,6 +1418,11 @@ contains
         real(dp), intent(in) :: xranges(:, :), yrange(2)
         character(len=*), intent(in), optional :: color, edgecolor
         real(dp), intent(in), optional :: alpha, lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("broken_barh", "alpha", alpha)
+        call check_size_arg("broken_barh", "lw", lw)
+
         call ax_sca(self)
         call broken_barh(xranges, yrange, color, alpha, edgecolor, lw)
     end subroutine ax_broken_barh
@@ -1267,6 +1432,12 @@ contains
         real(dp), intent(in) :: positions(:)
         real(dp), intent(in), optional :: lineoffset, linelength, lw
         character(len=*), intent(in), optional :: color
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("eventplot", "lineoffset", lineoffset)
+        call check_finite_arg("eventplot", "linelength", linelength)
+        call check_size_arg("eventplot", "lw", lw)
+
         call ax_sca(self)
         call eventplot(positions, lineoffset, linelength, color, lw)
     end subroutine ax_eventplot
@@ -1276,6 +1447,11 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in), optional :: gridsize, mincnt
         character(len=*), intent(in), optional :: cmap
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_grid_arg("hexbin", "gridsize", gridsize)
+        call check_nonneg_arg("hexbin", "mincnt", mincnt)
+
         call ax_sca(self)
         call hexbin(x, y, gridsize, cmap, mincnt)
     end subroutine ax_hexbin
@@ -1286,6 +1462,12 @@ contains
         integer, intent(in), optional :: bins(2)
         character(len=*), intent(in), optional :: cmap
         real(dp), intent(in), optional :: vmin, vmax
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_grid_args("hist2d", "bins", bins)
+        call check_finite_arg("hist2d", "vmin", vmin)
+        call check_finite_arg("hist2d", "vmax", vmax)
+
         call ax_sca(self)
         call hist2d(x, y, bins, cmap, vmin, vmax)
     end subroutine ax_hist2d
@@ -1295,6 +1477,10 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("loglog", "lw", lw)
+
         call ax_sca(self)
         call loglog(x, y, fmt, label, lw, color)
     end subroutine ax_loglog
@@ -1304,6 +1490,10 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("semilogx", "lw", lw)
+
         call ax_sca(self)
         call semilogx(x, y, fmt, label, lw, color)
     end subroutine ax_semilogx
@@ -1313,6 +1503,10 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("semilogy", "lw", lw)
+
         call ax_sca(self)
         call semilogy(x, y, fmt, label, lw, color)
     end subroutine ax_semilogy
@@ -1322,6 +1516,11 @@ contains
         real(dp), intent(in) :: z(:, :)
         character(len=*), intent(in), optional :: cmap
         real(dp), intent(in), optional :: vmin, vmax
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("matshow", "vmin", vmin)
+        call check_finite_arg("matshow", "vmax", vmax)
+
         call ax_sca(self)
         call matshow(z, cmap, vmin, vmax)
     end subroutine ax_matshow
@@ -1345,6 +1544,11 @@ contains
         real(dp), intent(in) :: theta(:), r(:)
         character(len=*), intent(in), optional :: color, label, linestyle, marker
         real(dp), intent(in), optional :: lw, alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("polar", "lw", lw)
+        call check_unit_arg("polar", "alpha", alpha)
+
         call ax_sca(self)
         call polar(theta, r, color, label, lw, linestyle, marker, alpha)
     end subroutine ax_polar
@@ -1354,6 +1558,12 @@ contains
         real(dp), intent(in) :: x(:), y(:), u(:, :), v(:, :)
         real(dp), intent(in), optional :: density, lw, arrowsize
         character(len=*), intent(in), optional :: color
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("streamplot", "density", density)
+        call check_size_arg("streamplot", "lw", lw)
+        call check_size_arg("streamplot", "arrowsize", arrowsize)
+
         call ax_sca(self)
         call streamplot(x, y, u, v, density, color, lw, arrowsize)
     end subroutine ax_streamplot
@@ -1363,6 +1573,11 @@ contains
         character(len=*), intent(in) :: cell_text(:, :)
         character(len=*), intent(in), optional :: col_labels(:), row_labels(:), loc
         real(dp), intent(in), optional :: col_widths(:), fontsize
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_args("table", "col_widths", col_widths)
+        call check_size_arg("table", "fontsize", fontsize)
+
         call ax_sca(self)
         call table(cell_text, col_labels, row_labels, col_widths, loc, fontsize)
     end subroutine ax_table
@@ -1373,6 +1588,11 @@ contains
         character(len=*), intent(in), optional :: axis
         integer, intent(in), optional :: decimals
         real(dp), intent(in), optional :: whole
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_digits_arg("tick_format", "decimals", decimals)
+        call check_finite_arg("tick_format", "whole", whole)
+
         call ax_sca(self)
         call tick_format(axis, style, decimals, whole)
     end subroutine ax_tick_format
@@ -1382,6 +1602,11 @@ contains
         character(len=*), intent(in), optional :: axis
         real(dp), intent(in), optional :: base
         integer, intent(in), optional :: nbins
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_positive_arg("tick_locator", "base", base)
+        call check_count_arg("tick_locator", "nbins", nbins)
+
         call ax_sca(self)
         call tick_locator(axis, base, nbins)
     end subroutine ax_tick_locator
@@ -1401,6 +1626,12 @@ contains
         real(dp), intent(in), optional :: width, lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("add_arrow", "width", width)
+        call check_size_arg("add_arrow", "lw", lw)
+        call check_unit_arg("add_arrow", "alpha", alpha)
+
         call ax_sca(self)
         call add_arrow(x, y, dx, dy, width, facecolor, edgecolor, lw, alpha, fill)
     end subroutine ax_add_arrow
@@ -1412,6 +1643,11 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("add_path", "lw", lw)
+        call check_unit_arg("add_path", "alpha", alpha)
+
         call ax_sca(self)
         call add_path(x, y, codes, facecolor, edgecolor, lw, alpha, fill)
     end subroutine ax_add_path
@@ -1421,6 +1657,11 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("plot3d", "lw", lw)
+        call check_unit_arg("plot3d", "alpha", alpha)
+
         call ax_sca(self)
         call plot3d(x, y, z, fmt, label, lw, color, marker, linestyle, alpha)
     end subroutine ax_plot3d
@@ -1430,6 +1671,11 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:)
         real(dp), intent(in), optional :: s, alpha
         character(len=*), intent(in), optional :: c, marker, label
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("scatter3d", "s", s)
+        call check_unit_arg("scatter3d", "alpha", alpha)
+
         call ax_sca(self)
         call scatter3d(x, y, z, s, c, marker, label, alpha)
     end subroutine ax_scatter3d
@@ -1439,6 +1685,10 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:)
         character(len=*), intent(in), optional :: color, cmap
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("plot_trisurf", "alpha", alpha)
+
         call ax_sca(self)
         call plot_trisurf(x, y, z, color, alpha, cmap)
     end subroutine ax_plot_trisurf
@@ -1448,6 +1698,10 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:), dx, dy, dz(:)
         character(len=*), intent(in), optional :: color
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("bar3d", "alpha", alpha)
+
         call ax_sca(self)
         call bar3d(x, y, z, dx, dy, dz, color, alpha)
     end subroutine ax_bar3d
@@ -1458,6 +1712,11 @@ contains
         real(dp), intent(in), optional :: length, lw
         logical, intent(in), optional :: normalize
         character(len=*), intent(in), optional :: color
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("quiver3d", "length", length)
+        call check_size_arg("quiver3d", "lw", lw)
+
         call ax_sca(self)
         call quiver3d(x, y, z, u, v, w, length, normalize, color, lw)
     end subroutine ax_quiver3d
@@ -1467,6 +1726,10 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:, :)
         real(dp), intent(in), optional :: levels(:)
         character(len=*), intent(in), optional :: cmap
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("contour3d", "levels", levels)
+
         call ax_sca(self)
         call contour3d(x, y, z, levels, cmap)
     end subroutine ax_contour3d
@@ -1476,6 +1739,11 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:, :)
         character(len=*), intent(in), optional :: color
         real(dp), intent(in), optional :: alpha, lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("plot_wireframe", "alpha", alpha)
+        call check_size_arg("plot_wireframe", "lw", lw)
+
         call ax_sca(self)
         call plot_wireframe(x, y, z, color, alpha, lw)
     end subroutine ax_plot_wireframe
@@ -1485,6 +1753,10 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:, :)
         character(len=*), intent(in), optional :: color, cmap
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("plot_surface", "alpha", alpha)
+
         call ax_sca(self)
         call plot_surface(x, y, z, color, alpha, cmap)
     end subroutine ax_plot_surface
@@ -1492,6 +1764,11 @@ contains
     subroutine ax_view_init(self, elev, azim)
         class(axes), intent(in) :: self
         real(dp), intent(in), optional :: elev, azim
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("view_init", "elev", elev)
+        call check_finite_arg("view_init", "azim", azim)
+
         call ax_sca(self)
         call view_init(elev, azim)
     end subroutine ax_view_init
@@ -1515,6 +1792,10 @@ contains
         character(len=*), intent(in), optional :: color, label
         real(dp), intent(in), optional :: scale, width
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_positive_arg("quiver", "scale", scale)
+        call check_size_arg("quiver", "width", width)
+
         call ax_sca(self)
         call quiver(x, y, u, v, color, scale, width, label)
     end subroutine ax_quiver
@@ -1527,6 +1808,12 @@ contains
         real(dp), intent(in), optional :: angle, labelsep, fontsize
         character(len=*), intent(in), optional :: coordinates, color, labelpos, labelcolor
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("quiverkey", "u", u)
+        call check_finite_arg("quiverkey", "angle", angle)
+        call check_size_arg("quiverkey", "labelsep", labelsep)
+        call check_size_arg("quiverkey", "fontsize", fontsize)
+
         call ax_sca(self)
         call quiverkey(x, y, u, label, angle, coordinates, color, labelpos, &
                        labelsep, labelcolor, fontsize)
@@ -1537,6 +1824,10 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: color, label
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("stem", "alpha", alpha)
+
         call ax_sca(self)
         call stem(x, y, color, label, alpha)
     end subroutine ax_stem
@@ -1550,6 +1841,16 @@ contains
         character(len=*), intent(in), optional :: interpolation
         real(dp), intent(in), optional :: vmin, vmax, extent(4), boundaries(:)
         real(dp), intent(in), optional :: vcenter, gamma, linthresh
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("imshow", "vmin", vmin)
+        call check_finite_arg("imshow", "vmax", vmax)
+        call check_finite_args("imshow", "extent", extent)
+        call check_finite_args("imshow", "boundaries", boundaries)
+        call check_finite_arg("imshow", "vcenter", vcenter)
+        call check_positive_arg("imshow", "gamma", gamma)
+        call check_positive_arg("imshow", "linthresh", linthresh)
+
         call ax_sca(self)
         call imshow(z, cmap, vmin, vmax, extent, origin, aspect, norm, &
                     interpolation, boundaries, vcenter, gamma, linthresh)
@@ -1560,6 +1861,10 @@ contains
         real(dp), intent(in) :: z(:, :, :)
         character(len=*), intent(in), optional :: origin, aspect
         real(dp), intent(in), optional :: extent(4)
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("imshow", "extent", extent)
+
         call ax_sca(self)
         call imshow(z, extent, origin, aspect)
     end subroutine ax_imshow_rgb
@@ -1582,6 +1887,14 @@ contains
         real(dp), intent(in) :: x(:), y(:), c(:, :)
         character(len=*), intent(in), optional :: cmap, norm
         real(dp), intent(in), optional :: vmin, vmax, vcenter, gamma, linthresh
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_arg("pcolormesh", "vmin", vmin)
+        call check_finite_arg("pcolormesh", "vmax", vmax)
+        call check_finite_arg("pcolormesh", "vcenter", vcenter)
+        call check_positive_arg("pcolormesh", "gamma", gamma)
+        call check_positive_arg("pcolormesh", "linthresh", linthresh)
+
         call ax_sca(self)
         call pcolormesh(x, y, c, cmap, vmin, vmax, norm, vcenter, gamma, linthresh)
     end subroutine ax_pcolormesh
@@ -1589,6 +1902,10 @@ contains
     subroutine ax_clabel(self, fontsize)
         class(axes), intent(in) :: self
         real(dp), intent(in), optional :: fontsize
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("clabel", "fontsize", fontsize)
+
         call ax_sca(self)
         call clabel(fontsize)
     end subroutine ax_clabel
@@ -1598,6 +1915,11 @@ contains
         real(dp), intent(in) :: z(:, :)
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("contour", "levels", levels)
+        call check_finite_args("contour", "extent", extent)
+
         call ax_sca(self)
         call contour(z, levels, cmap, extent)
     end subroutine ax_contour
@@ -1607,6 +1929,11 @@ contains
         real(dp), intent(in) :: z(:, :)
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("contourf", "levels", levels)
+        call check_finite_args("contourf", "extent", extent)
+
         call ax_sca(self)
         call contourf(z, levels, cmap, extent)
     end subroutine ax_contourf
@@ -1615,6 +1942,13 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in), optional :: label, orientation
         real(dp), intent(in), optional :: fraction, pad, shrink, aspect
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("colorbar", "fraction", fraction)
+        call check_finite_arg("colorbar", "pad", pad)
+        call check_size_arg("colorbar", "shrink", shrink)
+        call check_positive_arg("colorbar", "aspect", aspect)
+
         call ax_sca(self)
         call colorbar(label, orientation, fraction, pad, shrink, aspect)
     end subroutine ax_colorbar
@@ -1622,6 +1956,12 @@ contains
     subroutine ax_margins(self, m, x, y)
         class(axes), intent(in) :: self
         real(dp), intent(in), optional :: m, x, y
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_margin_arg("margins", "m", m)
+        call check_margin_arg("margins", "x", x)
+        call check_margin_arg("margins", "y", y)
+
         call ax_sca(self)
         call margins(m, x, y)
     end subroutine ax_margins
@@ -1639,6 +1979,10 @@ contains
         real(dp), intent(in) :: y
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("axhline", "lw", lw)
+
         call ax_sca(self)
         call axhline(y, color, linestyle, lw, label)
     end subroutine ax_axhline
@@ -1648,6 +1992,10 @@ contains
         real(dp), intent(in) :: ymin, ymax
         real(dp), intent(in), optional :: xmin, xmax, alpha
         character(len=*), intent(in), optional :: color, label
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("axhspan", "alpha", alpha)
+
         call ax_sca(self)
         call axhspan(ymin, ymax, xmin, xmax, color, alpha, label)
     end subroutine ax_axhspan
@@ -1657,6 +2005,10 @@ contains
         real(dp), intent(in) :: xmin, xmax
         real(dp), intent(in), optional :: ymin, ymax, alpha
         character(len=*), intent(in), optional :: color, label
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("axvspan", "alpha", alpha)
+
         call ax_sca(self)
         call axvspan(xmin, xmax, ymin, ymax, color, alpha, label)
     end subroutine ax_axvspan
@@ -1666,6 +2018,10 @@ contains
         real(dp), intent(in) :: y(:), xmin, xmax
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("hlines", "lw", lw)
+
         call ax_sca(self)
         call hlines(y, xmin, xmax, color, linestyle, lw, label)
     end subroutine ax_hlines
@@ -1675,6 +2031,10 @@ contains
         real(dp), intent(in) :: x(:), ymin, ymax
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("vlines", "lw", lw)
+
         call ax_sca(self)
         call vlines(x, ymin, ymax, color, linestyle, lw, label)
     end subroutine ax_vlines
@@ -1684,6 +2044,10 @@ contains
         real(dp), intent(in) :: x
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("axvline", "lw", lw)
+
         call ax_sca(self)
         call axvline(x, color, linestyle, lw, label)
     end subroutine ax_axvline
@@ -1694,6 +2058,10 @@ contains
         real(dp), intent(in), optional :: xy2(2), slope
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("axline", "lw", lw)
+
         call ax_sca(self)
         call axline(xy1, xy2, slope, color, linestyle, lw, label)
     end subroutine ax_axline
@@ -1706,6 +2074,10 @@ contains
         character(len=*), intent(in), optional :: color, ha, fontweight, fontstyle
         character(len=*), intent(in), optional :: transform
         real(dp), intent(in), optional :: fontsize
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("text", "fontsize", fontsize)
+
         call ax_sca(self)
         call text(x, y, s, color, fontsize, ha, fontweight, fontstyle, &
                   transform=transform)
@@ -1719,6 +2091,10 @@ contains
         real(dp), intent(in), optional :: xtext, ytext, fontsize
         character(len=*), intent(in), optional :: color, ha, fontweight, fontstyle
         character(len=*), intent(in), optional :: transform
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("annotate", "fontsize", fontsize)
+
         call ax_sca(self)
         call annotate(s, x, y, xtext, ytext, color, fontsize, ha, &
                       fontweight, fontstyle, transform=transform)
@@ -1729,6 +2105,10 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize
         character(len=*), intent(in), optional :: fontweight, fontstyle, loc
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("set_title", "fontsize", fontsize)
+
         call ax_sca(self)
         call title(s, fontsize, fontweight, fontstyle, loc)
     end subroutine ax_set_title
@@ -1738,6 +2118,11 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("set_xlabel", "fontsize", fontsize)
+        call check_finite_arg("set_xlabel", "labelpad", labelpad)
+
         call ax_sca(self)
         call xlabel(s, fontsize, fontweight, fontstyle, labelpad)
     end subroutine ax_set_xlabel
@@ -1747,6 +2132,11 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("set_ylabel", "fontsize", fontsize)
+        call check_finite_arg("set_ylabel", "labelpad", labelpad)
+
         call ax_sca(self)
         call ylabel(s, fontsize, fontweight, fontstyle, labelpad)
     end subroutine ax_set_ylabel
@@ -1795,6 +2185,11 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_positive_arg("set_xscale", "linthresh", linthresh)
+        call check_positive_arg("set_xscale", "linscale", linscale)
+
         call ax_sca(self)
         call set_xscale(name, linthresh, linscale)
     end subroutine ax_set_xscale
@@ -1803,6 +2198,11 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_positive_arg("set_yscale", "linthresh", linthresh)
+        call check_positive_arg("set_yscale", "linscale", linscale)
+
         call ax_sca(self)
         call set_yscale(name, linthresh, linscale)
     end subroutine ax_set_yscale
@@ -1812,6 +2212,10 @@ contains
         real(dp), intent(in) :: vals(:)
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("set_xticks", "vals", vals)
+
         call ax_sca(self)
         call xticks(vals, labels, minor)
     end subroutine ax_set_xticks
@@ -1821,6 +2225,10 @@ contains
         real(dp), intent(in) :: vals(:)
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_finite_args("set_yticks", "vals", vals)
+
         call ax_sca(self)
         call yticks(vals, labels, minor)
     end subroutine ax_set_yticks
@@ -1837,6 +2245,10 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in) :: color
         real(dp), intent(in), optional :: alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_unit_arg("set_facecolor", "alpha", alpha)
+
         call ax_sca(self)
         call set_facecolor(color, alpha)
     end subroutine ax_set_facecolor
@@ -1846,6 +2258,11 @@ contains
         logical, intent(in) :: on
         character(len=*), intent(in), optional :: axis, which, color, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("grid", "lw", lw)
+        call check_unit_arg("grid", "alpha", alpha)
+
         call ax_sca(self)
         call grid(on, axis, which, color, linestyle, lw, alpha)
     end subroutine ax_grid
@@ -1856,6 +2273,12 @@ contains
         real(dp), intent(in), optional :: fontsize, bbox_to_anchor(2)
         integer, intent(in), optional :: ncol
         logical, intent(in), optional :: frameon
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("legend", "fontsize", fontsize)
+        call check_finite_args("legend", "bbox_to_anchor", bbox_to_anchor)
+        call check_count_arg("legend", "ncol", ncol)
+
         call ax_sca(self)
         call legend(loc, fontsize, ncol, frameon, title, bbox_to_anchor)
     end subroutine ax_legend
@@ -1864,6 +2287,12 @@ contains
         class(axes), intent(in) :: self
         character(len=*), intent(in), optional :: axis, direction
         real(dp), intent(in), optional :: length, labelsize, rotation
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("tick_params", "length", length)
+        call check_size_arg("tick_params", "labelsize", labelsize)
+        call check_finite_arg("tick_params", "rotation", rotation)
+
         call ax_sca(self)
         call tick_params(axis, direction, length, labelsize, rotation)
     end subroutine ax_tick_params
@@ -1904,6 +2333,7 @@ contains
         real(dp), intent(in), optional :: fontsize
         character(len=*), intent(in), optional :: fontweight, fontstyle
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("suptitle", "fontsize", fontsize)
 
         call ensure_fig()
@@ -1918,6 +2348,7 @@ contains
         real(dp), intent(in), optional :: fontsize
         character(len=*), intent(in), optional :: fontweight, fontstyle, loc
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("title", "fontsize", fontsize)
 
         call ensure_fig()
@@ -1933,6 +2364,7 @@ contains
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("xlabel", "fontsize", fontsize)
         call check_finite_arg("xlabel", "labelpad", labelpad)
 
@@ -1949,6 +2381,7 @@ contains
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("ylabel", "fontsize", fontsize)
         call check_finite_arg("ylabel", "labelpad", labelpad)
 
@@ -1983,6 +2416,7 @@ contains
         real(dp), intent(in), optional :: size, title, labels, ticks, legend
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("set_fontsize", "size", size)
         call check_size_arg("set_fontsize", "title", title)
         call check_size_arg("set_fontsize", "labels", labels)
@@ -2022,6 +2456,7 @@ contains
         character(len=*), intent(in) :: color
         real(dp), intent(in), optional :: alpha
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("set_facecolor", "alpha", alpha)
 
         call ensure_fig()
@@ -2034,6 +2469,7 @@ contains
         character(len=*), intent(in), optional :: axis, which, color, linestyle
         real(dp), intent(in), optional :: lw, alpha
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("grid", "lw", lw)
         call check_unit_arg("grid", "alpha", alpha)
 
@@ -2064,6 +2500,7 @@ contains
         integer :: i, j, is, host, n_before
         type(axes) :: h
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("figlegend", "fontsize", fontsize)
         call check_count_arg("figlegend", "ncol", ncol)
 
@@ -2099,6 +2536,7 @@ contains
         logical, intent(in), optional :: frameon
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("legend", "fontsize", fontsize)
         call check_finite_args("legend", "bbox_to_anchor", bbox_to_anchor)
         call check_count_arg("legend", "ncol", ncol)
@@ -2188,7 +2626,8 @@ contains
         logical :: dox, doy
         integer :: st, dec
 
-        call check_nonneg_arg("tick_format", "decimals", decimals)
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_digits_arg("tick_format", "decimals", decimals)
         call check_finite_arg("tick_format", "whole", whole)
 
         call ensure_fig()
@@ -2224,6 +2663,7 @@ contains
         integer, intent(in), optional :: nbins
         logical :: dox, doy
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_positive_arg("tick_locator", "base", base)
         call check_count_arg("tick_locator", "nbins", nbins)
 
@@ -2258,6 +2698,7 @@ contains
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("xticks", "vals", vals)
 
         call ensure_fig()
@@ -2274,6 +2715,7 @@ contains
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("yticks", "vals", vals)
 
         call ensure_fig()
@@ -2311,6 +2753,7 @@ contains
         integer, intent(in), optional :: nbins
         logical :: dox, doy
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_count_arg("locator_params", "nbins", nbins)
 
         call ensure_fig()
@@ -2458,20 +2901,45 @@ contains
     end subroutine check_positive_args
 
     ! A count of bins, columns or ticks: at least one, as matplotlib
-    ! requires.
+    ! requires, and at most a million, past which the arrays for them
+    ! would not fit. The side of a 2D grid of cells is at most a thousand.
     subroutine check_count_arg(proc, name, v)
         character(len=*), intent(in) :: proc, name
         integer, intent(in), optional :: v
         if (.not. present(v)) return
-        if (v < 1) call contract_error(proc//": "//name//" must be at least 1, got "//int_to_str(v))
+        if (v < 1 .or. v > 1000000) &
+            call contract_error(proc//": "//name//" must be from 1 to 1000000, got "//int_to_str(v))
     end subroutine check_count_arg
 
     subroutine check_count_args(proc, name, v)
         character(len=*), intent(in) :: proc, name
         integer, intent(in), optional :: v(:)
         if (.not. present(v)) return
-        if (any(v < 1)) call contract_error(proc//": "//name//" must be at least 1")
+        if (any(v < 1) .or. any(v > 1000000)) call contract_error(proc//": "//name//" must be from 1 to 1000000")
     end subroutine check_count_args
+
+    subroutine check_grid_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v
+        if (.not. present(v)) return
+        if (v < 1 .or. v > 1000) &
+            call contract_error(proc//": "//name//" must be from 1 to 1000, got "//int_to_str(v))
+    end subroutine check_grid_arg
+
+    subroutine check_grid_args(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (any(v < 1) .or. any(v > 1000)) call contract_error(proc//": "//name//" must be from 1 to 1000")
+    end subroutine check_grid_args
+
+    ! Decimal places: a double carries no more than seventeen.
+    subroutine check_digits_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v
+        if (.not. present(v)) return
+        if (v < 0 .or. v > 17) call contract_error(proc//": "//name//" must be from 0 to 17, got "//int_to_str(v))
+    end subroutine check_digits_arg
 
     subroutine check_nonneg_arg(proc, name, v)
         character(len=*), intent(in) :: proc, name
@@ -2566,6 +3034,7 @@ contains
     subroutine set_zorder(z)
         real(dp), intent(in) :: z
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("set_zorder", "z", z)
 
         call ensure_fig()
@@ -2588,6 +3057,7 @@ contains
         integer :: is
         real(dp), allocatable :: sx(:), sy(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
         call check_size_arg("plot", "markersize", markersize)
@@ -2637,6 +3107,7 @@ contains
         integer :: i
         real(dp) :: idx(size(ydata))
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
         call check_size_arg("plot", "markersize", markersize)
@@ -2658,6 +3129,7 @@ contains
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         real(dp), intent(in), optional :: lw, alpha
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
 
@@ -2680,6 +3152,7 @@ contains
         integer :: is, n, k, id
         real(dp) :: lo, hi
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("scatter", "s", s)
         call check_unit_arg("scatter", "alpha", alpha)
         call check_finite_arg("scatter", "vmin", vmin)
@@ -2741,6 +3214,7 @@ contains
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_positive_arg("set_xscale", "linthresh", linthresh)
         call check_positive_arg("set_xscale", "linscale", linscale)
 
@@ -2752,6 +3226,7 @@ contains
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_positive_arg("set_yscale", "linthresh", linthresh)
         call check_positive_arg("set_yscale", "linscale", linscale)
 
@@ -2789,6 +3264,7 @@ contains
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("semilogx", "lw", lw)
 
         call ensure_fig()
@@ -2801,6 +3277,7 @@ contains
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("semilogy", "lw", lw)
 
         call ensure_fig()
@@ -2813,6 +3290,7 @@ contains
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("loglog", "lw", lw)
 
         call ensure_fig()
@@ -2907,6 +3385,7 @@ contains
         integer :: nr, nc
         real(dp) :: lo, hi
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("imshow", "vmin", vmin)
         call check_finite_arg("imshow", "vmax", vmax)
         call check_finite_args("imshow", "extent", extent)
@@ -2998,6 +3477,7 @@ contains
         real(dp), intent(in), optional :: extent(4)
         integer :: nr, nc, nch
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("imshow", "extent", extent)
 
         call ensure_fig()
@@ -3045,6 +3525,7 @@ contains
         integer, allocatable :: ij(:, :)
         integer :: i, j, k
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("spy", "precision", precision)
         call check_size_arg("spy", "markersize", markersize)
 
@@ -3077,6 +3558,9 @@ contains
         real(dp) :: ms
         character(len=:), allocatable :: mk
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_count_arg("spy", "m", m)
+        call check_count_arg("spy", "n", n)
         call check_size_arg("spy", "markersize", markersize)
 
         if (size(ij, 1) /= 2) call contract_error("spy: needs a (2, nnz) index array")
@@ -3113,6 +3597,7 @@ contains
         character(len=*), intent(in), optional :: cmap
         real(dp), intent(in), optional :: vmin, vmax
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("matshow", "vmin", vmin)
         call check_finite_arg("matshow", "vmax", vmax)
 
@@ -3127,6 +3612,7 @@ contains
         character(len=*), intent(in), optional :: color
         real(dp) :: off, len_
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("eventplot", "lineoffset", lineoffset)
         call check_finite_arg("eventplot", "linelength", linelength)
         call check_size_arg("eventplot", "lw", lw)
@@ -3156,6 +3642,7 @@ contains
         real(dp), intent(in), optional :: alpha, lw
         integer :: i, is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("broken_barh", "alpha", alpha)
         call check_size_arg("broken_barh", "lw", lw)
 
@@ -3177,6 +3664,7 @@ contains
         real(dp), intent(in), optional :: col_widths(:), fontsize
         integer :: nr, nc, i, j
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_args("table", "col_widths", col_widths)
         call check_size_arg("table", "fontsize", fontsize)
 
@@ -3242,13 +3730,15 @@ contains
         integer :: nx, ny, i, j, np, is, na, k, nseed, sx, sy, sd(5)
         character(len=32) :: col
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("streamplot", "density", density)
         call check_size_arg("streamplot", "lw", lw)
         call check_size_arg("streamplot", "arrowsize", arrowsize)
 
-        ! Each unit of density is a 30 by 30 grid of cells to keep track of.
+        ! Each unit of density is a 30 by 30 grid of cells to keep track of,
+        ! and as many lines to draw.
         if (present(density)) then
-            if (density > 100.0_dp) call contract_error("streamplot: density must be at most 100")
+            if (density > 10.0_dp) call contract_error("streamplot: density must be at most 10")
         end if
         call ensure_fig()
         nx = size(x)
@@ -3661,7 +4151,8 @@ contains
         real(dp), allocatable :: xe(:), ye(:), h(:, :)
         logical, allocatable :: ok(:)
 
-        call check_count_args("hist2d", "bins", bins)
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_grid_args("hist2d", "bins", bins)
         call check_finite_arg("hist2d", "vmin", vmin)
         call check_finite_arg("hist2d", "vmax", vmax)
 
@@ -3739,7 +4230,8 @@ contains
         real(dp), allocatable :: c1(:, :), c2(:, :)
         logical, allocatable :: ok(:)
 
-        call check_count_arg("hexbin", "gridsize", gridsize)
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_grid_arg("hexbin", "gridsize", gridsize)
         call check_nonneg_arg("hexbin", "mincnt", mincnt)
 
         call ensure_fig()
@@ -3842,6 +4334,7 @@ contains
         integer :: nr, nc
         real(dp) :: lo, hi
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("pcolormesh", "vmin", vmin)
         call check_finite_arg("pcolormesh", "vmax", vmax)
         call check_finite_arg("pcolormesh", "vcenter", vcenter)
@@ -3900,6 +4393,7 @@ contains
         character(len=*), intent(in), optional :: cmap, norm
         real(dp), intent(in), optional :: vmin, vmax
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("pcolor", "vmin", vmin)
         call check_finite_arg("pcolor", "vmax", vmax)
 
@@ -3939,6 +4433,7 @@ contains
     subroutine axes3d(elev, azim)
         real(dp), intent(in), optional :: elev, azim
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("axes3d", "elev", elev)
         call check_finite_arg("axes3d", "azim", azim)
 
@@ -3954,6 +4449,7 @@ contains
     subroutine view_init(elev, azim)
         real(dp), intent(in), optional :: elev, azim
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("view_init", "elev", elev)
         call check_finite_arg("view_init", "azim", azim)
 
@@ -3981,6 +4477,7 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         integer :: is, n
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot3d", "lw", lw)
         call check_unit_arg("plot3d", "alpha", alpha)
 
@@ -4001,6 +4498,7 @@ contains
         character(len=*), intent(in), optional :: c, marker, label
         integer :: is, n
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("scatter3d", "s", s)
         call check_unit_arg("scatter3d", "alpha", alpha)
 
@@ -4022,6 +4520,7 @@ contains
         real(dp), intent(in), optional :: alpha
         integer :: is, nx, ny
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("plot_surface", "alpha", alpha)
 
         call axes3d()
@@ -4056,6 +4555,7 @@ contains
         integer, allocatable :: tri(:, :)
         integer :: is, n, nt
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("plot_trisurf", "alpha", alpha)
 
         call axes3d()
@@ -4090,6 +4590,7 @@ contains
         real(dp), intent(in), optional :: alpha
         integer :: is, n
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("bar3d", "alpha", alpha)
 
         call axes3d()
@@ -4128,6 +4629,7 @@ contains
         character(len=32) :: col
         integer :: n, i, k
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("quiver3d", "length", length)
         call check_size_arg("quiver3d", "lw", lw)
 
@@ -4211,6 +4713,7 @@ contains
         real(dp) :: tol, cx(2), cy(2), cz(2)
         integer :: nr, nc, nlev, nseg, ns, nv, i, j, k, c, np, cm, id
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("contour3d", "levels", levels)
 
         call axes3d()
@@ -4285,6 +4788,7 @@ contains
         real(dp), intent(in), optional :: alpha, lw
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("plot_wireframe", "alpha", alpha)
         call check_size_arg("plot_wireframe", "lw", lw)
 
@@ -4312,6 +4816,7 @@ contains
         integer :: nt, i, k
         real(dp) :: nan, zero
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("triplot", "lw", lw)
 
         call ensure_fig()
@@ -4352,6 +4857,7 @@ contains
         real(dp) :: lo, hi, v, tx(3), ty(3)
         real(dp), allocatable :: fv(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("tripcolor", "vmin", vmin)
         call check_finite_arg("tripcolor", "vmax", vmax)
         call check_unit_arg("tripcolor", "alpha", alpha)
@@ -4400,6 +4906,7 @@ contains
         real(dp), intent(in), optional :: levels(:), lw
         character(len=*), intent(in), optional :: cmap
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("tricontour", "levels", levels)
         call check_size_arg("tricontour", "lw", lw)
 
@@ -4412,6 +4919,7 @@ contains
         real(dp), intent(in), optional :: levels(:)
         character(len=*), intent(in), optional :: cmap
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("tricontourf", "levels", levels)
 
         call add_tricontour(x, y, z, levels, cmap, filled=.true.)
@@ -4499,6 +5007,7 @@ contains
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("contour", "levels", levels)
         call check_finite_args("contour", "extent", extent)
 
@@ -4511,6 +5020,7 @@ contains
     subroutine clabel(fontsize)
         real(dp), intent(in), optional :: fontsize
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("clabel", "fontsize", fontsize)
 
         call ensure_fig()
@@ -4523,6 +5033,7 @@ contains
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("contourf", "levels", levels)
         call check_finite_args("contourf", "extent", extent)
 
@@ -4586,6 +5097,7 @@ contains
         character(len=8) :: w
         real(dp), allocatable :: sx(:), sy(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("step", "lw", lw)
         call check_unit_arg("step", "alpha", alpha)
 
@@ -4670,6 +5182,7 @@ contains
         character(len=*), intent(in), optional :: colors(:)
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("barh", "height", height)
         call check_unit_arg("barh", "alpha", alpha)
         call check_size_arg("barh", "linewidth", linewidth)
@@ -4689,6 +5202,7 @@ contains
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("barh", "height", height)
         call check_unit_arg("barh", "alpha", alpha)
         call check_size_arg("barh", "linewidth", linewidth)
@@ -4705,6 +5219,7 @@ contains
         real(dp), intent(in), optional :: alpha
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("stem", "alpha", alpha)
 
         call ensure_fig()
@@ -4728,6 +5243,7 @@ contains
         character(len=*), intent(in), optional :: color, label, linestyle, marker
         real(dp), intent(in), optional :: lw, alpha
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("polar", "lw", lw)
         call check_unit_arg("polar", "alpha", alpha)
 
@@ -4752,6 +5268,7 @@ contains
         real(dp) :: px(4), py(4), rx(4), ry(4), a, ca, sa
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("add_rectangle", "width", width)
         call check_finite_arg("add_rectangle", "height", height)
         call check_finite_arg("add_rectangle", "angle", angle)
@@ -4778,6 +5295,7 @@ contains
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("add_circle", "radius", radius)
         call check_size_arg("add_circle", "lw", lw)
         call check_unit_arg("add_circle", "alpha", alpha)
@@ -4795,6 +5313,7 @@ contains
         real(dp) :: px(N), py(N), t, cx, cy, a, ca, sa
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("add_ellipse", "width", width)
         call check_finite_arg("add_ellipse", "height", height)
         call check_finite_arg("add_ellipse", "angle", angle)
@@ -4822,6 +5341,7 @@ contains
         logical, intent(in), optional :: fill
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("add_polygon", "lw", lw)
         call check_unit_arg("add_polygon", "alpha", alpha)
 
@@ -4859,6 +5379,7 @@ contains
         real(dp) :: w, ln, ct, st, ax_(7), ay(7), u, v
         integer :: j
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("add_arrow", "width", width)
         call check_size_arg("add_arrow", "lw", lw)
         call check_unit_arg("add_arrow", "alpha", alpha)
@@ -4890,6 +5411,7 @@ contains
         integer :: is, j, np, nv
         integer :: v(len_trim(codes))
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("add_path", "lw", lw)
         call check_unit_arg("add_path", "alpha", alpha)
 
@@ -4934,6 +5456,7 @@ contains
         real(dp), intent(in), optional :: scale, width
         integer :: is, n
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_positive_arg("quiver", "scale", scale)
         call check_size_arg("quiver", "width", width)
 
@@ -4969,6 +5492,7 @@ contains
         character(len=*), intent(in), optional :: coordinates, color, labelpos, labelcolor
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("quiverkey", "u", u)
         call check_finite_arg("quiverkey", "angle", angle)
         call check_size_arg("quiverkey", "labelsep", labelsep)
@@ -5021,6 +5545,7 @@ contains
         real(dp) :: rad, pd, ld, off
         real(dp), allocatable :: v(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("pie", "explode", explode)
         call check_finite_arg("pie", "startangle", startangle)
         call check_size_arg("pie", "linewidth", linewidth)
@@ -5191,6 +5716,7 @@ contains
         logical :: dox, doy
         real(dp) :: d
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("tick_params", "length", length)
         call check_size_arg("tick_params", "labelsize", labelsize)
         call check_finite_arg("tick_params", "rotation", rotation)
@@ -5279,6 +5805,7 @@ contains
     subroutine margins(m, x, y)
         real(dp), intent(in), optional :: m, x, y
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_margin_arg("margins", "m", m)
         call check_margin_arg("margins", "x", x)
         call check_margin_arg("margins", "y", y)
@@ -5380,6 +5907,7 @@ contains
         logical, intent(in), optional :: vert, notch, showmeans, patch_artist
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("boxplot", "width", width)
         call check_finite_arg("boxplot", "whis", whis)
 
@@ -5411,6 +5939,7 @@ contains
         real(dp), allocatable :: pos(:)
         logical :: up
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("boxplot", "width", width)
         call check_finite_arg("boxplot", "whis", whis)
 
@@ -5446,6 +5975,7 @@ contains
         logical, intent(in), optional :: vert, showmeans, showmedians, showextrema
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("violinplot", "width", width)
 
         call add_dist_series(SERIES_VIOLIN, y, position, width, color, label, 0.5_dp)
@@ -5469,6 +5999,7 @@ contains
         real(dp), allocatable :: pos(:)
         logical :: up
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("violinplot", "width", width)
 
         call ensure_fig()
@@ -5536,6 +6067,7 @@ contains
         real(dp), intent(in), optional :: fraction, pad, shrink, aspect
         real(dp) :: keep
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("colorbar", "fraction", fraction)
         call check_finite_arg("colorbar", "pad", pad)
         call check_size_arg("colorbar", "shrink", shrink)
@@ -5588,6 +6120,7 @@ contains
         real(dp), allocatable :: pos(:)
         integer :: is, n
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("bar", "width", width)
         call check_unit_arg("bar", "alpha", alpha)
         call check_size_arg("bar", "linewidth", linewidth)
@@ -5634,6 +6167,7 @@ contains
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("bar", "width", width)
         call check_unit_arg("bar", "alpha", alpha)
         call check_size_arg("bar", "linewidth", linewidth)
@@ -5689,6 +6223,7 @@ contains
         real(dp), intent(in), optional :: padding, fontsize
         integer :: i
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("bar_label", "padding", padding)
         call check_size_arg("bar_label", "fontsize", fontsize)
 
@@ -5723,6 +6258,7 @@ contains
         logical :: norm, cum, stk, horiz
         character(len=16) :: ht
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_count_arg("hist", "bins", bins)
         call check_unit_arg("hist", "alpha", alpha)
         call check_finite_args("hist", "bin_edges", bin_edges)
@@ -5915,6 +6451,7 @@ contains
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:), interpolate
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("fill_between", "alpha", alpha)
 
         call fill_core(.false., x, y1, y2, color, label, alpha, where, hatch, edgecolor, &
@@ -5933,6 +6470,7 @@ contains
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:), interpolate
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("fill_betweenx", "alpha", alpha)
 
         call fill_core(.true., y, x1, x2, color, label, alpha, where, hatch, edgecolor, &
@@ -6088,6 +6626,7 @@ contains
         integer :: n, nl, k
         logical :: has_c, has_l
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("stackplot", "alpha", alpha)
 
         call ensure_fig()
@@ -6165,6 +6704,7 @@ contains
         integer :: is, n, mk, ls
         character(len=7) :: col
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_errors_arg("errorbar", "yerr", yerr)
         call check_errors_arg("errorbar", "xerr", xerr)
         call check_errors_arg("errorbar", "yerr_lo", yerr_lo)
@@ -6223,6 +6763,7 @@ contains
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("axhline", "lw", lw)
 
         call add_ref_line(SERIES_HLINE, y, color, linestyle, lw, label)
@@ -6233,6 +6774,7 @@ contains
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("axvline", "lw", lw)
 
         call add_ref_line(SERIES_VLINE, x, color, linestyle, lw, label)
@@ -6250,6 +6792,7 @@ contains
         real(dp) :: p2(2)
         integer :: is
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("axline", "lw", lw)
 
         call ensure_fig()
@@ -6297,6 +6840,7 @@ contains
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("hlines", "lw", lw)
 
         call add_lines(SERIES_HLINES, y, xmin, xmax, color, linestyle, lw, label)
@@ -6307,6 +6851,7 @@ contains
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("vlines", "lw", lw)
 
         call add_lines(SERIES_VLINES, x, ymin, ymax, color, linestyle, lw, label)
@@ -6347,6 +6892,7 @@ contains
         real(dp), intent(in), optional :: xmin, xmax, alpha
         character(len=*), intent(in), optional :: color, label
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("axhspan", "alpha", alpha)
 
         call add_span(SERIES_HSPAN, ymin, ymax, xmin, xmax, color, alpha, label)
@@ -6357,6 +6903,7 @@ contains
         real(dp), intent(in), optional :: ymin, ymax, alpha
         character(len=*), intent(in), optional :: color, label
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_unit_arg("axvspan", "alpha", alpha)
 
         call add_span(SERIES_VSPAN, xmin, xmax, ymin, ymax, color, alpha, label)
@@ -6436,6 +6983,7 @@ contains
         character(len=*), intent(in), optional :: transform, boxstyle
         real(dp), intent(in), optional :: fontsize, rotation, bbox_alpha, bbox_pad
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("text", "fontsize", fontsize)
         call check_finite_arg("text", "rotation", rotation)
         call check_unit_arg("text", "bbox_alpha", bbox_alpha)
@@ -6458,6 +7006,7 @@ contains
         real(dp), intent(in), optional :: fontsize, rotation
         integer :: it
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("figtext", "fontsize", fontsize)
         call check_finite_arg("figtext", "rotation", rotation)
 
@@ -6485,6 +7034,7 @@ contains
         real(dp) :: xt, yt
         logical :: arrow
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("annotate", "fontsize", fontsize)
         call check_finite_arg("annotate", "rotation", rotation)
         call check_unit_arg("annotate", "bbox_alpha", bbox_alpha)
@@ -6751,6 +7301,7 @@ contains
         character(len=:), allocatable :: data
         real(dp) :: saved_dpi
 
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("savefig", "pad_inches", pad_inches)
 
         select case (file_ext(filename))
