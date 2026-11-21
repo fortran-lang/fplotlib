@@ -567,12 +567,12 @@ contains
         real(dp), intent(in), optional :: left, right, bottom, top, wspace, hspace
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_finite_arg("subplots_adjust", "left", left)
-        call check_finite_arg("subplots_adjust", "right", right)
-        call check_finite_arg("subplots_adjust", "bottom", bottom)
-        call check_finite_arg("subplots_adjust", "top", top)
-        call check_finite_arg("subplots_adjust", "wspace", wspace)
-        call check_finite_arg("subplots_adjust", "hspace", hspace)
+        call check_layout_arg("subplots_adjust", "left", left)
+        call check_layout_arg("subplots_adjust", "right", right)
+        call check_layout_arg("subplots_adjust", "bottom", bottom)
+        call check_layout_arg("subplots_adjust", "top", top)
+        call check_layout_arg("subplots_adjust", "wspace", wspace)
+        call check_layout_arg("subplots_adjust", "hspace", hspace)
 
         call ensure_fig()
         if (present(left)) fig_left = left
@@ -1947,10 +1947,10 @@ contains
         real(dp), intent(in), optional :: fraction, pad, shrink, aspect
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_size_arg("colorbar", "fraction", fraction)
-        call check_finite_arg("colorbar", "pad", pad)
-        call check_size_arg("colorbar", "shrink", shrink)
-        call check_positive_arg("colorbar", "aspect", aspect)
+        call check_layout_arg("colorbar", "fraction", fraction)
+        call check_layout_arg("colorbar", "pad", pad)
+        call check_layout_arg("colorbar", "shrink", shrink)
+        call check_ratio_arg("colorbar", "aspect", aspect)
 
         call ax_sca(self)
         call colorbar(label, orientation, fraction, pad, shrink, aspect)
@@ -2974,6 +2974,28 @@ contains
         end if
     end subroutine check_dashes_arg
 
+    ! A fraction of the figure or of an axes, as subplots_adjust and
+    ! colorbar take them: finite, and no more than a thousand either way,
+    ! past which the layout is far off any canvas.
+    subroutine check_layout_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. abs(v) > 1000.0_dp) then
+            call contract_error(proc//": "//name//" must be finite and at most 1000 in size, got "//arg_str(v))
+        end if
+    end subroutine check_layout_arg
+
+    ! A width to height ratio, from a thousandth to a thousand.
+    subroutine check_ratio_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v < 1.0e-3_dp .or. v > 1000.0_dp) then
+            call contract_error(proc//": "//name//" must be from 0.001 to 1000, got "//arg_str(v))
+        end if
+    end subroutine check_ratio_arg
+
     ! matplotlib's margins take anything above -0.5, where the view would
     ! shrink to nothing.
     subroutine check_margin_arg(proc, name, v)
@@ -3089,7 +3111,7 @@ contains
         if (present(markeredgewidth)) ax(cur_i)%series(is)%mew = markeredgewidth
         if (present(markevery)) ax(cur_i)%series(is)%markevery = max(1, markevery)
         if (present(dashes)) then
-            ax(cur_i)%series(is)%n_dash = min(size(dashes), 4)
+            ax(cur_i)%series(is)%n_dash = size(dashes)
             ax(cur_i)%series(is)%dashes(1:ax(cur_i)%series(is)%n_dash) = &
                 dashes(1:ax(cur_i)%series(is)%n_dash)
         end if
@@ -6069,10 +6091,10 @@ contains
         real(dp) :: keep
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_size_arg("colorbar", "fraction", fraction)
-        call check_finite_arg("colorbar", "pad", pad)
-        call check_size_arg("colorbar", "shrink", shrink)
-        call check_positive_arg("colorbar", "aspect", aspect)
+        call check_layout_arg("colorbar", "fraction", fraction)
+        call check_layout_arg("colorbar", "pad", pad)
+        call check_layout_arg("colorbar", "shrink", shrink)
+        call check_ratio_arg("colorbar", "aspect", aspect)
 
         call ensure_fig()
         if (.not. ax(cur_i)%has_cmap_src) return

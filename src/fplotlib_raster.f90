@@ -37,6 +37,12 @@ module fplotlib_raster
     public :: pb_should_snap, pb_snap
     public :: fill_path_buf, stroke_path_buf, blit_image
     public :: clip_to_box, clip_segment
+    public :: full_walk
+
+    ! For tests only: true walks every dash of every stroke in full,
+    ! without leaving out anything that cannot be seen, so that a test can
+    ! compare what the shortcuts draw with what they stand for.
+    logical :: full_walk = .false.
 
     ! A path flattened to polylines: every curve is already line segments, so
     ! the rasterizer never sees a Bezier.
@@ -325,8 +331,7 @@ contains
         real(dp), intent(in) :: ax, ay, bx, by
         integer, intent(inout) :: y0b, y1b
         real(dp) :: x0, y0, x1, y1, dir, dxdy, x, xn, dy, d, xa, xb
-        real(dp) :: s, x0f, x1f, a0, am, a1, a2, xmf, x0fl, x1cl
-        integer :: y, yi0, yi1, i0, i1, xi
+        integer :: y, yi0, yi1
 
         if (abs(ay - by) < 1.0e-12_dp) return
         if (ay < by) then
@@ -351,44 +356,71 @@ contains
             d = dy*dir
             xa = min(x, xn)
             xb = max(x, xn)
-            xa = min(max(xa, 0.0_dp), real(cv%w, dp))
-            xb = min(max(xb, 0.0_dp), real(cv%w, dp))
-            x0fl = real(floor(xa), dp)
-            x1cl = real(ceiling(xb), dp)
-            i0 = int(x0fl)
-            i1 = int(x1cl)
-            if (i0 > cv%w) i0 = cv%w
-            if (i1 > cv%w) i1 = cv%w
-
-            if (i1 <= i0 + 1) then
-                ! Narrower than a pixel: split the area between two columns.
-                xmf = 0.5_dp*(xa + xb) - x0fl
-                cv%acc(i0, y + 1) = cv%acc(i0, y + 1) + d*(1.0_dp - xmf)
-                if (i0 + 1 <= cv%w) &
-                    cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*xmf
+            if (xa >= 0.0_dp .and. xb <= real(cv%w, dp)) then
+                call deposit(cv, y, xa, xb, d)
             else
-                s = 1.0_dp/(xb - xa)
-                x0f = xa - x0fl
-                a0 = 0.5_dp*s*(1.0_dp - x0f)**2
-                x1f = xb - x1cl + 1.0_dp
-                am = 0.5_dp*s*x1f**2
-                cv%acc(i0, y + 1) = cv%acc(i0, y + 1) + d*a0
-                if (i1 == i0 + 2) then
-                    cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*(1.0_dp - a0 - am)
-                else
-                    a1 = s*(1.5_dp - x0f)
-                    cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*(a1 - a0)
-                    do xi = i0 + 2, i1 - 2
-                        cv%acc(xi, y + 1) = cv%acc(xi, y + 1) + d*s
-                    end do
-                    a2 = a1 + real(i1 - i0 - 3, dp)*s
-                    cv%acc(i1 - 1, y + 1) = cv%acc(i1 - 1, y + 1) + d*(1.0_dp - a2 - am)
+                ! A piece of the edge crossing the left or right side of
+                ! the canvas is cut there, its height shared out by length:
+                ! what lies left of the canvas winds every pixel of the row,
+                ! a step at column zero, and what lies right of it none.
+                ! Clamping the two ends instead would tilt the piece and
+                ! spread its coverage along the row.
+                if (xb > xa) then
+                    if (xa < 0.0_dp) call deposit(cv, y, 0.0_dp, 0.0_dp, d*(min(xb, 0.0_dp) - xa)/(xb - xa))
+                    if (xb > 0.0_dp .and. xa < real(cv%w, dp)) &
+                        call deposit(cv, y, max(xa, 0.0_dp), min(xb, real(cv%w, dp)), &
+                                     d*(min(xb, real(cv%w, dp)) - max(xa, 0.0_dp))/(xb - xa))
+                else if (xa < 0.0_dp) then
+                    call deposit(cv, y, 0.0_dp, 0.0_dp, d)
                 end if
-                if (i1 <= cv%w) cv%acc(i1, y + 1) = cv%acc(i1, y + 1) + d*am
             end if
             x = xn
         end do
     end subroutine acc_edge
+
+    ! The area deltas of one piece of an edge within one row: from xa to
+    ! xb, both inside [0, w], with d its signed height in the row.
+    subroutine deposit(cv, y, xa, xb, d)
+        type(canvas_t), intent(inout) :: cv
+        integer, intent(in) :: y
+        real(dp), intent(in) :: xa, xb, d
+        real(dp) :: s, x0f, x1f, a0, am, a1, a2, xmf, x0fl, x1cl
+        integer :: i0, i1, xi
+
+        x0fl = real(floor(xa), dp)
+        x1cl = real(ceiling(xb), dp)
+        i0 = int(x0fl)
+        i1 = int(x1cl)
+        if (i0 > cv%w) i0 = cv%w
+        if (i1 > cv%w) i1 = cv%w
+
+        if (i1 <= i0 + 1) then
+            ! Narrower than a pixel: split the area between two columns.
+            xmf = 0.5_dp*(xa + xb) - x0fl
+            cv%acc(i0, y + 1) = cv%acc(i0, y + 1) + d*(1.0_dp - xmf)
+            if (i0 + 1 <= cv%w) &
+                cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*xmf
+        else
+            s = 1.0_dp/(xb - xa)
+            x0f = xa - x0fl
+            a0 = 0.5_dp*s*(1.0_dp - x0f)**2
+            x1f = xb - x1cl + 1.0_dp
+            am = 0.5_dp*s*x1f**2
+            cv%acc(i0, y + 1) = cv%acc(i0, y + 1) + d*a0
+            if (i1 == i0 + 2) then
+                cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*(1.0_dp - a0 - am)
+            else
+                a1 = s*(1.5_dp - x0f)
+                cv%acc(i0 + 1, y + 1) = cv%acc(i0 + 1, y + 1) + d*(a1 - a0)
+                do xi = i0 + 2, i1 - 2
+                    cv%acc(xi, y + 1) = cv%acc(xi, y + 1) + d*s
+                end do
+                a2 = a1 + real(i1 - i0 - 3, dp)*s
+                cv%acc(i1 - 1, y + 1) = cv%acc(i1 - 1, y + 1) + d*(1.0_dp - a2 - am)
+            end if
+            if (i1 <= cv%w) cv%acc(i1, y + 1) = cv%acc(i1, y + 1) + d*am
+        end if
+    end subroutine deposit
 
     ! ------------------------------------------------------------------
     ! Fill a flattened path. Subpaths are treated as closed whether or not
@@ -779,7 +811,11 @@ contains
         bx1 = real(cv%w, dp) + reach + 2.0_dp
         by0 = -reach - 2.0_dp
         by1 = real(cv%h, dp) + reach + 2.0_dp
-        call dash_plan(paint, hw, cv%scale, walk, cover)
+        call dash_plan(pb, paint, hw, cv%scale, bx0, bx1, by0, by1, walk, cover)
+        if (full_walk .and. paint%n_dash > 0) then
+            walk = .true.
+            cover = 1.0_dp
+        end if
 
         do s = 1, pb%ns
             b = pb%sub_beg(s)
@@ -797,17 +833,25 @@ contains
         call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha*cover, paint%clip)
     end subroutine stroke_path_buf
 
-    ! Whether a dashed stroke is walked dash by dash. The one exception is a
-    ! pattern finer than half a pixel, where no dash can be told apart and
-    ! the line is drawn solid at the cover the pattern gives it: the share
-    ! of dash in it, and with round or square ends also what the ends add,
-    ! half a pen each.
-    subroutine dash_plan(paint, hw, scale, walk, cover)
+    ! Whether a dashed stroke is walked dash by dash. There are two
+    ! exceptions, both where no dash can be told apart:
+    ! - a pattern finer than half a pixel, drawn solid at the cover it
+    !   gives, the share of dash in it and, with round or square ends,
+    !   what the ends add, half a pen each;
+    ! - round or square ends on so wide a pen that more than MAX_DASHES
+    !   dashes would reach in, a pen some hundred thousand pixels across
+    !   with gaps a ten-thousandth of it, where the ends overlap into the
+    !   solid band they make together.
+    subroutine dash_plan(pb, paint, hw, scale, bx0, bx1, by0, by1, walk, cover)
+        type(pathbuf_t), intent(in) :: pb
         type(paint_t), intent(in) :: paint
-        real(dp), intent(in) :: hw, scale
+        real(dp), intent(in) :: hw, scale, bx0, bx1, by0, by1
         logical, intent(out) :: walk
         real(dp), intent(out) :: cover
-        real(dp) :: period
+        real(dp), parameter :: MAX_DASHES = 2.0e6_dp
+        real(dp) :: period, seen, ax, ay, ex, ey
+        integer :: s, i, j, b, n
+        logical :: visible, cut0, cut1
 
         walk = .false.
         cover = 1.0_dp
@@ -820,6 +864,24 @@ contains
             return
         end if
         walk = .true.
+        if (paint%cap == CAP_BUTT .or. 2.0_dp*hw < MAX_DASHES*period) return
+        ! How many dashes the box would have walked.
+        seen = 0.0_dp
+        do s = 1, pb%ns
+            b = pb%sub_beg(s)
+            n = pb%sub_len(s)
+            do i = b, b + n - 1
+                j = i + 1
+                if (i == b + n - 1) then
+                    if (.not. pb%sub_closed(s)) exit
+                    j = b
+                end if
+                call clip_segment(pb%x(i), pb%y(i), pb%x(j), pb%y(j), bx0, bx1, by0, by1, &
+                                  ax, ay, ex, ey, visible, cut0, cut1)
+                if (visible) seen = seen + hypot(ex - ax, ey - ay)
+            end do
+        end do
+        if (seen > MAX_DASHES*period) walk = .false.
     end subroutine dash_plan
 
     ! The share of a dash pattern that is dash rather than gap.
@@ -875,7 +937,7 @@ contains
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
         real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l, ta, tb
-        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk, vx, vy, q0, q1
+        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, pk, vx, vy
         real(dp), allocatable :: rx(:), ry(:)
         integer :: i, di, nr, c
         logical :: on, inside, visible, cut0, cut1, wide, bare
@@ -904,9 +966,13 @@ contains
             if (l <= 0.0_dp) cycle
             t0 = 0.0_dp
             tb = l
-            wide = hw > max(cw, ch)
-            inside = sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
-                     qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1 .and. .not. wide
+            ! Only butt ends: their dashes never overlap, so leaving out the
+            ! ones that cannot reach changes no pixel even where coverage is
+            ! summed. Round and square ends overlap and are walked in full.
+            wide = hw > max(cw, ch) .and. paint%cap == CAP_BUTT .and. .not. full_walk
+            inside = (sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
+                      qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1 .and. .not. wide) &
+                     .or. full_walk
             if (.not. inside) then
                 ! What lies outside is skipped, ending any dash under way;
                 ! the walk then runs over the visible piece alone.
@@ -918,15 +984,6 @@ contains
                     if (lp > 0.0_dp) then
                         ux = (fx - ax)/lp
                         uy = (fy - ay)/lp
-                        ! Round and square ends reach a pen width past
-                        ! a dash, but of the dashes beyond either side
-                        ! only the nearest can reach in, its end covering
-                        ! all a further one could: the window takes in
-                        ! one whole pattern more at most.
-                        ce = 0.0_dp
-                        period = sum(paint%dash(1:paint%n_dash))*scale
-                        if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
-                        if (paint%cap /= CAP_BUTT) ce = min(1.5_dp*hw, period)
                         p0 = huge(1.0_dp)
                         p1 = -huge(1.0_dp)
                         do c = 0, 3
@@ -935,17 +992,8 @@ contains
                             p0 = min(p0, pk)
                             p1 = max(p1, pk)
                         end do
-                        ! The nearest dash on either side is counted from
-                        ! the canvas, or from the piece's own end where
-                        ! the canvas lies beyond it.
-                        q0 = p0 - 2.0_dp
-                        q1 = p1 + 2.0_dp
-                        if (paint%cap /= CAP_BUTT) then
-                            q0 = min(p0, lp) - ce - 2.0_dp
-                            q1 = max(p1, 0.0_dp) + ce + 2.0_dp
-                        end if
-                        p0 = max(0.0_dp, q0)
-                        p1 = min(lp, q1)
+                        p0 = max(0.0_dp, p0 - 2.0_dp)
+                        p1 = min(lp, p1 + 2.0_dp)
                         if (p1 <= p0) then
                             visible = .false.
                         else
@@ -1003,6 +1051,9 @@ contains
             do while (t0 < tb)
                 seg = min(rem, tb - t0)
                 t1 = t0 + seg
+                ! t0 + (tb - t0) can round to just short of tb, which would
+                ! add a point a rounding step on in no particular direction.
+                if (seg >= tb - t0) t1 = tb
                 ex = sx + (qx - sx)*(t1/l)
                 ey = sy + (qy - sy)*(t1/l)
                 if (on) then
@@ -1096,6 +1147,8 @@ contains
         logical, intent(inout) :: on
         real(dp) :: left, period
 
+        ! Moving nowhere changes nothing, even at a dash of no length.
+        if (d <= 0.0_dp) return
         left = d
         if (left < rem) then
             rem = rem - left

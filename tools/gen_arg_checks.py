@@ -20,6 +20,8 @@ Each real argument is one of:
   positive  finite, > 0                       (scales, thresholds)
   finite    any finite value                  (angles, offsets, limits)
   margin    finite, > -0.5                    (margins)
+  layout    finite, at most 1000 either way    (fractions of the figure or axes)
+  ratio     1e-3 to 1e3                        (a shape's width to height)
   errors    not negative, NaN allowed         (error bar lengths, arrays only)
   dashes    finite, >= 0, not all zero        (dash patterns, arrays only)
   data      may be missing: NaN is left out of the picture
@@ -62,6 +64,11 @@ BY_NAME = {
     'ymax': 'data', 'position': 'data', 'lo': 'data', 'hi': 'data',
 }
 BY_PROC = {
+    ('subplots_adjust', 'left'): 'layout', ('subplots_adjust', 'right'): 'layout',
+    ('subplots_adjust', 'bottom'): 'layout', ('subplots_adjust', 'top'): 'layout',
+    ('subplots_adjust', 'wspace'): 'layout', ('subplots_adjust', 'hspace'): 'layout',
+    ('colorbar', 'fraction'): 'layout', ('colorbar', 'pad'): 'layout',
+    ('colorbar', 'shrink'): 'layout', ('colorbar', 'aspect'): 'ratio',
     ('set_fontsize', 'size'): 'size', ('set_fontsize', 'title'): 'size',
     ('set_fontsize', 'labels'): 'size', ('set_fontsize', 'ticks'): 'size',
     ('set_fontsize', 'legend'): 'size',
@@ -111,7 +118,7 @@ INTS_BY_PROC = {('spy', 'm'): 'any', ('spy', 'n'): 'any', ('hist2d', 'bins'): 'g
 IHELPER = {'count': 'check_count_arg', 'grid': 'check_grid_arg', 'nonneg': 'check_nonneg_arg',
            'digits': 'check_digits_arg'}
 IAHELPER = {'count': 'check_count_args', 'grid': 'check_grid_args'}
-HELPER = {'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
+HELPER = {'layout': 'check_layout_arg', 'ratio': 'check_ratio_arg', 'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
           'finite': 'check_finite_arg', 'margin': 'check_margin_arg'}
 AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
 # Each block the script writes starts with this line; only such blocks are

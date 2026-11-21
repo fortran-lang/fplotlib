@@ -45,7 +45,9 @@ no longer be written. Going past one is a broken precondition, and stops:
 | The side of a 2D grid: `hexbin` `gridsize`, `hist2d` `bins` | 1 to 1000 |
 | `tick_format` `decimals` | 0 to 17 |
 | `streamplot` `density` | at most 10 |
-| Lengths in a dash pattern | at most `MAX_DASH` (8) |
+| `subplots_adjust` fractions, `colorbar` `fraction`, `pad`, `shrink` | at most 1000 in size |
+| `colorbar` `aspect` | 0.001 to 1000 |
+| Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A PNG, after any `bbox_inches="tight"` cropping | fewer than `huge(1)/8` pixels |
 
 Data is never limited: a value of any size, or a missing one, is drawn or

@@ -10,11 +10,13 @@
 module test_missing
     use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, &
                                               ieee_positive_inf
+    use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib
     use fplotlib_style, only: lower
     use fplotlib_render
     use fplotlib_draw, only: render_figure
     use fplotlib_backend_png, only: png_renderer_t
+    use fplotlib_raster, only: full_walk
     implicit none
     private
 
@@ -124,6 +126,7 @@ contains
             print "(a, i0)", "dash shortcut: a far corner of a huge pen differs from the solid pen by ", worst
             nfail = nfail + 1
         end if
+        call random_walk_check(nfail)
         dots = line_rgb([0.0_dp, 8.0_dp])
         bar = line_rgb([0.0_dp])
         dark_dots = 0.0_dp
@@ -137,6 +140,108 @@ contains
             nfail = nfail + 1
         end if
     end subroutine dash_shortcut_check
+
+    ! Four hundred strokes made up from a fixed seed: pens from a point to
+    ! nine canvases wide, every end and join, mitre limits, patterns with
+    ! dashes of no length, offsets, open and closed paths with corners up
+    ! to seven canvases off. Each is drawn with the shortcuts and with
+    ! fplotlib_raster's full_walk, and the two must agree pixel for pixel.
+    subroutine random_walk_check(nfail)
+        integer, intent(inout) :: nfail
+        real(dp), parameter :: WIDTHS(6) = [1.0_dp, 7.0_dp, 40.0_dp, 150.0_dp, 400.0_dp, 900.0_dp]
+        real(dp), parameter :: LENGTHS(5) = [0.0_dp, 2.0_dp, 7.0_dp, 20.0_dp, 45.0_dp]
+        integer, parameter :: ENDS(3) = [CAP_BUTT, CAP_ROUND, CAP_SQUARE]
+        integer, parameter :: TURNS(3) = [JOIN_MITER, JOIN_ROUND, JOIN_BEVEL]
+        integer :: k, j, nv, nd, bad, worst
+        integer(int64) :: seed
+        type(paint_t) :: q, plain
+        real(dp) :: px(6), py(6)
+        integer :: verbs(7)
+        character(len=:), allocatable :: quick, full
+
+        seed = 20261121_int64
+        bad = 0
+        ! First, dots of no length along a line that leaves the canvas:
+        ! the first dot lies where the walk resumes.
+        q = plain
+        q%stroked = .true.
+        q%line_width = 6.0_dp
+        q%cap = CAP_ROUND
+        q%n_dash = 2
+        q%dash(1:2) = [0.0_dp, 10.0_dp]
+        full_walk = .false.
+        quick = one_stroke([30.0_dp, 200.0_dp], [30.5_dp, 30.5_dp], [VERB_MOVE, VERB_LINE], q)
+        full_walk = .true.
+        full = one_stroke([30.0_dp, 200.0_dp], [30.5_dp, 30.5_dp], [VERB_MOVE, VERB_LINE], q)
+        full_walk = .false.
+        if (max_diff(quick, full) > 2) then
+            print "(a)", "dash shortcut: a dot of no length went missing"
+            bad = bad + 1
+        end if
+        do k = 1, 400
+            q = plain
+            q%stroked = .true.
+            q%line_width = WIDTHS(pick(seed, 6))
+            q%cap = ENDS(pick(seed, 3))
+            q%join = TURNS(pick(seed, 3))
+            q%miter_limit = merge(10.0_dp, 4.0_dp, pick(seed, 2) == 1)
+            nd = pick(seed, 4)
+            q%n_dash = nd
+            do j = 1, nd
+                q%dash(j) = LENGTHS(pick(seed, 5))
+            end do
+            if (sum(q%dash(1:nd)) < 2.0_dp) q%dash(1) = q%dash(1) + 10.0_dp
+            q%dash_offset = 0.0_dp
+            if (pick(seed, 2) == 1) q%dash_offset = real(pick(seed, 90) - 31, dp)
+            nv = 1 + pick(seed, 5)
+            do j = 1, nv
+                px(j) = real(pick(seed, 1500) - 700, dp)
+                py(j) = real(pick(seed, 1500) - 700, dp)
+            end do
+            verbs(1) = VERB_MOVE
+            verbs(2:nv) = VERB_LINE
+            j = nv
+            if (pick(seed, 3) == 1) then
+                j = nv + 1
+                verbs(j) = VERB_CLOSE
+            end if
+            full_walk = .false.
+            quick = one_stroke(px(1:nv), py(1:nv), verbs(1:j), q)
+            full_walk = .true.
+            full = one_stroke(px(1:nv), py(1:nv), verbs(1:j), q)
+            full_walk = .false.
+            worst = max_diff(quick, full)
+            if (worst > 2) then
+                bad = bad + 1
+                if (bad <= 5) print "(a, i0, a, i0)", "dash shortcut: random stroke ", k, &
+                    " differs from the full walk by ", worst
+            end if
+        end do
+        if (bad > 0) nfail = nfail + 1
+    end subroutine random_walk_check
+
+    ! 1 to n, from the Park and Miller generator, whose products fit in 64
+    ! bits, so that every compiler makes the same strokes.
+    integer function pick(seed, n)
+        integer(int64), intent(inout) :: seed
+        integer, intent(in) :: n
+        seed = modulo(seed*48271_int64, 2147483647_int64)
+        pick = 1 + int(modulo(seed/16_int64, int(n, int64)))
+    end function pick
+
+    function one_stroke(px, py, verbs, q) result(rgb)
+        real(dp), intent(in) :: px(:), py(:)
+        integer, intent(in) :: verbs(:)
+        type(paint_t), intent(in) :: q
+        character(len=:), allocatable :: rgb
+        type(png_renderer_t) :: r
+        r%keep_pixels = .true.
+        call r%set_dpi(72.0_dp)
+        call r%open_canvas(100.0_dp, 100.0_dp, bg_rgb=[255, 255, 255])
+        call r%draw_path(px, py, verbs, size(verbs), q)
+        call r%close_canvas()
+        rgb = r%rgb
+    end function one_stroke
 
     ! A dashed pen of width lw along path 1 (a corner just off the canvas),
     ! 2 (a straight line ending at x = xe), 3 (a corner forty billion
