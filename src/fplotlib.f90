@@ -6730,13 +6730,13 @@ contains
             data = render_eps(facecolor, transparent, bbox_inches, pad_inches)
         end select
         fig_dpi = saved_dpi
-        call save_bytes(filename, data, status)
+        call save_bytes("savefig", filename, data, status)
     end subroutine savefig
 
     ! Writes data to filename. A failure goes to status when the caller
     ! passed one, and otherwise stops the program with its message.
-    subroutine save_bytes(filename, data, status)
-        character(len=*), intent(in) :: filename, data
+    subroutine save_bytes(proc, filename, data, status)
+        character(len=*), intent(in) :: proc, filename, data
         type(status_t), intent(out), optional :: status
         type(status_t) :: local
 
@@ -6748,7 +6748,7 @@ contains
         if (local%ok()) return
         ! Exit code 2, so that a script's caller can tell a file that could
         ! not be written from a broken precondition, which exits with 1.
-        write (error_unit, "(a)") "fplotlib: "//local%message
+        write (error_unit, "(a)") "fplotlib: "//proc//": "//local%message
         error stop 2
     end subroutine save_bytes
 
@@ -6840,12 +6840,12 @@ contains
         ! "as fast as you like", so a frame never asks for less than one.
         delay = max(1, nint(min(100.0_dp/rate, 65535.0_dp)))
         if (file_ext(filename) == "gif") then
-            call save_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
+            call save_bytes("save_animation", filename, gif_encode(anim_w, anim_h, anim_n, &
                                                  anim_pix(1:anim_len), delay, rep), status)
         else
             ! APNG delays are a fraction, so the frame rate is not rounded
             ! to hundredths of a second.
-            call save_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
+            call save_bytes("save_animation", filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
                              max(1, nint(min(1000.0_dp/rate, 65535.0_dp))), 1000, rep), status)
         end if

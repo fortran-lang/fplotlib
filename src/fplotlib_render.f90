@@ -69,9 +69,10 @@
 ! Errors
 ! ------
 ! Nothing in this contract returns an error. A call that breaks it, such as
-! drawing before open_canvas, a nonfinite coordinate or an end_group without
-! a begin_group, is a bug in the caller and stops the program with a message
-! naming the rule (contract_error in fplotlib_status). A correct sequence of
+! drawing before open_canvas, a coordinate that is not finite or lies
+! beyond MAX_COORD (1e15 points), or an end_group without a begin_group,
+! is a bug in the caller and stops the program with a message naming the
+! rule (contract_error in fplotlib_status). A correct sequence of
 ! calls always succeeds.
 !
 ! The checks are made here, once, rather than in each backend. Every public
@@ -105,7 +106,7 @@ module fplotlib_render
     public :: ANCHOR_START, ANCHOR_MIDDLE, ANCHOR_END
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
-    public :: MAX_DASH
+    public :: MAX_DASH, MAX_COORD
 
     ! Path verbs. A path is x/y vertex arrays plus one verb per vertex group:
     ! MOVE and LINE consume one vertex, CUBIC consumes three (two controls and
@@ -129,6 +130,10 @@ module fplotlib_render
     integer, parameter :: SLANT_ROMAN = 0, SLANT_ITALIC = 1
 
     integer, parameter :: MAX_DASH = 8
+
+    ! Every coordinate, size and width is finite and at most this far from
+    ! zero, in points. The plotting layer clips its geometry long before.
+    real(dp), parameter :: MAX_COORD = 1.0e15_dp
 
     ! Rectangular clip. fplotlib only ever clips series to the axes box, and a
     ! rectangle is the one clip shape all four formats support cheaply.
@@ -378,13 +383,13 @@ contains
         real(dp), intent(in), optional :: x0, y0
 
         if (self%is_open) call contract_error("renderer: canvas is already open")
-        if (.not. all(ieee_is_finite([width, height])) .or. width < 0.0_dp .or. height < 0.0_dp) then
-            call contract_error("renderer: canvas size must be finite and nonnegative")
+        if (.not. all(in_range([width, height])) .or. width < 0.0_dp .or. height < 0.0_dp) then
+            call contract_error("renderer: canvas size must be finite, nonnegative and at most 1e15")
         end if
         if (present(bg_rgb)) call check_rgb(bg_rgb)
         if (present(bg_alpha)) call check_alpha(bg_alpha, "renderer: background alpha must be in [0,1]")
-        if (present(x0)) call check_finite([x0], "renderer: nonfinite canvas origin")
-        if (present(y0)) call check_finite([y0], "renderer: nonfinite canvas origin")
+        if (present(x0)) call check_finite([x0], "renderer: nonfinite or out-of-range canvas origin")
+        if (present(y0)) call check_finite([y0], "renderer: nonfinite or out-of-range canvas origin")
         call self%open_canvas_impl(width, height, bg_rgb, bg_alpha, x0, y0)
         self%width = width
         self%height = height
@@ -425,7 +430,7 @@ contains
         call check_open(self)
         call check_box(x, y, w, h, "rectangle")
         if (present(radius)) then
-            if (.not. ieee_is_finite(radius) .or. radius < 0.0_dp) then
+            if (.not. in_range(radius) .or. radius < 0.0_dp) then
                 call contract_error("rectangle: invalid corner radius")
             end if
         end if
@@ -439,8 +444,8 @@ contains
         type(paint_t), intent(in) :: paint
 
         call check_open(self)
-        if (.not. all(ieee_is_finite([cx, cy, r])) .or. r < 0.0_dp) then
-            call contract_error("circle: expected a finite center and a finite nonnegative radius")
+        if (.not. all(in_range([cx, cy, r])) .or. r < 0.0_dp) then
+            call contract_error("circle: expected an in-range center and an in-range nonnegative radius")
         end if
         call check_paint(paint)
         call self%draw_circle_impl(cx, cy, r, paint)
@@ -455,8 +460,8 @@ contains
 
         call check_open(self)
         if (size(x) /= size(y)) call contract_error("markers: x and y differ in length")
-        call check_finite(x, "markers: nonfinite position")
-        call check_finite(y, "markers: nonfinite position")
+        call check_finite(x, "markers: nonfinite or out-of-range position")
+        call check_finite(y, "markers: nonfinite or out-of-range position")
         call check_path(mx, my, mverbs, n_mverb, "markers")
         call check_paint(paint)
         if (size(x) == 0 .or. n_mverb == 0) return
@@ -471,7 +476,7 @@ contains
         real(dp), intent(in) :: angle
 
         call check_open(self)
-        call check_finite([x, y, angle], "glyphs: nonfinite position or angle")
+        call check_finite([x, y, angle], "glyphs: nonfinite or out-of-range position or angle")
         call check_glyphs(run)
         call check_paint(paint)
         if (run%n == 0) return
@@ -534,10 +539,17 @@ contains
         if (.not. self%is_open) call contract_error("renderer: canvas is not open")
     end subroutine check_open
 
+    ! Finite and no further than MAX_COORD from zero: the most any format
+    ! here can write, as a plain decimal, and far beyond any canvas.
+    elemental logical function in_range(v)
+        real(dp), intent(in) :: v
+        in_range = ieee_is_finite(v) .and. abs(v) <= MAX_COORD
+    end function in_range
+
     subroutine check_finite(values, message)
         real(dp), intent(in) :: values(:)
         character(len=*), intent(in) :: message
-        if (.not. all(ieee_is_finite(values))) call contract_error(message)
+        if (.not. all(in_range(values))) call contract_error(message)
     end subroutine check_finite
 
     subroutine check_rgb(rgb)
@@ -555,8 +567,8 @@ contains
     subroutine check_box(x, y, w, h, what)
         real(dp), intent(in) :: x, y, w, h
         character(len=*), intent(in) :: what
-        if (.not. all(ieee_is_finite([x, y, w, h])) .or. w < 0.0_dp .or. h < 0.0_dp) then
-            call contract_error(what//": expected finite coordinates and nonnegative size")
+        if (.not. all(in_range([x, y, w, h])) .or. w < 0.0_dp .or. h < 0.0_dp) then
+            call contract_error(what//": expected in-range coordinates and nonnegative size")
         end if
     end subroutine check_box
 
@@ -575,7 +587,7 @@ contains
         if (.not. paint%stroked) return
         call check_rgb(paint%stroke_rgb)
         call check_alpha(paint%stroke_alpha, "paint: stroke alpha must be in [0,1]")
-        call check_finite([paint%line_width, paint%miter_limit, paint%dash_offset], "paint: nonfinite stroke")
+        call check_finite([paint%line_width, paint%miter_limit, paint%dash_offset], "paint: nonfinite or out-of-range stroke")
         if (paint%line_width < 0.0_dp .or. paint%miter_limit < 0.0_dp) then
             call contract_error("paint: negative line width or miter limit")
         end if
@@ -587,7 +599,7 @@ contains
             call contract_error("paint: invalid dash count")
         end if
         if (paint%n_dash > 0) then
-            call check_finite(paint%dash(1:paint%n_dash), "paint: nonfinite dash length")
+            call check_finite(paint%dash(1:paint%n_dash), "paint: nonfinite or out-of-range dash length")
             if (any(paint%dash(1:paint%n_dash) < 0.0_dp)) call contract_error("paint: negative dash length")
             if (sum(paint%dash(1:paint%n_dash)) <= 0.0_dp) then
                 call contract_error("paint: dash pattern must have positive length")
@@ -627,8 +639,8 @@ contains
         if (points > size(x) .or. points > size(y)) then
             call contract_error(what//": not enough coordinates for the verbs")
         end if
-        call check_finite(x(1:points), what//": nonfinite coordinate")
-        call check_finite(y(1:points), what//": nonfinite coordinate")
+        call check_finite(x(1:points), what//": nonfinite or out-of-range coordinate")
+        call check_finite(y(1:points), what//": nonfinite or out-of-range coordinate")
     end subroutine check_path
 
     subroutine check_glyphs(run)
@@ -648,9 +660,9 @@ contains
         if (any(run%gid(1:n) < 0) .or. any(run%gid(1:n) > NGLYPH)) then
             call contract_error("glyphs: invalid glyph ID")
         end if
-        call check_finite(run%x(1:n), "glyphs: nonfinite glyph position")
-        call check_finite(run%y(1:n), "glyphs: nonfinite glyph position")
-        call check_finite(run%size(1:n), "glyphs: nonfinite font size")
+        call check_finite(run%x(1:n), "glyphs: nonfinite or out-of-range glyph position")
+        call check_finite(run%y(1:n), "glyphs: nonfinite or out-of-range glyph position")
+        call check_finite(run%size(1:n), "glyphs: nonfinite or out-of-range font size")
         if (any(run%size(1:n) < 0.0_dp)) call contract_error("glyphs: negative font size")
     end subroutine check_glyphs
 

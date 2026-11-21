@@ -557,16 +557,53 @@ contains
         real(dp), allocatable, intent(inout) :: ox(:), oy(:)
         integer, intent(inout) :: m
         integer, intent(in) :: depth
-        real(dp) :: mx, my
+        real(dp) :: px, py, qx, qy, mx, my
+        logical :: moved_p, moved_q, lrel, rrel
+        integer :: it
 
         if (depth > 1100) return
         if (.not. both_far(ax, ay, bx, by, x0, x1, y0, y1)) return
-        mx = 0.5_dp*ax + 0.5_dp*bx
-        my = 0.5_dp*ay + 0.5_dp*by
-        call split_far(ax, ay, mx, my, x0, x1, y0, y1, ox, oy, m, depth + 1)
-        call push_xy(ox, oy, m, mx, my)
-        call split_far(mx, my, bx, by, x0, x1, y0, y1, ox, oy, m, depth + 1)
+        ! While only one half still reaches the box, the other is dropped:
+        ! its points are collinear and far away, so only the last of them
+        ! needs keeping.
+        px = ax; py = ay
+        qx = bx; qy = by
+        moved_p = .false.
+        moved_q = .false.
+        do it = 1, 1100
+            if (.not. both_far(px, py, qx, qy, x0, x1, y0, y1)) exit
+            mx = 0.5_dp*px + 0.5_dp*qx
+            my = 0.5_dp*py + 0.5_dp*qy
+            lrel = touches(px, py, mx, my, x0, x1, y0, y1)
+            rrel = touches(mx, my, qx, qy, x0, x1, y0, y1)
+            if (lrel .and. rrel) exit
+            if (lrel) then
+                qx = mx; qy = my
+                moved_q = .true.
+            else if (rrel) then
+                px = mx; py = my
+                moved_p = .true.
+            else
+                return
+            end if
+        end do
+        if (moved_p) call push_xy(ox, oy, m, px, py)
+        if (both_far(px, py, qx, qy, x0, x1, y0, y1)) then
+            mx = 0.5_dp*px + 0.5_dp*qx
+            my = 0.5_dp*py + 0.5_dp*qy
+            call split_far(px, py, mx, my, x0, x1, y0, y1, ox, oy, m, depth + 1)
+            call push_xy(ox, oy, m, mx, my)
+            call split_far(mx, my, qx, qy, x0, x1, y0, y1, ox, oy, m, depth + 1)
+        end if
+        if (moved_q) call push_xy(ox, oy, m, qx, qy)
     end subroutine split_far
+
+    ! Whether the bounding box of the segment meets the box.
+    pure logical function touches(ax, ay, bx, by, x0, x1, y0, y1) result(r)
+        real(dp), intent(in) :: ax, ay, bx, by, x0, x1, y0, y1
+        r = min(ax, bx) <= x1 .and. max(ax, bx) >= x0 .and. &
+            min(ay, by) <= y1 .and. max(ay, by) >= y0
+    end function touches
 
     ! Whether both ends lie further from the box than a thousand times its
     ! size while the segment's bounding box still reaches it.
@@ -738,7 +775,9 @@ contains
             n = pb%sub_len(s)
             if (n < 1) cycle
             call gather(pb, b, n, pb%sub_closed(s), dx, dy, nd)
-            if (paint%n_dash > 0) then
+            ! A pattern shorter than half a pixel cannot be told from a
+            ! solid line, and would take forever to walk.
+            if (paint%n_dash > 0 .and. sum(paint%dash(1:max(paint%n_dash, 1)))*cv%scale >= 0.5_dp) then
                 call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, &
                                    -hw - 2.0_dp, real(cv%w, dp) + hw + 2.0_dp, &
                                    -hw - 2.0_dp, real(cv%h, dp) + hw + 2.0_dp)
@@ -786,7 +825,7 @@ contains
         integer :: i, di, nr
         logical :: on, inside, visible, cut0, cut1
 
-        allocate (rx(n + 4), ry(n + 4))
+        allocate (rx(2*n + 4), ry(2*n + 4))
         di = 1
         rem = paint%dash(1)*scale
         on = .true.
@@ -806,8 +845,12 @@ contains
                 ! the walk then runs over the visible piece alone.
                 call clip_segment(sx, sy, qx, qy, bx0, bx1, by0, by1, &
                                   ax, ay, fx, fy, visible, cut0, cut1)
-                if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
-                nr = 0
+                ! A dash under way goes on through an end the box does not
+                ! cut, keeping its join there.
+                if (.not. visible .or. cut0) then
+                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                    nr = 0
+                end if
                 if (.not. visible) then
                     call dash_advance(min(l, huge(1.0_dp)), paint, scale, di, rem, on)
                     cycle
@@ -849,10 +892,12 @@ contains
                 end if
             end do
             if (.not. inside) then
-                if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
-                nr = 0
-                call dash_advance(min(hypot(px(i + 1) - qx, py(i + 1) - qy), huge(1.0_dp)), &
-                                  paint, scale, di, rem, on)
+                if (cut1) then
+                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                    nr = 0
+                    call dash_advance(min(hypot(px(i + 1) - qx, py(i + 1) - qy), huge(1.0_dp)), &
+                                      paint, scale, di, rem, on)
+                end if
             end if
         end do
         if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)

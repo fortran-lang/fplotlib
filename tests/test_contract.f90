@@ -21,10 +21,10 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 24
+    integer, parameter :: NCASE = 23
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
-        "fplotlib: path: nonfinite coordinate", &
+        "fplotlib: path: nonfinite or out-of-range coordinate", &
         "fplotlib: renderer: end_group without begin_group", &
         "fplotlib: renderer: begin_group without end_group", &
         "fplotlib: renderer: bytes before close_canvas", &
@@ -45,8 +45,7 @@ module test_contract
         "fplotlib: plot: dashes must not be all zero", &
         "fplotlib: tick_params: rotation must be finite", &
         "fplotlib: plot: dashes must be finite and nonnegative", &
-        "fplotlib: errorbar: yerr must not be negative", &
-        "fplotlib: savefig: pad_inches leaves nothing of the figure"]
+        "fplotlib: errorbar: yerr must not be negative"]
 
 contains
 
@@ -120,9 +119,6 @@ contains
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[nan, 1.0_dp])
         case (23)
             call errorbar([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], yerr=[0.1_dp, -0.1_dp])
-        case (24)
-            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
-            call savefig("tests/out/contract.svg", bbox_inches="tight", pad_inches=-100.0_dp)
         end select
     end subroutine contract_case
 

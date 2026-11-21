@@ -1,6 +1,7 @@
 ! Nice tick generation for linear and log axes.
 module fplotlib_ticks
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib_style, only: dp
     implicit none
     private
@@ -105,7 +106,7 @@ contains
         n = 0
         do k = first, 1, -1
             step = STEPS(k)*scal
-            base = floor(v0/step)*step
+            base = real_floor(v0/step)*step
             low = edge_le((v0 - base)/step)
             high = edge_ge((v1 - base)/step)
             n = 0
@@ -171,7 +172,8 @@ contains
         real(dp), intent(in) :: x
         integer :: k
         real(dp) :: frac
-        k = floor(x)
+        ! Bounded first: a tick index this far out is never drawn anyway.
+        k = floor(max(-1.0e9_dp, min(1.0e9_dp, x)))
         frac = x - real(k, dp)
         if (frac > 1.0_dp - 1.0e-10_dp) k = k + 1
     end function edge_le
@@ -180,10 +182,18 @@ contains
         real(dp), intent(in) :: x
         integer :: k
         real(dp) :: frac
-        k = floor(x)
+        k = floor(max(-1.0e9_dp, min(1.0e9_dp, x)))
         frac = x - real(k, dp)
         if (frac > 1.0e-10_dp) k = k + 1
     end function edge_ge
+
+    ! floor, kept in reals, for values beyond any integer.
+    elemental function real_floor(x) result(r)
+        real(dp), intent(in) :: x
+        real(dp) :: r
+        r = aint(x)
+        if (r > x) r = r - 1.0_dp
+    end function real_floor
 
     ! Decades either side of zero, plus zero itself, thinned by a whole
     ! stride when there are more decades than will fit.
@@ -331,8 +341,8 @@ contains
             end if
         end if
 
-        if (abs(v - real(nint(v), dp)) < 1.0e-8_dp * max(1.0_dp, av)) then
-            write (tmp, "(I0)") nint(v)
+        if (av < 1.0e15_dp .and. abs(v - anint(v)) < 1.0e-8_dp * max(1.0_dp, av)) then
+            write (tmp, "(I0)") nint(v, int64)
             n = len_trim(tmp)
             s(1:n) = tmp(1:n)
             return
@@ -484,7 +494,7 @@ contains
         real(dp), intent(in) :: v
         integer, intent(in) :: k
         real(dp) :: r
-        r = floor(v/10.0_dp**k)
+        r = real_floor(v/10.0_dp**k)
     end function decade_floor
 
     ! use_off and the power limits are what ticklabel_format sets; their

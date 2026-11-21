@@ -18,7 +18,8 @@ module fplotlib_artist
     public
     ! put_path's own bookkeeping.
     private :: finite_point, path_move, path_put
-    private :: emit_path, far_path, grow_put, push_point, view_box
+    private :: emit_path, far_path, grow_put, push_point, view_box, tame
+    private :: flatten_cubic, image_groups
 
 contains
 
@@ -268,6 +269,24 @@ contains
         by1 = b%height + m
     end subroutine view_box
 
+    ! A line width or dash a trillion points long covers anything that can
+    ! be seen as fully as a larger one does, and stays within what the
+    ! renderer takes.
+    function tame(paint) result(p)
+        type(paint_t), intent(in) :: paint
+        type(paint_t) :: p
+        real(dp), parameter :: BIG = 1.0e12_dp
+        real(dp) :: m
+        p = paint
+        if (.not. p%stroked) return
+        p%line_width = min(p%line_width, BIG)
+        if (p%n_dash > 0) then
+            m = maxval(p%dash(1:p%n_dash))
+            if (m > BIG) p%dash(1:p%n_dash) = p%dash(1:p%n_dash)*(BIG/m)
+            p%dash_offset = mod(p%dash_offset, BIG)
+        end if
+    end function tame
+
     subroutine emit_path(b, x, y, verbs, n_verb, paint)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x(:), y(:)
@@ -285,11 +304,11 @@ contains
         end do
         call view_box(b, bx0, bx1, by0, by1)
         if (all(x(1:np) >= bx0 .and. x(1:np) <= bx1 .and. y(1:np) >= by0 .and. y(1:np) <= by1)) then
-            call b%draw_path(x, y, verbs, n_verb, paint)
+            call b%draw_path(x, y, verbs, n_verb, tame(paint))
             return
         end if
         call far_path(x, y, verbs, n_verb, paint%filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
-        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, paint)
+        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, tame(paint))
     end subroutine emit_path
 
     subroutine far_path(x, y, verbs, n_verb, filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
@@ -300,9 +319,10 @@ contains
         integer, allocatable, intent(out) :: ov(:)
         integer, intent(out) :: no, nv
         real(dp), allocatable :: cx(:), cy(:), qx(:), qy(:)
-        real(dp) :: ax, ay, ex, ey, t, mt
-        integer :: i, j, k, kc, v, m, nc, q, ns
-        logical :: inside, pen, visible, cut0, cut1
+        real(dp), allocatable :: sa(:, :)
+        logical, allocatable :: sv(:), s0(:), s1(:)
+        integer :: i, j, k, kc, v, m, nc, q, ns, first, t_i
+        logical :: inside, pen, closed
 
         allocate (ox(16), oy(16), ov(16))
         no = 0
@@ -341,6 +361,7 @@ contains
                 ! The contour as a polyline, curves flattened, closed by an
                 ! explicit return to its start.
                 nc = 0
+                closed = .false.
                 allocate (cx(16), cy(16))
                 q = k
                 do v = i, j - 1
@@ -349,18 +370,13 @@ contains
                         call push_point(cx, cy, nc, x(q + 1), y(q + 1))
                         q = q + 1
                     case (VERB_CUBIC)
-                        ax = cx(nc)
-                        ay = cy(nc)
-                        do ns = 1, 32
-                            t = real(ns, dp)/32.0_dp
-                            mt = 1.0_dp - t
-                            call push_point(cx, cy, nc, &
-                                mt**3*ax + 3.0_dp*mt*mt*t*x(q + 1) + 3.0_dp*mt*t*t*x(q + 2) + t**3*x(q + 3), &
-                                mt**3*ay + 3.0_dp*mt*mt*t*y(q + 1) + 3.0_dp*mt*t*t*y(q + 2) + t**3*y(q + 3))
-                        end do
+                        call flatten_cubic(cx, cy, nc, [cx(nc), x(q + 1), x(q + 2), x(q + 3)], &
+                                           [cy(nc), y(q + 1), y(q + 2), y(q + 3)], &
+                                           bx0, bx1, by0, by1, 0)
                         q = q + 3
                     case (VERB_CLOSE)
                         call push_point(cx, cy, nc, cx(1), cy(1))
+                        closed = .true.
                     end select
                 end do
                 if (filled) then
@@ -373,20 +389,39 @@ contains
                         call grow_put(ox, oy, ov, no, nv, VERB_CLOSE, x(1:0), y(1:0))
                     end if
                 else
+                    ns = nc - 1
+                    allocate (sa(4, max(ns, 1)), sv(max(ns, 1)), s0(max(ns, 1)), s1(max(ns, 1)))
+                    do v = 1, ns
+                        call clip_segment(cx(v), cy(v), cx(v + 1), cy(v + 1), bx0, bx1, by0, by1, &
+                                          sa(1, v), sa(2, v), sa(3, v), sa(4, v), sv(v), s0(v), s1(v))
+                    end do
+                    ! Where to begin: the first segment after a break, if the
+                    ! contour closes on itself.
+                    first = 1
+                    if (closed) then
+                        do v = 1, ns
+                            q = v - 1
+                            if (q < 1) q = ns
+                            if (sv(v) .and. (s0(v) .or. .not. sv(q) .or. s1(q))) then
+                                first = v
+                                exit
+                            end if
+                        end do
+                    end if
                     pen = .false.
-                    do v = 1, nc - 1
-                        call clip_segment(cx(v), cy(v), cx(v + 1), cy(v + 1), &
-                                          bx0, bx1, by0, by1, ax, ay, ex, ey, visible, cut0, cut1)
-                        if (.not. visible) then
+                    do t_i = 0, ns - 1
+                        v = mod(first - 1 + t_i, ns) + 1
+                        if (.not. sv(v)) then
                             pen = .false.
                             cycle
                         end if
-                        if (.not. (pen .and. .not. cut0)) then
-                            call grow_put(ox, oy, ov, no, nv, VERB_MOVE, [ax], [ay])
+                        if (.not. (pen .and. .not. s0(v))) then
+                            call grow_put(ox, oy, ov, no, nv, VERB_MOVE, sa(1:1, v), sa(2:2, v))
                         end if
-                        call grow_put(ox, oy, ov, no, nv, VERB_LINE, [ex], [ey])
-                        pen = .not. cut1
+                        call grow_put(ox, oy, ov, no, nv, VERB_LINE, sa(3:3, v), sa(4:4, v))
+                        pen = .not. s1(v)
                     end do
+                    deallocate (sa, sv, s0, s1)
                 end if
                 deallocate (cx, cy)
             end if
@@ -394,6 +429,46 @@ contains
             i = j
         end do
     end subroutine far_path
+
+    ! Appends the cubic from (px(1), py(1)) to (px(4), py(4)) to the
+    ! polyline as points after its start: finely where it comes near the
+    ! box, as a single chord where it does not, so that even a curve of a
+    ! very large radius keeps within a twentieth of a point of itself in
+    ! view.
+    recursive subroutine flatten_cubic(cx, cy, nc, px, py, bx0, bx1, by0, by1, depth)
+        real(dp), allocatable, intent(inout) :: cx(:), cy(:)
+        integer, intent(inout) :: nc
+        real(dp), intent(in) :: px(4), py(4), bx0, bx1, by0, by1
+        integer, intent(in) :: depth
+        real(dp) :: lx(4), ly(4), rx(4), ry(4), flat
+
+        flat = max(abs(px(2) - (2.0_dp*px(1) + px(4))/3.0_dp), abs(py(2) - (2.0_dp*py(1) + py(4))/3.0_dp), &
+                   abs(px(3) - (px(1) + 2.0_dp*px(4))/3.0_dp), abs(py(3) - (py(1) + 2.0_dp*py(4))/3.0_dp))
+        if (depth >= 48 .or. flat <= 0.05_dp .or. minval(px) > bx1 .or. maxval(px) < bx0 .or. &
+            minval(py) > by1 .or. maxval(py) < by0) then
+            call push_point(cx, cy, nc, px(4), py(4))
+            return
+        end if
+        ! de Casteljau at one half.
+        lx(1) = px(1)
+        ly(1) = py(1)
+        lx(2) = 0.5_dp*px(1) + 0.5_dp*px(2)
+        ly(2) = 0.5_dp*py(1) + 0.5_dp*py(2)
+        rx(3) = 0.5_dp*px(3) + 0.5_dp*px(4)
+        ry(3) = 0.5_dp*py(3) + 0.5_dp*py(4)
+        rx(4) = px(4)
+        ry(4) = py(4)
+        lx(3) = 0.5_dp*lx(2) + 0.5_dp*(0.5_dp*px(2) + 0.5_dp*px(3))
+        ly(3) = 0.5_dp*ly(2) + 0.5_dp*(0.5_dp*py(2) + 0.5_dp*py(3))
+        rx(2) = 0.5_dp*(0.5_dp*px(2) + 0.5_dp*px(3)) + 0.5_dp*rx(3)
+        ry(2) = 0.5_dp*(0.5_dp*py(2) + 0.5_dp*py(3)) + 0.5_dp*ry(3)
+        lx(4) = 0.5_dp*lx(3) + 0.5_dp*rx(2)
+        ly(4) = 0.5_dp*ly(3) + 0.5_dp*ry(2)
+        rx(1) = lx(4)
+        ry(1) = ly(4)
+        call flatten_cubic(cx, cy, nc, lx, ly, bx0, bx1, by0, by1, depth + 1)
+        call flatten_cubic(cx, cy, nc, rx, ry, bx0, bx1, by0, by1, depth + 1)
+    end subroutine flatten_cubic
 
     subroutine grow_put(ox, oy, ov, no, nv, verb, px, py)
         real(dp), allocatable, intent(inout) :: ox(:), oy(:)
@@ -486,7 +561,7 @@ contains
         if (.not. all(ieee_is_finite([x, y, w, h]))) return
         call view_box(b, bx0, bx1, by0, by1)
         if (x >= bx0 .and. y >= by0 .and. x + w <= bx1 .and. y + h <= by1) then
-            call b%draw_rect(x, y, w, h, paint, radius)
+            call b%draw_rect(x, y, w, h, tame(paint), radius)
             return
         end if
         x0 = max(x, bx0)
@@ -494,7 +569,7 @@ contains
         x1 = min(x + w, bx1)
         y1 = min(y + h, by1)
         if (x1 < x0 .or. y1 < y0) return
-        call b%draw_rect(x0, y0, x1 - x0, y1 - y0, paint, radius)
+        call b%draw_rect(x0, y0, x1 - x0, y1 - y0, tame(paint), radius)
     end subroutine put_rect
 
     subroutine put_circle(b, cx, cy, r, paint)
@@ -509,7 +584,7 @@ contains
         if (.not. all(ieee_is_finite([cx, cy, r]))) return
         call view_box(b, bx0, bx1, by0, by1)
         if (cx - r >= bx0 .and. cx + r <= bx1 .and. cy - r >= by0 .and. cy + r <= by1) then
-            call b%draw_circle(cx, cy, r, paint)
+            call b%draw_circle(cx, cy, r, tame(paint))
             return
         end if
         ! Fine enough that a chord strays less than a tenth of a point
@@ -560,9 +635,9 @@ contains
                                    y(i) >= by0 - e .and. y(i) <= by1 + e
         end do
         if (all(keep)) then
-            call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
+            call b%draw_markers(x, y, mx, my, mverbs, n_mverb, tame(paint))
         else
-            call b%draw_markers(pack(x, keep), pack(y, keep), mx, my, mverbs, n_mverb, paint)
+            call b%draw_markers(pack(x, keep), pack(y, keep), mx, my, mverbs, n_mverb, tame(paint))
         end if
     end subroutine put_markers
 
@@ -575,13 +650,13 @@ contains
         real(dp) :: bx0, bx1, by0, by1
 
         if (.not. all(ieee_is_finite([x, y, angle]))) return
-        ! Text anchored outside the box, or set so large that it reaches
-        ! past it, is out of sight.
+        ! Text anchored outside the box is out of sight, and so, for all
+        ! practical purposes, is text a trillion points tall.
         call view_box(b, bx0, bx1, by0, by1)
         if (x < bx0 .or. x > bx1 .or. y < by0 .or. y > by1) return
         if (run%n > 0) then
-            if (maxval(abs(run%x(1:run%n))) + maxval(run%size(1:run%n)) > bx1 - bx0 .or. &
-                maxval(abs(run%y(1:run%n))) + maxval(run%size(1:run%n)) > by1 - by0) return
+            if (maxval(abs(run%x(1:run%n))) > 1.0e12_dp .or. maxval(abs(run%y(1:run%n))) > 1.0e12_dp &
+                .or. maxval(run%size(1:run%n)) > 1.0e12_dp) return
         end if
         call b%draw_glyphs(x, y, run, paint, angle)
     end subroutine put_glyphs
@@ -592,9 +667,75 @@ contains
         integer, intent(in) :: nx, ny
         integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
+        real(dp) :: bx0, bx1, by0, by1, ga(2, 3), gb(2, 3)
+        integer :: ka(2, 3), kb(2, 3), na, nb, i, j
+
         if (.not. all(ieee_is_finite([x, y, w, h]))) return
-        call b%draw_image(x, y, w, h, rgba, nx, ny, paint)
+        call view_box(b, bx0, bx1, by0, by1)
+        if (x >= bx0 .and. y >= by0 .and. x + w <= bx1 .and. y + h <= by1) then
+            call b%draw_image(x, y, w, h, rgba, nx, ny, paint)
+            return
+        end if
+        ! An image reaching out of the box is cut to the columns and rows in
+        ! it. A column or row only partly in the box is drawn on its own,
+        ! cut to the box: it is one color across, so nothing in view moves.
+        call image_groups(x, w, nx, bx0, bx1, ka, ga, na)
+        call image_groups(y, h, ny, by0, by1, kb, gb, nb)
+        do i = 1, na
+            do j = 1, nb
+                call b%draw_image(ga(1, i), gb(1, j), ga(2, i) - ga(1, i), gb(2, j) - gb(1, j), &
+                                  rgba(:, ka(1, i):ka(2, i), kb(1, j):kb(2, j)), &
+                                  ka(2, i) - ka(1, i) + 1, kb(2, j) - kb(1, j) + 1, paint)
+            end do
+        end do
     end subroutine put_image
+
+    ! The n cells of size w/n from x0 that meet [lo, hi], as at most three
+    ! groups: k(1:2, g) the first and last cell of group g and e(1:2, g) the
+    ! span it is drawn over. A cell only partly in [lo, hi] is a group of
+    ! its own, its span cut to [lo, hi].
+    subroutine image_groups(x0, w, n, lo, hi, k, e, ng)
+        real(dp), intent(in) :: x0, w, lo, hi
+        integer, intent(in) :: n
+        integer, intent(out) :: k(2, 3)
+        real(dp), intent(out) :: e(2, 3)
+        integer, intent(out) :: ng
+        real(dp) :: pw, left, right
+        integer :: kmin, kmax, c, c2
+
+        ng = 0
+        if (n < 1 .or. w <= 0.0_dp) return
+        pw = w/real(n, dp)
+        ! The cells meeting [lo, hi], found in reals first so that a cell
+        ! count far beyond an integer cannot overflow.
+        kmin = 1 + int(max(0.0_dp, min(real(n - 1, dp), (lo - x0)/pw)))
+        kmax = int(max(1.0_dp, min(real(n, dp), (hi - x0)/pw + 1.0_dp)))
+        c = kmin
+        do while (c <= kmax .and. ng < 3)
+            left = x0 + real(c - 1, dp)*pw
+            right = x0 + real(c, dp)*pw
+            if (right < lo .or. left > hi) then
+                c = c + 1
+                cycle
+            end if
+            if (left < lo .or. right > hi) then
+                ng = ng + 1
+                k(:, ng) = [c, c]
+                e(:, ng) = [max(left, lo), min(right, hi)]
+                c = c + 1
+            else
+                c2 = c
+                do while (c2 < kmax)
+                    if (x0 + real(c2 + 1, dp)*pw > hi) exit
+                    c2 = c2 + 1
+                end do
+                ng = ng + 1
+                k(:, ng) = [c, c2]
+                e(:, ng) = [left, x0 + real(c2, dp)*pw]
+                c = c2 + 1
+            end if
+        end do
+    end subroutine image_groups
 
     subroutine append_stroke_path(b, px, py, np, color, lw, alpha)
         class(renderer_t), intent(inout) :: b

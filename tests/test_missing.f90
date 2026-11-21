@@ -12,12 +12,30 @@ module test_missing
                                               ieee_positive_inf
     use fplotlib
     use fplotlib_style, only: lower
+    use fplotlib_render
+    use fplotlib_draw, only: render_figure
     implicit none
     private
 
     public :: missing_data_check
 
-    integer, parameter :: NCASE = 67
+    ! Records the furthest any coordinate handed to it lies from zero, so
+    ! that the test can check what the plotting layer draws, not only what
+    ! a file format makes of it.
+    type, extends(renderer_t) :: extent_renderer_t
+        real(dp) :: far = 0.0_dp
+    contains
+        procedure :: open_canvas_impl => ext_open
+        procedure :: close_canvas_impl => ext_close
+        procedure :: draw_path_impl => ext_path
+        procedure :: draw_rect_impl => ext_rect
+        procedure :: draw_circle_impl => ext_circle
+        procedure :: draw_markers_impl => ext_markers
+        procedure :: draw_glyphs_impl => ext_glyphs
+        procedure :: draw_image_impl => ext_image
+    end type extent_renderer_t
+
+    integer, parameter :: NCASE = 71
 
 contains
 
@@ -140,6 +158,15 @@ contains
         case (65); call plot(t(1:3), [0.0_dp, 1.0e300_dp, 0.5_dp], linestyle="--"); call ylim(0.0_dp, 1.0_dp)
         case (66); call plot(t(1:2), [-1.0e300_dp, 1.0e300_dp]); call ylim(0.0_dp, 1.0_dp)
         case (67); call fill_between(t(1:3), [-1.0e300_dp, 1.0e300_dp, -1.0e300_dp]); call ylim(0.0_dp, 1.0_dp)
+        ! An image reaching far past the view, a closed outline with a far
+        ! corner, a pad that crops past the middle, and text larger than
+        ! the canvas.
+        case (68); call imshow(reshape([1.0_dp, 2.0_dp, 3.0_dp, 4.0_dp], [1, 4]), &
+                               extent=[-1.0e20_dp, 1.0e20_dp, 0.0_dp, 1.0_dp]); call xlim(0.0_dp, 1.0_dp)
+        case (69); call plot(x, x); call add_polygon([1.0_dp, 1.0e7_dp, 3.0_dp], [1.0_dp, 2.0_dp, 5.0_dp], &
+                                                     edgecolor="k", lw=8.0_dp)
+        case (70); call plot(x, x)
+        case (71); call plot(x, x); call text(2.0_dp, 2.0_dp, "big", fontsize=800.0_dp)
         end select
     end subroutine draw_case
 
@@ -147,17 +174,32 @@ contains
         integer, intent(in) :: k
         integer, intent(inout) :: nfail
         character(len=:), allocatable :: svg, pdf, eps, png
+        type(extent_renderer_t) :: r
 
-        svg = render_svg()
-        pdf = render_pdf()
-        eps = render_eps()
-        png = render_png()
+        if (k == 70) then
+            svg = render_svg(bbox_inches="tight", pad_inches=-100.0_dp)
+            pdf = render_pdf(bbox_inches="tight", pad_inches=-100.0_dp)
+            eps = render_eps(bbox_inches="tight", pad_inches=-100.0_dp)
+            png = render_png(bbox_inches="tight", pad_inches=-100.0_dp)
+        else
+            svg = render_svg()
+            pdf = render_pdf()
+            eps = render_eps()
+            png = render_png()
+        end if
         if (len(png) == 0 .or. len(pdf) == 0) then
             print "(a, i0, a)", "missing data case ", k, ": empty output"
             nfail = nfail + 1
         end if
         if (has_nonfinite(svg) .or. has_nonfinite(eps) .or. has_nonfinite(pdf_content(pdf))) then
             print "(a, i0, a)", "missing data case ", k, ": NaN or infinity in the output"
+            nfail = nfail + 1
+        end if
+        ! Everything drawn lies within the clip box around the canvas, ten
+        ! canvases wide, however far off the data was.
+        call render_figure(r)
+        if (r%far > 1.0e5_dp) then
+            print "(a, i0, a, es10.3)", "missing data case ", k, ": drew as far out as ", r%far
             nfail = nfail + 1
         end if
         ! A number too large for its field is written as asterisks.
@@ -207,6 +249,75 @@ contains
             c = pdf(i + 7:j - 1)
         end if
     end function pdf_content
+
+    subroutine ext_open(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: width, height
+        integer, intent(in), optional :: bg_rgb(3)
+        real(dp), intent(in), optional :: bg_alpha, x0, y0
+        self%far = 0.0_dp
+    end subroutine ext_open
+
+    subroutine ext_close(self)
+        class(extent_renderer_t), intent(inout) :: self
+    end subroutine ext_close
+
+    subroutine see(self, v)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: v(:)
+        if (size(v) > 0) self%far = max(self%far, maxval(abs(v)))
+    end subroutine see
+
+    subroutine ext_path(self, x, y, verbs, n_verb, paint)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+        call see(self, x)
+        call see(self, y)
+    end subroutine ext_path
+
+    subroutine ext_rect(self, x, y, w, h, paint, radius)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in), optional :: radius
+        call see(self, [x, y, x + w, y + h])
+    end subroutine ext_rect
+
+    subroutine ext_circle(self, cx, cy, r, paint)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: cx, cy, r
+        type(paint_t), intent(in) :: paint
+        call see(self, [cx - r, cx + r, cy - r, cy + r])
+    end subroutine ext_circle
+
+    subroutine ext_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:), mx(:), my(:)
+        integer, intent(in) :: mverbs(:), n_mverb
+        type(paint_t), intent(in) :: paint
+        call see(self, x)
+        call see(self, y)
+    end subroutine ext_markers
+
+    subroutine ext_glyphs(self, x, y, run, paint, angle)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y
+        type(glyphrun_t), intent(in) :: run
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: angle
+        call see(self, [x, y])
+    end subroutine ext_glyphs
+
+    subroutine ext_image(self, x, y, w, h, rgba, nx, ny, paint)
+        class(extent_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(:, :, :)
+        type(paint_t), intent(in) :: paint
+        call see(self, [x, y, x + w, y + h])
+    end subroutine ext_image
 
     pure logical function is_letter(c)
         character, intent(in) :: c

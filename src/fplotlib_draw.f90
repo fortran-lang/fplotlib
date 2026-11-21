@@ -4606,10 +4606,16 @@ contains
                 vy = vy - bpad
                 vw = vw - vx + bpad
                 vh = vh - vy + bpad
-                ! A negative pad, which matplotlib takes, may not eat the
-                ! whole drawing.
-                if (vw <= 0.0_dp .or. vh <= 0.0_dp) &
-                    call contract_error("savefig: pad_inches leaves nothing of the figure")
+                ! A negative pad, which matplotlib takes, crops into the
+                ! drawing; past its middle there is a point of it left.
+                if (vw < 1.0_dp) then
+                    vx = vx - 0.5_dp*(1.0_dp - vw)
+                    vw = 1.0_dp
+                end if
+                if (vh < 1.0_dp) then
+                    vy = vy - 0.5_dp*(1.0_dp - vh)
+                    vh = 1.0_dp
+                end if
             else if (len_trim(bbox_inches) > 0) then
                 call contract_error("savefig: bbox_inches must be 'tight'")
             end if

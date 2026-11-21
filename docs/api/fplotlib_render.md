@@ -9,7 +9,8 @@ The built-in text family has size, weight and slant styles. There is no
 serif/monospace family selector that silently substitutes the sans font.
 
 No renderer call returns an error. A call that breaks the contract, such as
-drawing before `open_canvas`, a nonfinite coordinate, an `end_group`
+drawing before `open_canvas`, a coordinate that is not finite or lies
+beyond `MAX_COORD` (1e15 points), an `end_group`
 without a `begin_group` or asking for `bytes` before `close_canvas`, stops
 the program with a message naming the rule (see
 [`fplotlib_status`](fplotlib_status.md)).
