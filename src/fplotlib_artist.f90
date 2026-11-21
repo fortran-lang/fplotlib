@@ -5,6 +5,7 @@
 ! types turn data into calls to these, which is the division matplotlib
 ! draws between its artists and its backends.
 module fplotlib_artist
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_colors
     use fplotlib_style
     use fplotlib_render
@@ -150,6 +151,192 @@ contains
         end do
     end function line_verbs
 
+    ! ------------------------------------------------------------------
+    ! The way into the renderer. Plotted data may be missing, as NaN or an
+    ! infinity, the way matplotlib allows, and so is anything computed from
+    ! it, while the renderer takes only finite coordinates. Every drawing
+    ! call of the plot types goes through these, which leave out what is
+    ! missing as matplotlib's own path handling does: a path is broken
+    ! where a vertex is missing, and a shape, a marker, a run of text or an
+    ! image placed at a missing point is not drawn. A call with nothing
+    ! missing reaches the renderer unchanged.
+    ! ------------------------------------------------------------------
+
+    subroutine put_path(b, x, y, verbs, n_verb, paint)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+        real(dp), allocatable :: ox(:), oy(:)
+        integer, allocatable :: ov(:)
+        integer :: i, k, np, no, nv
+        logical :: pen, broken
+
+        np = 0
+        do i = 1, min(n_verb, size(verbs))
+            if (verbs(i) == VERB_MOVE .or. verbs(i) == VERB_LINE) np = np + 1
+            if (verbs(i) == VERB_CUBIC) np = np + 3
+        end do
+        ! A path that breaks the contract in any other way is left for the
+        ! renderer to report.
+        if (n_verb < 0 .or. n_verb > size(verbs) .or. np > min(size(x), size(y))) then
+            call b%draw_path(x, y, verbs, n_verb, paint)
+            return
+        end if
+        if (all(ieee_is_finite(x(1:np))) .and. all(ieee_is_finite(y(1:np)))) then
+            call b%draw_path(x, y, verbs, n_verb, paint)
+            return
+        end if
+
+        ! pen: the output has a current point to continue from. broken: the
+        ! contour has lost a piece, so closing it would bridge the gap.
+        allocate (ox(np), oy(np), ov(n_verb))
+        no = 0
+        nv = 0
+        k = 0
+        pen = .false.
+        broken = .false.
+        do i = 1, n_verb
+            select case (verbs(i))
+            case (VERB_MOVE)
+                k = k + 1
+                broken = .false.
+                pen = finite_point(x, y, k)
+                if (pen) call path_move(ox, oy, ov, no, nv, x(k), y(k))
+            case (VERB_LINE)
+                k = k + 1
+                if (.not. finite_point(x, y, k)) then
+                    pen = .false.
+                    broken = .true.
+                else if (pen) then
+                    call path_put(ox, oy, ov, no, nv, VERB_LINE, x(k:k), y(k:k))
+                else
+                    call path_move(ox, oy, ov, no, nv, x(k), y(k))
+                    pen = .true.
+                end if
+            case (VERB_CUBIC)
+                k = k + 3
+                if (pen .and. finite_point(x, y, k - 2) .and. finite_point(x, y, k - 1) &
+                    .and. finite_point(x, y, k)) then
+                    call path_put(ox, oy, ov, no, nv, VERB_CUBIC, x(k - 2:k), y(k - 2:k))
+                else if (finite_point(x, y, k)) then
+                    call path_move(ox, oy, ov, no, nv, x(k), y(k))
+                    pen = .true.
+                    broken = .true.
+                else
+                    pen = .false.
+                    broken = .true.
+                end if
+            case (VERB_CLOSE)
+                if (pen .and. .not. broken) then
+                    call path_put(ox, oy, ov, no, nv, VERB_CLOSE, x(1:0), y(1:0))
+                else
+                    pen = .false.
+                end if
+            end select
+        end do
+        ! A move with nothing after it draws nothing.
+        if (nv > 0) then
+            if (ov(nv) == VERB_MOVE) then
+                nv = nv - 1
+                no = no - 1
+            end if
+        end if
+        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, paint)
+    end subroutine put_path
+
+    pure logical function finite_point(x, y, k)
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: k
+        finite_point = ieee_is_finite(x(k)) .and. ieee_is_finite(y(k))
+    end function finite_point
+
+    ! Starts a contour at (px, py). A move right after a move replaces it,
+    ! since the first one would draw nothing.
+    pure subroutine path_move(ox, oy, ov, no, nv, px, py)
+        real(dp), intent(inout) :: ox(:), oy(:)
+        integer, intent(inout) :: ov(:), no, nv
+        real(dp), intent(in) :: px, py
+        if (nv > 0) then
+            if (ov(nv) == VERB_MOVE) then
+                nv = nv - 1
+                no = no - 1
+            end if
+        end if
+        call path_put(ox, oy, ov, no, nv, VERB_MOVE, [px], [py])
+    end subroutine path_move
+
+    pure subroutine path_put(ox, oy, ov, no, nv, verb, px, py)
+        real(dp), intent(inout) :: ox(:), oy(:)
+        integer, intent(inout) :: ov(:), no, nv
+        integer, intent(in) :: verb
+        real(dp), intent(in) :: px(:), py(:)
+        nv = nv + 1
+        ov(nv) = verb
+        ox(no + 1:no + size(px)) = px
+        oy(no + 1:no + size(py)) = py
+        no = no + size(px)
+    end subroutine path_put
+
+    subroutine put_rect(b, x, y, w, h, paint, radius)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x, y, w, h
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in), optional :: radius
+        if (.not. all(ieee_is_finite([x, y, w, h]))) return
+        call b%draw_rect(x, y, w, h, paint, radius)
+    end subroutine put_rect
+
+    subroutine put_circle(b, cx, cy, r, paint)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: cx, cy, r
+        type(paint_t), intent(in) :: paint
+        if (.not. all(ieee_is_finite([cx, cy, r]))) return
+        call b%draw_circle(cx, cy, r, paint)
+    end subroutine put_circle
+
+    ! Markers at missing points are dropped; a marker whose own size is
+    ! missing is not drawn anywhere.
+    subroutine put_markers(b, x, y, mx, my, mverbs, n_mverb, paint)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x(:), y(:), mx(:), my(:)
+        integer, intent(in) :: mverbs(:), n_mverb
+        type(paint_t), intent(in) :: paint
+        logical, allocatable :: keep(:)
+
+        if (.not. all(ieee_is_finite(mx)) .or. .not. all(ieee_is_finite(my))) return
+        if (size(x) /= size(y)) then
+            call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
+            return
+        end if
+        keep = ieee_is_finite(x) .and. ieee_is_finite(y)
+        if (all(keep)) then
+            call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
+        else
+            call b%draw_markers(pack(x, keep), pack(y, keep), mx, my, mverbs, n_mverb, paint)
+        end if
+    end subroutine put_markers
+
+    subroutine put_glyphs(b, x, y, run, paint, angle)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x, y
+        type(glyphrun_t), intent(in) :: run
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: angle
+        if (.not. all(ieee_is_finite([x, y, angle]))) return
+        call b%draw_glyphs(x, y, run, paint, angle)
+    end subroutine put_glyphs
+
+    subroutine put_image(b, x, y, w, h, rgba, nx, ny, paint)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x, y, w, h
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(:, :, :)
+        type(paint_t), intent(in) :: paint
+        if (.not. all(ieee_is_finite([x, y, w, h]))) return
+        call b%draw_image(x, y, w, h, rgba, nx, ny, paint)
+    end subroutine put_image
+
     subroutine append_stroke_path(b, px, py, np, color, lw, alpha)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: px(:), py(:)
@@ -157,7 +344,7 @@ contains
         character(len=*), intent(in) :: color
         real(dp), intent(in) :: lw, alpha
         if (np < 2) return
-        call b%draw_path(px(1:np), py(1:np), line_verbs(np), np, &
+        call put_path(b, px(1:np), py(1:np), line_verbs(np), np, &
                          pen(color, lw, alpha))
     end subroutine append_stroke_path
 
@@ -187,7 +374,7 @@ contains
                 p%line_width = 0.5_dp
             end if
         end if
-        call b%draw_path(px(1:np), py(1:np), v, np + 1, p)
+        call put_path(b, px(1:np), py(1:np), v, np + 1, p)
     end subroutine append_polygon
 
     ! The outline of one marker, described about the origin, together with
@@ -360,7 +547,7 @@ contains
         p%stroke_alpha = alpha
         p%line_width = lw
         p%clip = g_clip
-        call b%draw_markers(x(1:n), y(1:n), mx(1:np), my(1:np), mv(1:nv), nv, p)
+        call put_markers(b, x(1:n), y(1:n), mx(1:np), my(1:np), mv(1:nv), nv, p)
     end subroutine append_markers
 
     ! One marker, for the legend key and anywhere else a single point is
@@ -410,7 +597,7 @@ contains
             call text_layout(s, f%size, text_face(f%weight, f%slant), 0.0_dp, &
                              0.0_dp, run, w)
             call align_run(run, w, f, an, bl)
-            call b%draw_glyphs(x, y, run, brush(color), ang)
+            call put_glyphs(b, x, y, run, brush(color), ang)
         end if
     end subroutine append_text
 
@@ -507,7 +694,7 @@ contains
         mf%weight = WEIGHT_NORMAL
         mf%slant = SLANT_ROMAN
         call align_run(run, w, mf, anchor, baseline, x0, y0)
-        call b%draw_glyphs(x, y, run, p, ang)
+        call put_glyphs(b, x, y, run, p, ang)
 
         rad = ang*PI/180.0_dp
         ca = cos(rad)
@@ -518,7 +705,7 @@ contains
         do i = 1, rules%n
             rx = x0 + rules%x(i) + [0.0_dp, rules%w(i), rules%w(i), 0.0_dp]
             ry = y0 + rules%y(i) + [0.0_dp, 0.0_dp, rules%h(i), rules%h(i)]
-            call b%draw_path(x + rx*ca - ry*sa, y + rx*sa + ry*ca, &
+            call put_path(b, x + rx*ca - ry*sa, y + rx*sa + ry*ca, &
                              [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE], &
                              5, rp)
         end do
@@ -596,7 +783,7 @@ contains
             ! the renderer draws.
             qx = [x0, x0 + 2.0_dp/3.0_dp*(cx - x0), x1 + 2.0_dp/3.0_dp*(cx - x1), x1]
             qy = [y0, y0 + 2.0_dp/3.0_dp*(cy - y0), y1 + 2.0_dp/3.0_dp*(cy - y1), y1]
-            call b%draw_path(qx, qy, [VERB_MOVE, VERB_CUBIC], 2, &
+            call put_path(b, qx, qy, [VERB_MOVE, VERB_CUBIC], 2, &
                              pen(trim(t%arrow_color), t%arrow_lw, 1.0_dp))
         end if
         if (.not. t%arrow_head) return
@@ -714,7 +901,7 @@ contains
         integer, intent(in) :: ls
         real(dp), intent(in) :: alpha
         if (ls == LINE_NONE) return
-        call b%draw_path([x1, x2], [y1, y2], [VERB_MOVE, VERB_LINE], 2, &
+        call put_path(b, [x1, x2], [y1, y2], [VERB_MOVE, VERB_LINE], 2, &
                          pen(color, lw, alpha, ls))
     end subroutine append_line
 
@@ -891,7 +1078,7 @@ contains
             p%stroke_rgb = hex_rgb(edge)
             p%line_width = 1.0_dp
         end if
-        call b%draw_path(px, py, v, 10, p)
+        call put_path(b, px, py, v, 10, p)
     end subroutine append_round_rect
 
     subroutine append_rect(b, x, y, w, h, color, alpha, edge, elw)
@@ -915,14 +1102,14 @@ contains
             p%line_width = 1.0_dp
             if (present(elw)) p%line_width = elw
         end if
-        call b%draw_rect(x, y, w, h, p)
+        call put_rect(b, x, y, w, h, p)
     end subroutine append_rect
 
     subroutine append_open_circle(b, cx, cy, r, color)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: cx, cy, r
         character(len=*), intent(in) :: color
-        call b%draw_circle(cx, cy, r, pen(color, 1.0_dp))
+        call put_circle(b, cx, cy, r, pen(color, 1.0_dp))
     end subroutine append_open_circle
 
     ! One wedge: out along a radius, round the rim, back to the centre.
@@ -984,7 +1171,7 @@ contains
                 if (present(ewidth)) p%line_width = ewidth
             end if
         end if
-        call b%draw_path(px(1:np), py(1:np), verbs(1:nv), nv, p)
+        call put_path(b, px(1:np), py(1:np), verbs(1:nv), nv, p)
     end subroutine append_wedge
 
     ! Cells are grown by a hairline so that neighbours overlap; without it the

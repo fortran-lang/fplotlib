@@ -253,21 +253,32 @@ fpm build --compiler flang
 fpm build --compiler lfortran
 ```
 
-Below the plotting API, a call that breaks a documented precondition, such
-as drawing on a canvas that is not open or passing a nonfinite coordinate,
-stops the program with a message naming the rule. Only failures that a
-correct program can still meet, such as an output file that cannot be
-written, are returned, through a required `status_t` from `fplotlib_status`.
+## Errors
 
-`fplotlib_render:renderer_t` is a drawing target, not a file writer; only
-`encoded_renderer_t`, which the SVG, PNG, PDF and EPS backends extend, adds
-`bytes`.
+A call that breaks a documented precondition is a bug in the calling
+program, and it stops with a message naming the rule and exit code 1:
+`savefig` of an unknown format, `xlim` with an infinite limit, or, below
+the plotting API, drawing on a canvas that is not open or passing a
+nonfinite coordinate to a renderer. Missing data is not such a bug: as in
+matplotlib, a NaN or an infinity in plotted data is left out of the
+picture, and a line breaks around it.
 
-The pixi tasks below are for developing fplotlib itself, with pinned compilers.
+A failure that a correct program can still meet at run time is returned
+instead, through a `status_t` from `fplotlib_status`. Today that is an
+output file that cannot be written. `savefig` and `save_animation` return
+it in their optional `status`, and stop with the message without one:
+
+```fortran
+use fplotlib_status, only: status_t
+type(status_t) :: st
+call savefig("results/plot.png", status=st)
+if (.not. st%ok()) print *, st%message
+```
 
 ## Build
 
-Requires [pixi](https://pixi.sh). Every compiler has its own environment with
+The pixi tasks below are for developing fplotlib itself, with pinned compilers.
+They require [pixi](https://pixi.sh). Every compiler has its own environment with
 nothing in it but the compiler and fpm: gfortran and LFortran come from
 conda-forge on Linux and macOS, flang on Linux (on macOS provide a system
 flang on `PATH`). A task installs its environment the first time it runs.
@@ -356,7 +367,9 @@ src/           library modules
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib.f90         the plotting API
-               fplotlib_status.f90  the status_t of calls that can fail at run time
+               fplotlib_render.f90  the renderer contract the backends implement
+               fplotlib_status.f90  contract_error, and the status_t of calls that can fail
+               fplotlib_io.f90      writing a file, with the failure returned
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
 ```

@@ -2253,18 +2253,43 @@ contains
     subroutine xlim(xmin, xmax)
         real(dp), intent(in) :: xmin, xmax
         call ensure_fig()
-        ax(cur_i)%xmin_user = xmin
-        ax(cur_i)%xmax_user = xmax
+        call user_limits("xlim", xmin, xmax, ax(cur_i)%xmin_user, ax(cur_i)%xmax_user)
         ax(cur_i)%xlim_set = .true.
     end subroutine xlim
 
     subroutine ylim(ymin, ymax)
         real(dp), intent(in) :: ymin, ymax
         call ensure_fig()
-        ax(cur_i)%ymin_user = ymin
-        ax(cur_i)%ymax_user = ymax
+        call user_limits("ylim", ymin, ymax, ax(cur_i)%ymin_user, ax(cur_i)%ymax_user)
         ax(cur_i)%ylim_set = .true.
     end subroutine ylim
+
+    ! Limits set by hand, as matplotlib's set_xlim takes them: they must be
+    ! finite, and a range too narrow to tell its ends apart is widened by
+    ! a twentieth of itself (to plus and minus a twentieth when it sits on
+    ! zero) instead of dividing by nothing. An inverted range stays
+    ! inverted.
+    subroutine user_limits(what, a, b, lo, hi)
+        character(len=*), intent(in) :: what
+        real(dp), intent(in) :: a, b
+        real(dp), intent(out) :: lo, hi
+        real(dp) :: big
+
+        if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) then
+            call contract_error(what//": limits must be finite")
+        end if
+        lo = min(a, b)
+        hi = max(a, b)
+        big = max(abs(lo), abs(hi))
+        if (big < 1.0e6_dp*tiny(1.0_dp)) then
+            lo = -0.05_dp
+            hi = 0.05_dp
+        else if (hi - lo <= 1.0e-15_dp*big) then
+            lo = lo - 0.05_dp*abs(lo)
+            hi = hi + 0.05_dp*abs(hi)
+        end if
+        if (a > b) call swap(lo, hi)
+    end subroutine user_limits
 
     ! The limits actually in force, autoscaling included, so that a caller
     ! can place something relative to what the axes ended up showing.
@@ -3093,7 +3118,8 @@ contains
 
     ! The direction of travel at a point, normalised so that a step in the
     ! parameter is a step in arc length. code is 1 off the grid and 2 where
-    ! the field stalls.
+    ! the field stalls or is missing, which ends the line as a masked value
+    ! does in matplotlib.
     subroutine stream_dir(st, xi, yi, dirn, dxi, dyi, code)
         type(stream_t), intent(in) :: st
         real(dp), intent(in) :: xi, yi
@@ -3110,12 +3136,17 @@ contains
             return
         end if
         ds_dt = stream_interp(st%sp, xi, yi)
-        if (ds_dt == 0.0_dp) then
+        if (ds_dt == 0.0_dp .or. .not. ieee_is_finite(ds_dt)) then
             code = 2
             return
         end if
         dxi = real(dirn, dp)*stream_interp(st%u, xi, yi)/ds_dt
         dyi = real(dirn, dp)*stream_interp(st%v, xi, yi)/ds_dt
+        if (.not. ieee_is_finite(dxi) .or. .not. ieee_is_finite(dyi)) then
+            dxi = 0.0_dp
+            dyi = 0.0_dp
+            code = 2
+        end if
     end subroutine stream_dir
 
     ! Claim the mask cell a point falls in. ok comes back false when another
@@ -3308,15 +3339,18 @@ contains
         integer :: nb(2), n, i, jx, jy
         real(dp) :: x0, x1, y0, y1
         real(dp), allocatable :: xe(:), ye(:), h(:, :)
+        logical, allocatable :: ok(:)
 
         call ensure_fig()
         n = min(size(x), size(y))
-        if (n < 1) return
+        ! A point with a missing coordinate is in no bin.
+        ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
+        if (.not. any(ok)) return
         nb = [10, 10]
         if (present(bins)) nb = max(1, bins)
 
-        x0 = minval(x(1:n)); x1 = maxval(x(1:n))
-        y0 = minval(y(1:n)); y1 = maxval(y(1:n))
+        x0 = minval(x(1:n), mask=ok); x1 = maxval(x(1:n), mask=ok)
+        y0 = minval(y(1:n), mask=ok); y1 = maxval(y(1:n), mask=ok)
         if (x1 <= x0) x1 = x0 + 1.0_dp
         if (y1 <= y0) y1 = y0 + 1.0_dp
 
@@ -3330,6 +3364,7 @@ contains
 
         h = 0.0_dp
         do i = 1, n
+            if (.not. ok(i)) cycle
             ! The last cell owns its right edge, as numpy's histogram does.
             jx = min(nb(1), 1 + int((x(i) - x0)/(x1 - x0)*real(nb(1), dp)))
             jy = min(nb(2), 1 + int((y(i) - y0)/(y1 - y0)*real(nb(2), dp)))
@@ -3351,10 +3386,13 @@ contains
         real(dp) :: x0, x1, y0, y1, sx, sy, ix, iy, d1, d2, pad, cmax, t, cxp, cyp
         real(dp) :: hx(6), hy(6)
         real(dp), allocatable :: c1(:, :), c2(:, :)
+        logical, allocatable :: ok(:)
 
         call ensure_fig()
         n = min(size(x), size(y))
-        if (n < 1) return
+        ! A point with a missing coordinate is in no cell.
+        ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
+        if (.not. any(ok)) return
         nx = 100
         if (present(gridsize)) nx = max(1, gridsize)
         ny = int(real(nx, dp)/sqrt(3.0_dp))
@@ -3364,8 +3402,8 @@ contains
         mc = 0
         if (present(mincnt)) mc = mincnt
 
-        x0 = minval(x(1:n)); x1 = maxval(x(1:n))
-        y0 = minval(y(1:n)); y1 = maxval(y(1:n))
+        x0 = minval(x(1:n), mask=ok); x1 = maxval(x(1:n), mask=ok)
+        y0 = minval(y(1:n), mask=ok); y1 = maxval(y(1:n), mask=ok)
         pad = 1.0e-9_dp*(x1 - x0)
         x0 = x0 - pad; x1 = x1 + pad
         if (x1 <= x0) x1 = x0 + 1.0_dp
@@ -3380,6 +3418,7 @@ contains
         c2 = 0.0_dp
 
         do i = 1, n
+            if (.not. ok(i)) cycle
             ix = (x(i) - x0)/sx
             iy = (y(i) - y0)/sy
             ix1 = nint(ix); iy1 = nint(iy)
@@ -3560,9 +3599,8 @@ contains
         real(dp), intent(in) :: lo, hi
 
         call ensure_fig()
+        call user_limits("zlim", lo, hi, ax(cur_i)%zmin_user, ax(cur_i)%zmax_user)
         ax(cur_i)%zlim_set = .true.
-        ax(cur_i)%zmin_user = lo
-        ax(cur_i)%zmax_user = hi
     end subroutine zlim
 
     subroutine plot3d(x, y, z, fmt, label, lw, color, marker, linestyle, alpha)

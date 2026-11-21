@@ -1246,11 +1246,11 @@ contains
             end do
             if (s%patch_fill) then
                 p = brush(trim(s%color), s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call put_path(b, px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
             end if
             if (len_trim(s%edgecolor) > 0) then
                 p = pen(trim(s%edgecolor), s%edgewidth, s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call put_path(b, px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
             end if
             return
         end if
@@ -2493,7 +2493,7 @@ contains
         end do
 
         p%clip = g_clip
-        call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
+        call put_image(b, min(px0, px1), min(py0, py1), abs(px1 - px0), &
                           abs(py1 - py0), rgba, nc*fx, nr*fy, p)
     end subroutine append_image
 
@@ -2543,7 +2543,7 @@ contains
         end do
 
         p%clip = g_clip
-        call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
+        call put_image(b, min(px0, px1), min(py0, py1), abs(px1 - px0), &
                           abs(py1 - py0), rgba, ow, oh, p)
     end subroutine append_image_smooth
 
@@ -2709,7 +2709,7 @@ contains
         end if
         call clear_clip()
 
-        call b%draw_rect(bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw))
+        call put_rect(b, bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw))
 
         lo = a%img_vmin
         hi = a%img_vmax
@@ -3616,7 +3616,7 @@ contains
                 if (a%series(i)%linestyle /= LINE_NONE) then
                     p = pen(a%series(i)%color, a%series(i)%linewidth, &
                             a%series(i)%alpha, a%series(i)%linestyle)
-                    call b%draw_path(px, py, line_verbs(n), n, p)
+                    call put_path(b, px, py, line_verbs(n), n, p)
                 end if
                 call append_markers(b, a%series(i)%marker, px, py, n, &
                                     a%series(i)%markersize, a%series(i)%color, &
@@ -4219,7 +4219,7 @@ contains
                         k1 = k1 + 1
                     end do
                     if (k1 - k0 >= 2) &
-                        call b%draw_path(lx(k0:k1 - 1), ly(k0:k1 - 1), &
+                        call put_path(b, lx(k0:k1 - 1), ly(k0:k1 - 1), &
                                          line_verbs(k1 - k0), k1 - k0, pnt)
                     k0 = k1
                 end do
@@ -4291,7 +4291,7 @@ contains
         ! them alone renders exactly as it did before they could be hidden.
         if (.not. a%frame_off) then
             if (all(a%spine)) then
-                call b%draw_rect(ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw))
+                call put_rect(b, ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw))
             else
                 if (a%spine(SPINE_LEFT)) call append_spine(b, ax_l, ax_t, ax_l, ax_b)
                 if (a%spine(SPINE_RIGHT)) call append_spine(b, ax_r, ax_t, ax_r, ax_b)
@@ -4476,7 +4476,7 @@ contains
                     pnt%stroked = .true.
                     pnt%stroke_rgb = hex_rgb(rc_legend_edge)
                     pnt%line_width = 0.8_dp
-                    call b%draw_rect(leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp)
+                    call put_rect(b, leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp)
                 end if
                 leg_x0 = leg_x
                 k = 0
