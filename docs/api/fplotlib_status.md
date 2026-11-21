@@ -23,6 +23,10 @@ cannot be written is returned in it, and when it is absent the call stops
 with the message, as the exception does in matplotlib, and exit code 2, so
 that a script's caller can tell it from a broken precondition. `show` also
 takes an optional `status`, and without one only reports the failure.
+A PNG whose canvas, after any `bbox_inches="tight"` cropping, has more
+pixels than the encoder can count is a broken precondition, not an I/O
+failure: `savefig` stops with exit code 1 whether or not `status` is
+given.
 `fplotlib` re-exports `status_t`, `STATUS_OK` and `ERROR_IO`.
 
 ```{f:module} fplotlib_status

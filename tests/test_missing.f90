@@ -14,6 +14,7 @@ module test_missing
     use fplotlib_style, only: lower
     use fplotlib_render
     use fplotlib_draw, only: render_figure
+    use fplotlib_backend_png, only: png_renderer_t
     implicit none
     private
 
@@ -51,8 +52,74 @@ contains
             call check_case(k, nfail)
             call close()
         end do
+        call dash_shortcut_check(nfail)
         print "(a, i0, a, i0)", "missing data: ", NCASE, " plots, failures = ", nfail
     end subroutine missing_data_check
+
+    ! The PNG backend skips dash work that cannot be seen. It must not skip
+    ! anything that can: a pen wider than the canvas whose one dash covers
+    ! the whole path draws what the solid pen draws, joins and mitres
+    ! included, and round ends a pen apart stay dots, not a bar.
+    subroutine dash_shortcut_check(nfail)
+        integer, intent(inout) :: nfail
+        character(len=:), allocatable :: dashed, solid, dots, bar
+        integer :: k, worst
+        real(dp) :: dark_dots, dark_bar
+
+        dashed = pixels(400.0_dp, [5000.0_dp, 10.0_dp], CAP_BUTT, JOIN_MITER, .true.)
+        solid = pixels(400.0_dp, [0.0_dp], CAP_BUTT, JOIN_MITER, .true.)
+        worst = 0
+        do k = 1, min(len(dashed), len(solid))
+            worst = max(worst, abs(iachar(dashed(k:k)) - iachar(solid(k:k))))
+        end do
+        if (len(dashed) /= len(solid) .or. worst > 2) then
+            print "(a, i0)", "dash shortcut: a wide dashed pen differs from the solid one by ", worst
+            nfail = nfail + 1
+        end if
+        dots = pixels(8.0_dp, [0.0_dp, 8.0_dp], CAP_ROUND, JOIN_ROUND, .false.)
+        bar = pixels(8.0_dp, [0.0_dp], CAP_ROUND, JOIN_ROUND, .false.)
+        dark_dots = 0.0_dp
+        dark_bar = 0.0_dp
+        do k = 1, len(dots)
+            dark_dots = dark_dots + (255 - iachar(dots(k:k)))
+            dark_bar = dark_bar + (255 - iachar(bar(k:k)))
+        end do
+        if (dark_dots > 0.9_dp*dark_bar) then
+            print "(a)", "dash shortcut: round-capped dots came out as a solid bar"
+            nfail = nfail + 1
+        end if
+    end subroutine dash_shortcut_check
+
+    ! The RGB pixels of one stroke: a corner just off a 100 pt canvas for
+    ! the wide pen, a straight line across it otherwise. dash(1) = 0 alone
+    ! means solid.
+    function pixels(lw, dash, cap, join, corner) result(rgb)
+        real(dp), intent(in) :: lw, dash(:)
+        integer, intent(in) :: cap, join
+        logical, intent(in) :: corner
+        character(len=:), allocatable :: rgb
+        type(png_renderer_t) :: r
+        type(paint_t) :: q
+
+        q%stroked = .true.
+        q%line_width = lw
+        q%cap = cap
+        q%join = join
+        if (size(dash) > 1) then
+            q%n_dash = size(dash)
+            q%dash(1:size(dash)) = dash
+        end if
+        r%keep_pixels = .true.
+        call r%open_canvas(100.0_dp, 100.0_dp, bg_rgb=[255, 255, 255])
+        if (corner) then
+            call r%draw_path([-300.0_dp, -10.0_dp, -10.0_dp], [50.0_dp, 50.0_dp, 400.0_dp], &
+                             [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
+        else
+            call r%draw_path([0.0_dp, 100.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+        end if
+        call r%close_canvas()
+        rgb = r%rgb
+    end function pixels
 
     subroutine draw_case(k)
         integer, intent(in) :: k
@@ -207,7 +274,7 @@ contains
             nfail = nfail + 1
         end if
         ! Everything drawn lies within the clip box around the canvas, ten
-        ! canvases out and widened by what a stroke reaches (at most ten
+        ! canvases out and widened by what a stroke reaches (at most twenty
         ! half widths, at a mitred corner), however far off the data was.
         call render_figure(r)
         if (r%far > 11.0_dp*max(r%width, r%height, 72.0_dp) + 10.0_dp*r%widest + 10.0_dp) then

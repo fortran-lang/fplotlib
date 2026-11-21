@@ -764,18 +764,21 @@ contains
         type(pathbuf_t) :: out
         real(dp), allocatable :: dx(:), dy(:)
         integer :: s, b, n, nd
-        real(dp) :: hw, cover, bx0, bx1, by0, by1
+        real(dp) :: hw, cover, bx0, bx1, by0, by1, reach
         logical :: walk
 
         hw = 0.5_dp*paint%line_width*cv%scale
         if (hw <= 0.0_dp) return
         call pb_reset(out)
         ! The box a dash has to reach into to be seen: the canvas, widened
-        ! by the pen.
-        bx0 = -hw - 2.0_dp
-        bx1 = real(cv%w, dp) + hw + 2.0_dp
-        by0 = -hw - 2.0_dp
-        by1 = real(cv%h, dp) + hw + 2.0_dp
+        ! by the pen, or by the spike of a mitred corner, which reaches
+        ! miter_limit half widths.
+        reach = hw
+        if (paint%join == JOIN_MITER) reach = hw*max(1.0_dp, paint%miter_limit)
+        bx0 = -reach - 2.0_dp
+        bx1 = real(cv%w, dp) + reach + 2.0_dp
+        by0 = -reach - 2.0_dp
+        by1 = real(cv%h, dp) + reach + 2.0_dp
         call dash_plan(paint, hw, cv%scale, walk, cover)
 
         do s = 1, pb%ns
@@ -803,13 +806,18 @@ contains
         real(dp), intent(in) :: hw, scale
         logical, intent(out) :: walk
         real(dp), intent(out) :: cover
+        real(dp) :: g
 
         walk = .false.
         cover = 1.0_dp
         if (paint%n_dash == 0) return
-        if (paint%cap /= CAP_BUTT) then
-            if (2.0_dp*hw >= maxval(paint%dash(1:paint%n_dash))*scale) return
-        end if
+        ! Square ends, half a pen long, close every gap no longer than the
+        ! pen is wide: the line is solid, exactly. Round ends leave a scallop
+        ! of depth g**2/(8 hw) at a gap g along each edge, solid only once
+        ! that is too shallow to see.
+        g = maxval(paint%dash(1:paint%n_dash))*scale
+        if (paint%cap == CAP_SQUARE .and. 2.0_dp*hw >= g) return
+        if (paint%cap == CAP_ROUND .and. 2.0_dp*hw >= g .and. g*g/(8.0_dp*hw) < 0.05_dp) return
         if (sum(paint%dash(1:paint%n_dash))*scale < 0.5_dp) then
             if (paint%cap == CAP_BUTT) cover = on_fraction(paint)
             return
@@ -870,12 +878,16 @@ contains
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
         real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l, ta, tb
-        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk
+        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk, vx, vy
         real(dp), allocatable :: rx(:), ry(:)
         integer :: i, di, nr, c
-        logical :: on, inside, visible, cut0, cut1, wide
+        logical :: on, inside, visible, cut0, cut1, wide, bare
+        ! A step this short along a segment carries a join without adding
+        ! anything that can be seen.
+        real(dp), parameter :: STUB = 1.0e-6_dp
 
-        allocate (rx(2*n + 4), ry(2*n + 4))
+        allocate (rx(2*n + 8), ry(2*n + 8))
+        bare = .false.
         di = 1
         rem = paint%dash(1)*scale
         on = .true.
@@ -937,13 +949,34 @@ contains
                     end if
                 end if
                 ! A dash under way goes on through an end the box does not
-                ! cut, keeping its join there.
+                ! cut, keeping its join there. Where the walk stops at the
+                ! start of this segment instead, a dash running through
+                ! its first point still gets the join there: a step along
+                ! the segment before the run is stroked.
                 if (.not. visible .or. cut0) then
-                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                    if (on .and. nr > 0) then
+                        call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        nr = nr + 1
+                        rx(nr) = px(i) + STUB*vx
+                        ry(nr) = py(i) + STUB*vy
+                        call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare, bare1=.true.)
+                    end if
                     nr = 0
+                    bare = .false.
                 end if
                 if (.not. visible) then
                     call dash_advance(min(l, huge(1.0_dp)), paint, scale, di, rem, on)
+                    ! Unseen itself, the segment may still end in a join
+                    ! that reaches the canvas.
+                    if (on .and. i < n - 1) then
+                        call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        rx(1) = px(i + 1) - STUB*vx
+                        ry(1) = py(i + 1) - STUB*vy
+                        rx(2) = px(i + 1)
+                        ry(2) = py(i + 1)
+                        nr = 2
+                        bare = .true.
+                    end if
                     cycle
                 end if
                 call dash_advance(min(hypot(ax - sx, ay - sy), huge(1.0_dp)), paint, scale, di, rem, on)
@@ -972,9 +1005,10 @@ contains
                 t0 = t1
                 if (rem <= 1.0e-12_dp) then
                     if (on .and. nr > 1) then
-                        call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                        call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare)
                         nr = 0
                     end if
+                    bare = .false.
                     on = .not. on
                     di = di + 1
                     if (di > paint%n_dash) di = 1
@@ -984,15 +1018,48 @@ contains
             end do
             if (.not. inside) then
                 if (cut1) then
-                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false., &
+                                                         bare0=bare, bare1=.true.)
                     nr = 0
+                    bare = .false.
                     call dash_advance(min(hypot(px(i + 1) - qx, py(i + 1) - qy), huge(1.0_dp)), &
                                       paint, scale, di, rem, on)
+                    ! A dash running on through the next point starts a
+                    ! capless stub there, a step back along this segment,
+                    ! so that the join at that point is drawn.
+                    if (on .and. i < n - 1) then
+                        call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        rx(1) = px(i + 1) - STUB*vx
+                        ry(1) = py(i + 1) - STUB*vy
+                        rx(2) = px(i + 1)
+                        ry(2) = py(i + 1)
+                        nr = 2
+                        bare = .true.
+                    end if
                 end if
             end if
         end do
-        if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+        if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare)
     end subroutine stroke_dashed
+
+    ! The unit vector from (x0, y0) to (x1, y1), scaled down first so that
+    ! ends however far apart cannot overflow.
+    pure subroutine unit_dir(x0, y0, x1, y1, ux, uy)
+        real(dp), intent(in) :: x0, y0, x1, y1
+        real(dp), intent(out) :: ux, uy
+        real(dp) :: dx, dy, m, l
+        dx = 0.5_dp*x1 - 0.5_dp*x0
+        dy = 0.5_dp*y1 - 0.5_dp*y0
+        m = max(abs(dx), abs(dy))
+        ux = 0.0_dp
+        uy = 0.0_dp
+        if (m <= 0.0_dp) return
+        dx = dx/m
+        dy = dy/m
+        l = hypot(dx, dy)
+        ux = dx/l
+        uy = dy/l
+    end subroutine unit_dir
 
     ! Moves the dash pattern on by a distance d without drawing: whole
     ! periods at once, then element by element.
@@ -1074,14 +1141,23 @@ contains
         end if
     end subroutine segment_in_box
 
-    subroutine stroke_run(out, px, py, n, hw, paint, closed)
+    ! bare0 and bare1 leave the start or the end without a cap, where a run
+    ! stops not because its dash does but because the walk does.
+    subroutine stroke_run(out, px, py, n, hw, paint, closed, bare0, bare1)
         type(pathbuf_t), intent(inout) :: out
         real(dp), intent(in) :: px(:), py(:), hw
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
         logical, intent(in) :: closed
+        logical, intent(in), optional :: bare0, bare1
         real(dp) :: qx(4), qy(4), ux, uy, nx, ny, l
         integer :: i
+        logical :: cap0, cap1
+
+        cap0 = .true.
+        cap1 = .true.
+        if (present(bare0)) cap0 = .not. bare0
+        if (present(bare1)) cap1 = .not. bare1
 
         ! A degenerate run still shows as a dot under a round pen, which is
         ! how a zero length dash draws a point.
@@ -1102,11 +1178,11 @@ contains
             qx(3) = px(i + 1) - nx; qy(3) = py(i + 1) - ny
             qx(4) = px(i) - nx; qy(4) = py(i) - ny
             if (paint%cap == CAP_SQUARE .and. .not. closed) then
-                if (i == 1) then
+                if (i == 1 .and. cap0) then
                     qx(1) = qx(1) - ux*hw; qy(1) = qy(1) - uy*hw
                     qx(4) = qx(4) - ux*hw; qy(4) = qy(4) - uy*hw
                 end if
-                if (i == n - 1) then
+                if (i == n - 1 .and. cap1) then
                     qx(2) = qx(2) + ux*hw; qy(2) = qy(2) + uy*hw
                     qx(3) = qx(3) + ux*hw; qy(3) = qy(3) + uy*hw
                 end if
@@ -1122,8 +1198,8 @@ contains
             call add_join(out, px(n - 1), py(n - 1), px(1), py(1), px(2), py(2), &
                           hw, paint%join, paint%miter_limit)
         else if (paint%cap == CAP_ROUND) then
-            call add_disc(out, px(1), py(1), hw)
-            call add_disc(out, px(n), py(n), hw)
+            if (cap0) call add_disc(out, px(1), py(1), hw)
+            if (cap1) call add_disc(out, px(n), py(n), hw)
         end if
     end subroutine stroke_run
 

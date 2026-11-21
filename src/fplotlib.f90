@@ -614,7 +614,7 @@ contains
     subroutine subplot(m, n, i)
         integer, intent(in) :: m, n, i
 
-        if (m < 1 .or. n < 1 .or. i < 1 .or. i > m * n) then
+        if (m < 1 .or. n < 1 .or. i < 1 .or. real(i, dp) > real(m, dp)*real(n, dp)) then
             call contract_error("subplot: expected m, n >= 1 and 1 <= i <= m*n, got m=" &
                                 //int_to_str(m)//", n="//int_to_str(n)//", i="//int_to_str(i))
         end if
@@ -3559,8 +3559,6 @@ contains
         character(len=:), allocatable :: mk
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_count_arg("spy", "m", m)
-        call check_count_arg("spy", "n", n)
         call check_size_arg("spy", "markersize", markersize)
 
         if (size(ij, 1) /= 2) call contract_error("spy: needs a (2, nnz) index array")
