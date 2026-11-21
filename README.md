@@ -264,7 +264,9 @@ plotting procedures check their arguments as they come in: an alpha must
 be in [0, 1], and a line width, marker size or font size must be finite
 and not negative (matplotlib quietly accepts some negative sizes; here
 they are taken for the mistakes they are). `tools/gen_arg_checks.py`
-writes these checks from one table of every argument.
+writes these checks from one table of every argument. The few upper
+bounds there are, such as at most 10000 axes in a grid, are listed in the
+`fplotlib_status` documentation.
 
 Missing data is not such a bug: as in matplotlib, a NaN or an infinity in
 plotted data is left out of the picture, and a line breaks around it. Data

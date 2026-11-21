@@ -29,5 +29,29 @@ failure: `savefig` stops with exit code 1 whether or not `status` is
 given.
 `fplotlib` re-exports `status_t`, `STATUS_OK` and `ERROR_IO`.
 
+## Limits
+
+Some arguments have upper bounds that matplotlib doesn't have. Past
+them, the arrays, the canvas or the work would not fit, or a value could
+no longer be written. Going past one is a broken precondition, and stops:
+
+| What | Limit |
+|---|---|
+| A coordinate, size or width handed to a renderer | finite, at most `MAX_COORD` (1e15 points) |
+| `figure`/`rc` `figsize`, `savefig` `pad_inches` | at most 1e9 inches |
+| `figure` `num` | 1 to 100000 |
+| Axes in one `subplot`/`subplots` grid | at most 10000 |
+| A count: `bins`, `ncol`, `nbins`, `markevery`, `nrows`, ... | 1 to 1000000 |
+| The side of a 2D grid: `hexbin` `gridsize`, `hist2d` `bins` | 1 to 1000 |
+| `tick_format` `decimals` | 0 to 17 |
+| `streamplot` `density` | at most 10 |
+| Lengths in a dash pattern | at most `MAX_DASH` (8) |
+| A PNG, after any `bbox_inches="tight"` cropping | fewer than `huge(1)/8` pixels |
+
+Data is never limited: a value of any size, or a missing one, is drawn or
+left out as the view shows it. Line widths and dash lengths beyond 1e12
+points are drawn as 1e12, which covers anything that can be seen just as
+fully.
+
 ```{f:module} fplotlib_status
 ```

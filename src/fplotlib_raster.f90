@@ -875,7 +875,7 @@ contains
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
         real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l, ta, tb
-        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk, vx, vy
+        real(dp) :: qx, qy, ax, ay, fx, fy, period, ux, uy, lp, p0, p1, ce, pk, vx, vy, q0, q1
         real(dp), allocatable :: rx(:), ry(:)
         integer :: i, di, nr, c
         logical :: on, inside, visible, cut0, cut1, wide, bare
@@ -924,11 +924,9 @@ contains
                         ! all a further one could: the window takes in
                         ! one whole pattern more at most.
                         ce = 0.0_dp
-                        if (paint%cap /= CAP_BUTT) then
-                            period = sum(paint%dash(1:paint%n_dash))*scale
-                            if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
-                            ce = min(1.5_dp*hw, period)
-                        end if
+                        period = sum(paint%dash(1:paint%n_dash))*scale
+                        if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
+                        if (paint%cap /= CAP_BUTT) ce = min(1.5_dp*hw, period)
                         p0 = huge(1.0_dp)
                         p1 = -huge(1.0_dp)
                         do c = 0, 3
@@ -937,8 +935,17 @@ contains
                             p0 = min(p0, pk)
                             p1 = max(p1, pk)
                         end do
-                        p0 = max(0.0_dp, p0 - ce - 2.0_dp)
-                        p1 = min(lp, p1 + ce + 2.0_dp)
+                        ! The nearest dash on either side is counted from
+                        ! the canvas, or from the piece's own end where
+                        ! the canvas lies beyond it.
+                        q0 = p0 - 2.0_dp
+                        q1 = p1 + 2.0_dp
+                        if (paint%cap /= CAP_BUTT) then
+                            q0 = min(p0, lp) - ce - 2.0_dp
+                            q1 = max(p1, 0.0_dp) + ce + 2.0_dp
+                        end if
+                        p0 = max(0.0_dp, q0)
+                        p1 = min(lp, q1)
                         if (p1 <= p0) then
                             visible = .false.
                         else
@@ -970,8 +977,9 @@ contains
                 if (.not. visible) then
                     call dash_advance(min(l, huge(1.0_dp)), paint, scale, di, rem, on)
                     ! Unseen itself, the segment may still end in a join
-                    ! that reaches the canvas.
-                    if (on .and. i < n - 1) then
+                    ! that reaches the canvas: when a dash runs through
+                    ! its end, not when one only starts there.
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
                         rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
                         ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
@@ -1032,8 +1040,9 @@ contains
                                       paint, scale, di, rem, on)
                     ! A dash running on through the next point starts a
                     ! capless stub there, a step back along this segment,
-                    ! so that the join at that point is drawn.
-                    if (on .and. i < n - 1) then
+                    ! so that the join at that point is drawn; a dash
+                    ! that only starts there has no join.
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
                         rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
                         ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy

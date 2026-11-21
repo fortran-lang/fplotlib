@@ -71,6 +71,8 @@ contains
         real(dp) :: dark_dots, dark_bar
         integer, parameter :: caps(3) = [CAP_BUTT, CAP_ROUND, CAP_SQUARE]
         integer, parameter :: joins(2) = [JOIN_MITER, JOIN_ROUND]
+        real(dp), parameter :: ends(9) = [-10.0_dp, -40.0_dp, -50.0_dp, -60.0_dp, -100.0_dp, &
+                                          -150.0_dp, -190.0_dp, -250.0_dp, -400.0_dp]
 
         ! A corner just off the canvas, and a straight line ending just
         ! short of it, which only the end of its last dash reaches.
@@ -79,9 +81,9 @@ contains
                 do j = 1, 2
                     do c = 0, 1
                         small = stroke_rgb(path, 100, 0.0_dp, caps(k), joins(j), 7.0_dp*c, 400.0_dp, &
-                                           [20.0_dp, 30.0_dp])
+                                           [20.0_dp, 30.0_dp], -10.0_dp)
                         big = crop(stroke_rgb(path, 500, -200.0_dp, caps(k), joins(j), 7.0_dp*c, 400.0_dp, &
-                                              [20.0_dp, 30.0_dp]), 500, 200, 100)
+                                              [20.0_dp, 30.0_dp], -10.0_dp), 500, 200, 100)
                         worst = max_diff(small, big)
                         if (worst > 2) then
                             print "(a, 4(i0, a), i0)", "dash shortcut: path ", path, ", cap ", caps(k), &
@@ -92,11 +94,31 @@ contains
                 end do
             end do
         end do
+        ! The same, swept over where the line ends (path 2) or turns away
+        ! (path 4): from just short of the canvas to well past a pen's
+        ! reach of it, through the places where the last dash of a
+        ! segment is the only one whose end can reach in.
+        do path = 2, 4, 2
+            do k = 1, 3
+                do c = 1, size(ends)
+                    small = stroke_rgb(path, 100, 0.0_dp, caps(k), JOIN_MITER, 0.0_dp, 400.0_dp, &
+                                       [20.0_dp, 30.0_dp], ends(c))
+                    big = crop(stroke_rgb(path, 500, -200.0_dp, caps(k), JOIN_MITER, 0.0_dp, 400.0_dp, &
+                                          [20.0_dp, 30.0_dp], ends(c)), 500, 200, 100)
+                    worst = max_diff(small, big)
+                    if (worst > 2) then
+                        print "(a, 2(i0, a), f7.1, a, i0)", "dash shortcut: path ", path, ", cap ", caps(k), &
+                            ", end at x = ", ends(c), ": differs from the full walk by ", worst
+                        nfail = nfail + 1
+                    end if
+                end do
+            end do
+        end do
         ! A pen a trillion points wide round a corner forty billion points
         ! off, one dash covering it all: no larger canvas can show
         ! the full walk, but the solid pen is the same stroke.
-        small = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [1.0e14_dp, 10.0_dp])
-        big = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [0.0_dp])
+        small = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [1.0e14_dp, 10.0_dp], 0.0_dp)
+        big = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [0.0_dp], 0.0_dp)
         worst = max_diff(small, big)
         if (worst > 2) then
             print "(a, i0)", "dash shortcut: a far corner of a huge pen differs from the solid pen by ", worst
@@ -117,12 +139,13 @@ contains
     end subroutine dash_shortcut_check
 
     ! A dashed pen of width lw along path 1 (a corner just off the canvas),
-    ! 2 (a straight line ending just short of it) or 3 (a corner forty
-    ! billion points off, where a double's step exceeds a millionth), on an n by n point canvas whose top left corner
+    ! 2 (a straight line ending at x = xe), 3 (a corner forty billion
+    ! points off, where a double's step exceeds a millionth) or 4 (a
+    ! corner at x = xe turning away from the canvas), on an n by n point canvas whose top left corner
     ! is at (o, o), at 72 dpi. dash(1) = 0 alone means solid.
-    function stroke_rgb(path, n, o, cap, join, offset, lw, dash) result(rgb)
+    function stroke_rgb(path, n, o, cap, join, offset, lw, dash, xe) result(rgb)
         integer, intent(in) :: path, n, cap, join
-        real(dp), intent(in) :: o, offset, lw, dash(:)
+        real(dp), intent(in) :: o, offset, lw, dash(:), xe
         character(len=:), allocatable :: rgb
         type(png_renderer_t) :: r
         type(paint_t) :: q
@@ -144,7 +167,10 @@ contains
             call r%draw_path([-300.0_dp, -10.0_dp, -10.0_dp], [50.0_dp, 50.0_dp, 400.0_dp], &
                              [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
         case (2)
-            call r%draw_path([-1000.0_dp, -10.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+            call r%draw_path([-1000.0_dp, xe], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+        case (4)
+            call r%draw_path([-1000.0_dp, xe, xe], [50.0_dp, 50.0_dp, -2000.0_dp], &
+                             [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
         case default
             call r%draw_path([-1.0e12_dp, -4.0e10_dp, -4.0e10_dp], [50.0_dp, 50.0_dp, 1.0e12_dp], &
                              [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
