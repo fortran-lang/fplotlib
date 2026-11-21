@@ -465,7 +465,7 @@ contains
             call set_cycle(["#000000", "#545454", "#7f7f7f", "#b0b0b0", &
                             "#d4d4d4"])
         case default
-            call contract_error("unknown style")
+            call contract_error("style_use: unknown style")
         end select
     end subroutine style_use
 
@@ -481,6 +481,7 @@ contains
 
         call check_size_arg("rc", "fontsize", fontsize)
         call check_size_arg("rc", "linewidth", linewidth)
+
         if (present(figsize)) then
             if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp)) &
                 call contract_error("rc: figsize must be finite and positive")
@@ -565,8 +566,9 @@ contains
         call check_finite_arg("subplots_adjust", "right", right)
         call check_finite_arg("subplots_adjust", "bottom", bottom)
         call check_finite_arg("subplots_adjust", "top", top)
-        call check_size_arg("subplots_adjust", "wspace", wspace)
-        call check_size_arg("subplots_adjust", "hspace", hspace)
+        call check_finite_arg("subplots_adjust", "wspace", wspace)
+        call check_finite_arg("subplots_adjust", "hspace", hspace)
+
         call ensure_fig()
         if (present(left)) fig_left = left
         if (present(right)) fig_right = right
@@ -693,6 +695,10 @@ contains
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
+
+        call check_finite_arg("secondary_xaxis", "scale", scale)
+        call check_finite_arg("secondary_xaxis", "offset", offset)
+
         call ensure_fig()
         h = add_secondary(cur_i, .true., location, scale, offset)
     end function secondary_xaxis
@@ -701,6 +707,10 @@ contains
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
+
+        call check_finite_arg("secondary_yaxis", "scale", scale)
+        call check_finite_arg("secondary_yaxis", "offset", offset)
+
         call ensure_fig()
         h = add_secondary(cur_i, .false., location, scale, offset)
     end function secondary_yaxis
@@ -708,13 +718,18 @@ contains
     ! A second axis along one edge, reading the same data in other units.
     ! matplotlib takes a pair of functions; here the two units are related
     ! by scale and offset, which is what a change of units amounts to.
-    function add_secondary(parent, is_x, location, scale, offset) result(h)
-        integer, intent(in) :: parent
+    function add_secondary(parent_in, is_x, location, scale, offset) result(h)
+        integer, intent(in) :: parent_in
         logical, intent(in) :: is_x
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
         character(len=8) :: loc
+        integer :: parent
+
+        ! A copy, since the caller may pass cur_i itself, which push_axes
+        ! moves to the new axes: that would make it its own parent.
+        parent = parent_in
 
         loc = "top"
         if (.not. is_x) loc = "right"
@@ -749,6 +764,9 @@ contains
     subroutine gridspec(width_ratios, height_ratios)
         real(dp), intent(in), optional :: width_ratios(:), height_ratios(:)
         integer :: k
+
+        call check_positive_args("gridspec", "width_ratios", width_ratios)
+        call check_positive_args("gridspec", "height_ratios", height_ratios)
 
         call ensure_fig()
         if (present(width_ratios)) then
@@ -1905,6 +1923,7 @@ contains
         character(len=*), intent(in), optional :: fontweight, fontstyle
 
         call check_size_arg("xlabel", "fontsize", fontsize)
+        call check_finite_arg("xlabel", "labelpad", labelpad)
 
         call ensure_fig()
         ax(cur_i)%xlabel = s
@@ -1920,6 +1939,7 @@ contains
         character(len=*), intent(in), optional :: fontweight, fontstyle
 
         call check_size_arg("ylabel", "fontsize", fontsize)
+        call check_finite_arg("ylabel", "labelpad", labelpad)
 
         call ensure_fig()
         ax(cur_i)%ylabel = s
@@ -1957,6 +1977,7 @@ contains
         call check_size_arg("set_fontsize", "labels", labels)
         call check_size_arg("set_fontsize", "ticks", ticks)
         call check_size_arg("set_fontsize", "legend", legend)
+
         call ensure_fig()
         if (present(size)) then
             ! Keep matplotlib's proportions: the title is a little larger than
@@ -2067,6 +2088,7 @@ contains
         integer :: i
 
         call check_size_arg("legend", "fontsize", fontsize)
+        call check_finite_args("legend", "bbox_to_anchor", bbox_to_anchor)
 
         call ensure_fig()
         ! matplotlib's legend(labels): the names are handed to the artists
@@ -2153,6 +2175,8 @@ contains
         logical :: dox, doy
         integer :: st, dec
 
+        call check_finite_arg("tick_format", "whole", whole)
+
         call ensure_fig()
         call which_axis(axis, dox, doy)
         select case (lower(style))
@@ -2186,6 +2210,8 @@ contains
         integer, intent(in), optional :: nbins
         logical :: dox, doy
 
+        call check_positive_arg("tick_locator", "base", base)
+
         call ensure_fig()
         call which_axis(axis, dox, doy)
         if (present(base)) then
@@ -2216,6 +2242,9 @@ contains
         real(dp), intent(in) :: vals(:)
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
+
+        call check_finite_args("xticks", "vals", vals)
+
         call ensure_fig()
         if (is_minor(minor)) then
             call set_minor_ticks(vals, ax(cur_i)%n_xminor, ax(cur_i)%xminor_pos)
@@ -2229,6 +2258,9 @@ contains
         real(dp), intent(in) :: vals(:)
         character(len=*), intent(in), optional :: labels(:)
         logical, intent(in), optional :: minor
+
+        call check_finite_args("yticks", "vals", vals)
+
         call ensure_fig()
         if (is_minor(minor)) then
             call set_minor_ticks(vals, ax(cur_i)%n_yminor, ax(cur_i)%yminor_pos)
@@ -2373,16 +2405,73 @@ contains
         if (.not. ieee_is_finite(v)) call contract_error(proc//": "//name//" must be finite, got "//arg_str(v))
     end subroutine check_finite_arg
 
+    subroutine check_positive_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v <= 0.0_dp) then
+            call contract_error(proc//": "//name//" must be finite and positive, got "//arg_str(v))
+        end if
+    end subroutine check_positive_arg
+
+    subroutine check_finite_args(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (.not. all(ieee_is_finite(v))) call contract_error(proc//": "//name//" must be finite")
+    end subroutine check_finite_args
+
+    subroutine check_size_args(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (.not. all(ieee_is_finite(v)) .or. any(v < 0.0_dp)) then
+            call contract_error(proc//": "//name//" must be finite and nonnegative")
+        end if
+    end subroutine check_size_args
+
+    subroutine check_positive_args(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (.not. all(ieee_is_finite(v)) .or. any(v <= 0.0_dp)) then
+            call contract_error(proc//": "//name//" must be finite and positive")
+        end if
+    end subroutine check_positive_args
+
+    ! Dash and gap lengths in points, as many as the renderer can carry,
+    ! not all of them zero.
+    subroutine check_dashes_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (size(v) > MAX_DASH) call contract_error(proc//": "//name//" has more than " &
+                                                    //int_to_str(MAX_DASH)//" lengths")
+        if (size(v) > 0) then
+            if (sum(v) <= 0.0_dp) call contract_error(proc//": "//name//" must not be all zero")
+        end if
+    end subroutine check_dashes_arg
+
     ! matplotlib's margins take anything above -0.5, where the view would
     ! shrink to nothing.
-    subroutine check_margin_arg(name, v)
-        character(len=*), intent(in) :: name
+    subroutine check_margin_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
         real(dp), intent(in), optional :: v
         if (.not. present(v)) return
         if (.not. ieee_is_finite(v) .or. v <= -0.5_dp) then
-            call contract_error("margins: "//name//" must be finite and greater than -0.5, got "//arg_str(v))
+            call contract_error(proc//": "//name//" must be finite and greater than -0.5, got "//arg_str(v))
         end if
     end subroutine check_margin_arg
+
+    ! The PNG encoder counts in default integers, so a raster of the figure
+    ! at dpi must have fewer than huge(1)/8 pixels, as the backend checks.
+    subroutine check_pixels(proc, dpi)
+        character(len=*), intent(in) :: proc
+        real(dp), intent(in) :: dpi
+        if (max(1.0_dp, fig_w_in*dpi)*max(1.0_dp, fig_h_in*dpi) > real(huge(1)/8, dp)) then
+            call contract_error(proc//": the figure has too many pixels at dpi "//arg_str(dpi))
+        end if
+    end subroutine check_pixels
 
     function arg_str(v) result(s)
         real(dp), intent(in) :: v
@@ -2426,10 +2515,12 @@ contains
     subroutine set_zorder(z)
         real(dp), intent(in) :: z
 
+        call check_size_arg("set_zorder", "z", z)
+
         call ensure_fig()
         if (ax(cur_i)%n_series < 1) &
-            call contract_error("set_zorder needs something drawn first")
-        if (z < 0.0_dp) call contract_error("zorder must not be negative")
+            call contract_error("set_zorder: needs something drawn first")
+        if (z < 0.0_dp) call contract_error("set_zorder: zorder must not be negative")
         ax(cur_i)%series(ax(cur_i)%n_series)%zorder = z
     end subroutine set_zorder
 
@@ -2449,6 +2540,8 @@ contains
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
         call check_size_arg("plot", "markersize", markersize)
+        call check_size_arg("plot", "markeredgewidth", markeredgewidth)
+        call check_dashes_arg("plot", "dashes", dashes)
 
         call ensure_fig()
         if (present(drawstyle)) then
@@ -2495,6 +2588,8 @@ contains
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
         call check_size_arg("plot", "markersize", markersize)
+        call check_size_arg("plot", "markeredgewidth", markeredgewidth)
+        call check_dashes_arg("plot", "dashes", dashes)
 
         do i = 1, size(ydata)
             idx(i) = real(i - 1, dp)
@@ -2532,7 +2627,10 @@ contains
         integer :: is, n, k, id
         real(dp) :: lo, hi
 
+        call check_size_arg("scatter", "s", s)
         call check_unit_arg("scatter", "alpha", alpha)
+        call check_finite_arg("scatter", "vmin", vmin)
+        call check_finite_arg("scatter", "vmax", vmax)
         call check_size_arg("scatter", "linewidths", linewidths)
 
         call ensure_fig()
@@ -2589,6 +2687,10 @@ contains
     subroutine set_xscale(name, linthresh, linscale)
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
+
+        call check_positive_arg("set_xscale", "linthresh", linthresh)
+        call check_positive_arg("set_xscale", "linscale", linscale)
+
         call ensure_fig()
         ax(cur_i)%xsc = make_scale(name, linthresh, linscale)
     end subroutine set_xscale
@@ -2596,6 +2698,10 @@ contains
     subroutine set_yscale(name, linthresh, linscale)
         character(len=*), intent(in) :: name
         real(dp), intent(in), optional :: linthresh, linscale
+
+        call check_positive_arg("set_yscale", "linthresh", linthresh)
+        call check_positive_arg("set_yscale", "linscale", linscale)
+
         call ensure_fig()
         ax(cur_i)%ysc = make_scale(name, linthresh, linscale)
     end subroutine set_yscale
@@ -2613,14 +2719,14 @@ contains
         case ("symlog")
             s%kind = SCALE_SYMLOG
         case default
-            call contract_error("unknown scale, expected linear, log or symlog")
+            call contract_error("set_xscale/set_yscale: unknown scale, expected linear, log or symlog")
         end select
         if (present(linthresh)) then
-            if (linthresh <= 0.0_dp) call contract_error("linthresh must be positive")
+            if (linthresh <= 0.0_dp) call contract_error("set_xscale/set_yscale: linthresh must be positive")
             s%linthresh = linthresh
         end if
         if (present(linscale)) then
-            if (linscale <= 0.0_dp) call contract_error("linscale must be positive")
+            if (linscale <= 0.0_dp) call contract_error("set_xscale/set_yscale: linscale must be positive")
             s%linscale = linscale
         end if
     end function make_scale
@@ -2748,6 +2854,14 @@ contains
         integer :: nr, nc
         real(dp) :: lo, hi
 
+        call check_finite_arg("imshow", "vmin", vmin)
+        call check_finite_arg("imshow", "vmax", vmax)
+        call check_finite_args("imshow", "extent", extent)
+        call check_finite_args("imshow", "boundaries", boundaries)
+        call check_finite_arg("imshow", "vcenter", vcenter)
+        call check_positive_arg("imshow", "gamma", gamma)
+        call check_positive_arg("imshow", "linthresh", linthresh)
+
         call ensure_fig()
         nr = size(z, 1)
         nc = size(z, 2)
@@ -2831,6 +2945,8 @@ contains
         real(dp), intent(in), optional :: extent(4)
         integer :: nr, nc, nch
 
+        call check_finite_args("imshow", "extent", extent)
+
         call ensure_fig()
         nr = size(z, 1)
         nc = size(z, 2)
@@ -2876,6 +2992,7 @@ contains
         integer, allocatable :: ij(:, :)
         integer :: i, j, k
 
+        call check_size_arg("spy", "precision", precision)
         call check_size_arg("spy", "markersize", markersize)
 
         tol = 0.0_dp
@@ -2909,7 +3026,7 @@ contains
 
         call check_size_arg("spy", "markersize", markersize)
 
-        if (size(ij, 1) /= 2) call contract_error("spy needs a (2, nnz) index array")
+        if (size(ij, 1) /= 2) call contract_error("spy: needs a (2, nnz) index array")
         nr = 0
         nc = 0
         if (size(ij, 2) > 0) then
@@ -2943,6 +3060,9 @@ contains
         character(len=*), intent(in), optional :: cmap
         real(dp), intent(in), optional :: vmin, vmax
 
+        call check_finite_arg("matshow", "vmin", vmin)
+        call check_finite_arg("matshow", "vmax", vmax)
+
         call imshow(z, cmap, vmin, vmax, aspect="equal")
         ax(cur_i)%x_top = .true.
     end subroutine matshow
@@ -2954,6 +3074,8 @@ contains
         character(len=*), intent(in), optional :: color
         real(dp) :: off, len_
 
+        call check_finite_arg("eventplot", "lineoffset", lineoffset)
+        call check_size_arg("eventplot", "linelength", linelength)
         call check_size_arg("eventplot", "lw", lw)
 
         off = 1.0_dp
@@ -3002,6 +3124,7 @@ contains
         real(dp), intent(in), optional :: col_widths(:), fontsize
         integer :: nr, nc, i, j
 
+        call check_size_args("table", "col_widths", col_widths)
         call check_size_arg("table", "fontsize", fontsize)
 
         call ensure_fig()
@@ -3066,7 +3189,9 @@ contains
         integer :: nx, ny, i, j, np, is, na, k, nseed, sx, sy, sd(5)
         character(len=32) :: col
 
+        call check_size_arg("streamplot", "density", density)
         call check_size_arg("streamplot", "lw", lw)
+        call check_size_arg("streamplot", "arrowsize", arrowsize)
 
         call ensure_fig()
         nx = size(x)
@@ -3479,6 +3604,9 @@ contains
         real(dp), allocatable :: xe(:), ye(:), h(:, :)
         logical, allocatable :: ok(:)
 
+        call check_finite_arg("hist2d", "vmin", vmin)
+        call check_finite_arg("hist2d", "vmax", vmax)
+
         call ensure_fig()
         n = min(size(x), size(y))
         ! A point with a missing coordinate is in no bin.
@@ -3494,24 +3622,50 @@ contains
         if (y1 <= y0) y1 = y0 + 1.0_dp
 
         allocate (xe(nb(1) + 1), ye(nb(2) + 1), h(nb(2), nb(1)))
+        ! Data spanning more than the largest double must not overflow the
+        ! edges or the bin numbers.
         do i = 1, nb(1) + 1
-            xe(i) = x0 + (x1 - x0)*real(i - 1, dp)/real(nb(1), dp)
+            xe(i) = between(x0, x1, real(i - 1, dp)/real(nb(1), dp))
         end do
         do i = 1, nb(2) + 1
-            ye(i) = y0 + (y1 - y0)*real(i - 1, dp)/real(nb(2), dp)
+            ye(i) = between(y0, y1, real(i - 1, dp)/real(nb(2), dp))
         end do
 
         h = 0.0_dp
         do i = 1, n
             if (.not. ok(i)) cycle
             ! The last cell owns its right edge, as numpy's histogram does.
-            jx = min(nb(1), 1 + int((x(i) - x0)/(x1 - x0)*real(nb(1), dp)))
-            jy = min(nb(2), 1 + int((y(i) - y0)/(y1 - y0)*real(nb(2), dp)))
+            jx = bin_index(x(i), x0, x1, nb(1))
+            jy = bin_index(y(i), y0, y1, nb(2))
             h(jy, jx) = h(jy, jx) + 1.0_dp
         end do
 
         call pcolormesh(xe, ye, h, cmap, vmin, vmax)
     end subroutine hist2d
+
+    ! The point a fraction t of the way from a to b, measured from a, and
+    ! interpolated between the two instead when b - a overflows.
+    pure function between(a, b, t) result(v)
+        real(dp), intent(in) :: a, b, t
+        real(dp) :: v
+        if (ieee_is_finite(b - a)) then
+            v = a + (b - a)*t
+        else
+            v = a*(1.0_dp - t) + b*t
+        end if
+    end function between
+
+    ! Which of n equal bins between lo and hi holds v, with the last bin
+    ! owning hi.
+    pure function bin_index(v, lo, hi, n) result(k)
+        real(dp), intent(in) :: v, lo, hi
+        integer, intent(in) :: n
+        integer :: k
+        real(dp) :: t
+        t = (0.5_dp*v - 0.5_dp*lo)/(0.5_dp*hi - 0.5_dp*lo)
+        t = max(0.0_dp, min(1.0_dp, t))
+        k = min(n, 1 + int(t*real(n, dp)))
+    end function bin_index
 
     ! Hexagonal binning. matplotlib lays two rectangular grids over the
     ! data, one offset half a cell from the other, and gives each point to
@@ -3627,6 +3781,12 @@ contains
         integer :: nr, nc
         real(dp) :: lo, hi
 
+        call check_finite_arg("pcolormesh", "vmin", vmin)
+        call check_finite_arg("pcolormesh", "vmax", vmax)
+        call check_finite_arg("pcolormesh", "vcenter", vcenter)
+        call check_positive_arg("pcolormesh", "gamma", gamma)
+        call check_positive_arg("pcolormesh", "linthresh", linthresh)
+
         call ensure_fig()
         nr = size(c, 1)
         nc = size(c, 2)
@@ -3678,6 +3838,10 @@ contains
         real(dp), intent(in) :: x(:), y(:), c(:, :)
         character(len=*), intent(in), optional :: cmap, norm
         real(dp), intent(in), optional :: vmin, vmax
+
+        call check_finite_arg("pcolor", "vmin", vmin)
+        call check_finite_arg("pcolor", "vmax", vmax)
+
         call pcolormesh(x, y, c, cmap, vmin, vmax, norm)
     end subroutine pcolor
 
@@ -3714,6 +3878,9 @@ contains
     subroutine axes3d(elev, azim)
         real(dp), intent(in), optional :: elev, azim
 
+        call check_finite_arg("axes3d", "elev", elev)
+        call check_finite_arg("axes3d", "azim", azim)
+
         call ensure_fig()
         ax(cur_i)%is3d = .true.
         ! A 3D axes is gridded by default (rcParams axes3d.grid), unlike a
@@ -3725,6 +3892,9 @@ contains
 
     subroutine view_init(elev, azim)
         real(dp), intent(in), optional :: elev, azim
+
+        call check_finite_arg("view_init", "elev", elev)
+        call check_finite_arg("view_init", "azim", azim)
 
         call axes3d(elev, azim)
     end subroutine view_init
@@ -3770,6 +3940,7 @@ contains
         character(len=*), intent(in), optional :: c, marker, label
         integer :: is, n
 
+        call check_size_arg("scatter3d", "s", s)
         call check_unit_arg("scatter3d", "alpha", alpha)
 
         call axes3d()
@@ -3896,6 +4067,7 @@ contains
         character(len=32) :: col
         integer :: n, i, k
 
+        call check_finite_arg("quiver3d", "length", length)
         call check_size_arg("quiver3d", "lw", lw)
 
         call axes3d()
@@ -3977,6 +4149,8 @@ contains
         real(dp) :: t(MAX_TICKS), gx(2), gy(2), tx(3), ty(3), tv(3), sx(2), sy(2)
         real(dp) :: tol, cx(2), cy(2), cz(2)
         integer :: nr, nc, nlev, nseg, ns, nv, i, j, k, c, np, cm, id
+
+        call check_finite_args("contour3d", "levels", levels)
 
         call axes3d()
         nr = size(z, 1)
@@ -4117,6 +4291,8 @@ contains
         real(dp) :: lo, hi, v, tx(3), ty(3)
         real(dp), allocatable :: fv(:)
 
+        call check_finite_arg("tripcolor", "vmin", vmin)
+        call check_finite_arg("tripcolor", "vmax", vmax)
         call check_unit_arg("tripcolor", "alpha", alpha)
 
         call ensure_fig()
@@ -4163,6 +4339,7 @@ contains
         real(dp), intent(in), optional :: levels(:), lw
         character(len=*), intent(in), optional :: cmap
 
+        call check_finite_args("tricontour", "levels", levels)
         call check_size_arg("tricontour", "lw", lw)
 
         call add_tricontour(x, y, z, levels, cmap, lw, filled=.false.)
@@ -4173,6 +4350,9 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:)
         real(dp), intent(in), optional :: levels(:)
         character(len=*), intent(in), optional :: cmap
+
+        call check_finite_args("tricontourf", "levels", levels)
+
         call add_tricontour(x, y, z, levels, cmap, filled=.true.)
     end subroutine tricontourf
 
@@ -4257,6 +4437,10 @@ contains
         real(dp), intent(in) :: z(:, :)
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
+
+        call check_finite_args("contour", "levels", levels)
+        call check_finite_args("contour", "extent", extent)
+
         call add_contour(z, levels, cmap, extent, .false.)
     end subroutine contour
 
@@ -4277,6 +4461,10 @@ contains
         real(dp), intent(in) :: z(:, :)
         real(dp), intent(in), optional :: levels(:), extent(4)
         character(len=*), intent(in), optional :: cmap
+
+        call check_finite_args("contourf", "levels", levels)
+        call check_finite_args("contourf", "extent", extent)
+
         call add_contour(z, levels, cmap, extent, .true.)
     end subroutine contourf
 
@@ -4421,6 +4609,7 @@ contains
         character(len=*), intent(in), optional :: colors(:)
         integer :: is
 
+        call check_finite_arg("barh", "height", height)
         call check_unit_arg("barh", "alpha", alpha)
         call check_size_arg("barh", "linewidth", linewidth)
 
@@ -4439,6 +4628,7 @@ contains
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
 
+        call check_finite_arg("barh", "height", height)
         call check_unit_arg("barh", "alpha", alpha)
         call check_size_arg("barh", "linewidth", linewidth)
 
@@ -4501,6 +4691,9 @@ contains
         real(dp) :: px(4), py(4), rx(4), ry(4), a, ca, sa
         integer :: i
 
+        call check_finite_arg("add_rectangle", "width", width)
+        call check_finite_arg("add_rectangle", "height", height)
+        call check_finite_arg("add_rectangle", "angle", angle)
         call check_size_arg("add_rectangle", "lw", lw)
         call check_unit_arg("add_rectangle", "alpha", alpha)
 
@@ -4524,6 +4717,7 @@ contains
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
 
+        call check_size_arg("add_circle", "radius", radius)
         call check_size_arg("add_circle", "lw", lw)
         call check_unit_arg("add_circle", "alpha", alpha)
 
@@ -4540,6 +4734,9 @@ contains
         real(dp) :: px(N), py(N), t, cx, cy, a, ca, sa
         integer :: i
 
+        call check_finite_arg("add_ellipse", "width", width)
+        call check_finite_arg("add_ellipse", "height", height)
+        call check_finite_arg("add_ellipse", "angle", angle)
         call check_size_arg("add_ellipse", "lw", lw)
         call check_unit_arg("add_ellipse", "alpha", alpha)
 
@@ -4601,6 +4798,7 @@ contains
         real(dp) :: w, ln, ct, st, ax_(7), ay(7), u, v
         integer :: j
 
+        call check_size_arg("add_arrow", "width", width)
         call check_size_arg("add_arrow", "lw", lw)
         call check_unit_arg("add_arrow", "alpha", alpha)
 
@@ -4675,6 +4873,9 @@ contains
         real(dp), intent(in), optional :: scale, width
         integer :: is, n
 
+        call check_positive_arg("quiver", "scale", scale)
+        call check_size_arg("quiver", "width", width)
+
         call ensure_fig()
         n = min(size(x), size(y), size(u), size(v))
         if (n <= 0) return
@@ -4707,13 +4908,16 @@ contains
         character(len=*), intent(in), optional :: coordinates, color, labelpos, labelcolor
         integer :: is
 
+        call check_finite_arg("quiverkey", "u", u)
+        call check_finite_arg("quiverkey", "angle", angle)
+        call check_size_arg("quiverkey", "labelsep", labelsep)
         call check_size_arg("quiverkey", "fontsize", fontsize)
 
         call ensure_fig()
         do is = ax(cur_i)%n_series, 1, -1
             if (ax(cur_i)%series(is)%kind == SERIES_QUIVER) exit
         end do
-        if (is < 1) call contract_error("quiverkey needs a quiver in the current axes")
+        if (is < 1) call contract_error("quiverkey: needs a quiver in the current axes")
         associate (s => ax(cur_i)%series(is))
             s%qk_on = .true.
             s%qk_x = x
@@ -4727,7 +4931,7 @@ contains
                 select case (coordinates)
                 case ("axes", "data", "figure", "inches"); s%qk_coord = coordinates
                 case default
-                    call contract_error("quiverkey coordinates must be axes, data, figure or inches")
+                    call contract_error("quiverkey: coordinates must be axes, data, figure or inches")
                 end select
             end if
             if (present(color)) s%qk_color = resolve_color(color)
@@ -4735,7 +4939,7 @@ contains
             if (present(labelpos)) then
                 select case (labelpos)
                 case ("N", "S", "E", "W"); s%qk_pos = labelpos
-                case default; call contract_error("quiverkey labelpos must be N, S, E or W")
+                case default; call contract_error("quiverkey: labelpos must be N, S, E or W")
                 end select
             end if
         end associate
@@ -4756,7 +4960,12 @@ contains
         real(dp) :: rad, pd, ld, off
         real(dp), allocatable :: v(:)
 
+        call check_finite_args("pie", "explode", explode)
+        call check_finite_arg("pie", "startangle", startangle)
         call check_size_arg("pie", "linewidth", linewidth)
+        call check_finite_arg("pie", "pctdistance", pctdistance)
+        call check_finite_arg("pie", "labeldistance", labeldistance)
+        call check_size_arg("pie", "radius", radius)
 
         call ensure_fig()
         n = size(values)
@@ -4921,7 +5130,9 @@ contains
         logical :: dox, doy
         real(dp) :: d
 
+        call check_size_arg("tick_params", "length", length)
         call check_size_arg("tick_params", "labelsize", labelsize)
+        call check_finite_arg("tick_params", "rotation", rotation)
 
         call ensure_fig()
         dox = .true.
@@ -4934,7 +5145,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                call contract_error("tick_params axis must be x, y or both")
+                call contract_error("tick_params: axis must be x, y or both")
             end select
         end if
 
@@ -4947,7 +5158,7 @@ contains
             case ("inout")
                 d = 0.0_dp
             case default
-                call contract_error("tick direction must be in, out or inout")
+                call contract_error("tick_params: direction must be in, out or inout")
             end select
             if (dox) ax(cur_i)%xtick_dir = d
             if (doy) ax(cur_i)%ytick_dir = d
@@ -4998,7 +5209,7 @@ contains
             ax(cur_i)%xmargin = 0.05_dp
             ax(cur_i)%ymargin = 0.05_dp
         case default
-            call contract_error("unknown axis mode")
+            call contract_error("axis: unknown mode")
         end select
     end subroutine axis
 
@@ -5007,9 +5218,10 @@ contains
     subroutine margins(m, x, y)
         real(dp), intent(in), optional :: m, x, y
 
-        call check_margin_arg("m", m)
-        call check_margin_arg("x", x)
-        call check_margin_arg("y", y)
+        call check_margin_arg("margins", "m", m)
+        call check_margin_arg("margins", "x", x)
+        call check_margin_arg("margins", "y", y)
+
         call ensure_fig()
         if (present(m)) then
             ax(cur_i)%xmargin = m
@@ -5040,7 +5252,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                call contract_error("autoscale axis must be x, y or both")
+                call contract_error("autoscale: axis must be x, y or both")
             end select
         end if
 
@@ -5090,7 +5302,7 @@ contains
             case ("datalim")
                 ax(cur_i)%aspect_datalim = .true.
             case default
-                call contract_error("adjustable must be box or datalim")
+                call contract_error("set_aspect: adjustable must be box or datalim")
             end select
         end if
     end subroutine set_aspect
@@ -5106,6 +5318,9 @@ contains
         character(len=*), intent(in), optional :: color, label
         logical, intent(in), optional :: vert, notch, showmeans, patch_artist
         integer :: is
+
+        call check_size_arg("boxplot", "width", width)
+        call check_finite_arg("boxplot", "whis", whis)
 
         call add_dist_series(SERIES_BOX, y, position, width, color, label, 0.15_dp)
         is = ax(cur_i)%n_series
@@ -5134,6 +5349,9 @@ contains
         integer :: k, nk
         real(dp), allocatable :: pos(:)
         logical :: up
+
+        call check_size_arg("boxplot", "width", width)
+        call check_finite_arg("boxplot", "whis", whis)
 
         call ensure_fig()
         nk = size(y, 1)
@@ -5167,6 +5385,8 @@ contains
         logical, intent(in), optional :: vert, showmeans, showmedians, showextrema
         integer :: is
 
+        call check_size_arg("violinplot", "width", width)
+
         call add_dist_series(SERIES_VIOLIN, y, position, width, color, label, 0.5_dp)
         is = ax(cur_i)%n_series
         if (is < 1) return
@@ -5187,6 +5407,8 @@ contains
         integer :: k, nk
         real(dp), allocatable :: pos(:)
         logical :: up
+
+        call check_size_arg("violinplot", "width", width)
 
         call ensure_fig()
         nk = size(y, 1)
@@ -5256,7 +5478,8 @@ contains
         call check_size_arg("colorbar", "fraction", fraction)
         call check_finite_arg("colorbar", "pad", pad)
         call check_size_arg("colorbar", "shrink", shrink)
-        call check_size_arg("colorbar", "aspect", aspect)
+        call check_positive_arg("colorbar", "aspect", aspect)
+
         call ensure_fig()
         if (.not. ax(cur_i)%has_cmap_src) return
         if (ax(cur_i)%cbar_on) return
@@ -5271,7 +5494,7 @@ contains
                 ! because its tick labels sit under it too.
                 ax(cur_i)%cbar_pad = 0.15_dp
             case default
-                call contract_error("colorbar orientation must be vertical or horizontal")
+                call contract_error("colorbar: orientation must be vertical or horizontal")
             end select
         end if
         if (present(fraction)) ax(cur_i)%cbar_frac = fraction
@@ -5304,6 +5527,7 @@ contains
         real(dp), allocatable :: pos(:)
         integer :: is, n
 
+        call check_finite_arg("bar", "width", width)
         call check_unit_arg("bar", "alpha", alpha)
         call check_size_arg("bar", "linewidth", linewidth)
         call check_size_arg("bar", "capsize", capsize)
@@ -5348,6 +5572,7 @@ contains
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
 
+        call check_finite_arg("bar", "width", width)
         call check_unit_arg("bar", "alpha", alpha)
         call check_size_arg("bar", "linewidth", linewidth)
 
@@ -5402,6 +5627,7 @@ contains
         real(dp), intent(in), optional :: padding, fontsize
         integer :: i
 
+        call check_finite_arg("bar_label", "padding", padding)
         call check_size_arg("bar_label", "fontsize", fontsize)
 
         call ensure_fig()
@@ -5436,7 +5662,9 @@ contains
         character(len=16) :: ht
 
         call check_unit_arg("hist", "alpha", alpha)
+        call check_finite_args("hist", "bin_edges", bin_edges)
         call check_size_arg("hist", "rwidth", rwidth)
+
         if (present(bin_edges)) then
             if (.not. all(ieee_is_finite(bin_edges))) call contract_error("hist: bin_edges must be finite")
         end if
@@ -6140,7 +6368,9 @@ contains
         real(dp), intent(in), optional :: fontsize, rotation, bbox_alpha, bbox_pad
 
         call check_size_arg("text", "fontsize", fontsize)
+        call check_finite_arg("text", "rotation", rotation)
         call check_unit_arg("text", "bbox_alpha", bbox_alpha)
+        call check_finite_arg("text", "bbox_pad", bbox_pad)
 
         call add_text(x, y, s, color, fontsize, ha, .false., 0.0_dp, 0.0_dp, &
                       fontweight, fontstyle, va, rotation, bbox_facecolor, &
@@ -6160,6 +6390,7 @@ contains
         integer :: it
 
         call check_size_arg("figtext", "fontsize", fontsize)
+        call check_finite_arg("figtext", "rotation", rotation)
 
         call add_text(x, y, s, color, fontsize, ha, .false., 0.0_dp, 0.0_dp, &
                       fontweight, fontstyle, va, rotation)
@@ -6186,8 +6417,11 @@ contains
         logical :: arrow
 
         call check_size_arg("annotate", "fontsize", fontsize)
+        call check_finite_arg("annotate", "rotation", rotation)
         call check_unit_arg("annotate", "bbox_alpha", bbox_alpha)
+        call check_finite_arg("annotate", "bbox_pad", bbox_pad)
         call check_size_arg("annotate", "arrowlw", arrowlw)
+        call check_size_arg("annotate", "shrink", shrink)
 
         xt = x
         yt = y
@@ -6448,7 +6682,8 @@ contains
         character(len=:), allocatable :: data
         real(dp) :: saved_dpi
 
-        call check_size_arg("savefig", "pad_inches", pad_inches)
+        call check_finite_arg("savefig", "pad_inches", pad_inches)
+
         select case (file_ext(filename))
         case ("svg", "pdf", "png", "eps")
         case default
@@ -6459,6 +6694,9 @@ contains
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
                 call contract_error("savefig: dpi must be finite and positive")
             end if
+            if (file_ext(filename) == "png") call check_pixels("savefig", dpi)
+        else if (file_ext(filename) == "png") then
+            call check_pixels("savefig", fig_dpi)
         end if
         ! dpi given here applies to this file only, as it does in matplotlib;
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
@@ -6509,6 +6747,13 @@ contains
         type(png_renderer_t) :: r
         real(dp) :: saved_dpi
 
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("add_frame: dpi must be finite and positive")
+            call check_pixels("add_frame", dpi)
+        else
+            call check_pixels("add_frame", fig_dpi)
+        end if
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
         r%keep_pixels = .true.

@@ -259,7 +259,12 @@ A call that breaks a documented precondition is a bug in the calling
 program, and it stops with a message naming the call and the rule, and
 exit code 1: `plot(alpha=1.5)`, `savefig` of an unknown format, `xlim`
 with an infinite limit, or, below the plotting API, drawing on a canvas
-that is not open or passing a nonfinite coordinate to a renderer. Missing data is not such a bug: as in
+that is not open or passing a nonfinite coordinate to a renderer. The
+plotting procedures check their arguments as they come in: an alpha must
+be in [0, 1], and a line width, marker size or font size must be finite
+and not negative (matplotlib quietly accepts some negative sizes; here
+they are taken for the mistakes they are). `tools/gen_arg_checks.py`
+writes these checks from one table of every argument. Missing data is not such a bug: as in
 matplotlib, a NaN or an infinity in plotted data is left out of the
 picture, and a line breaks around it.
 

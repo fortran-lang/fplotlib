@@ -145,10 +145,27 @@ contains
         class(png_renderer_t), intent(in) :: self
         character(len=:), allocatable :: b
 
-        if (.not. allocated(self%out)) then
-            call contract_error("png: a canvas kept as pixels has no encoded bytes")
+        integer, allocatable :: rgba(:, :, :)
+        integer :: k, x, y
+
+        if (allocated(self%out)) then
+            b = self%out
+            return
         end if
-        b = self%out
+        ! A canvas kept as pixels for an animation is encoded on demand,
+        ! from the frame as it was flattened onto white.
+        allocate (rgba(4, self%pw, self%ph))
+        k = 0
+        do y = 1, self%ph
+            do x = 1, self%pw
+                rgba(1, x, y) = iachar(self%rgb(k + 1:k + 1))
+                rgba(2, x, y) = iachar(self%rgb(k + 2:k + 2))
+                rgba(3, x, y) = iachar(self%rgb(k + 3:k + 3))
+                rgba(4, x, y) = 255
+                k = k + 3
+            end do
+        end do
+        b = png_encode(self%pw, self%ph, rgba)
     end function png_bytes
 
     ! ------------------------------------------------------------------
@@ -303,7 +320,7 @@ contains
         integer :: i, n
 
         rp = r*self%cv%scale
-        n = max(12, min(256, ceiling(rp*3.0_dp)))
+        n = max(12, min(256, ceiling(min(rp, 100.0_dp)*3.0_dp)))
         call pb_reset(self%pb)
         do i = 1, n
             a = TWOPI*real(i - 1, dp)/real(n, dp)

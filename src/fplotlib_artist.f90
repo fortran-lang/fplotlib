@@ -874,9 +874,13 @@ contains
             if (base == BASE_MIDDLE) y0 = py + dy - 0.5_dp*t%fontsize
             if (base == BASE_TOP) y0 = py + dy
             if (base == BASE_BOTTOM) y0 = py + dy - hgt
-            if (trim(t%box_style) == "round") then
+            ! A negative pad, which matplotlib takes, draws the box inside
+            ! the text, and none at all once it has shrunk past nothing.
+            if (wmax + 2.0_dp*pad < 0.0_dp .or. hgt + 2.0_dp*pad < 0.0_dp) then
+                continue
+            else if (trim(t%box_style) == "round") then
                 call append_round_rect(b, x0 - pad, y0 - pad, wmax + 2.0_dp*pad, &
-                                       hgt + 2.0_dp*pad, pad, trim(t%box_fc), &
+                                       hgt + 2.0_dp*pad, max(pad, 0.0_dp), trim(t%box_fc), &
                                        t%box_alpha, trim(t%box_ec))
             else if (len_trim(t%box_ec) > 0) then
                 call append_rect(b, x0 - pad, y0 - pad, wmax + 2.0_dp*pad, &

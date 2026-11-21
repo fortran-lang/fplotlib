@@ -6,7 +6,7 @@
 ! the plot types have to leave out what is missing before it gets there
 ! (fplotlib_artist's put_* routines). Every case here puts a missing value
 ! into a different plot type and renders it in all four formats; none may
-! stop, and no NaN or infinity may reach the vector output.
+! stop, and no NaN or infinity may reach the SVG, the EPS or the PDF page.
 module test_missing
     use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, &
                                               ieee_positive_inf
@@ -17,7 +17,7 @@ module test_missing
 
     public :: missing_data_check
 
-    integer, parameter :: NCASE = 51
+    integer, parameter :: NCASE = 58
 
 contains
 
@@ -39,6 +39,7 @@ contains
         integer, intent(in) :: k
         real(dp) :: nan, inf, x(6), y(6), e(6), t(6), z(5, 5), g(5), m(2, 3)
         real(dp) :: tx(5), ty(5), tz(5)
+        type(axes) :: sec
         integer :: i, j
 
         nan = ieee_value(nan, ieee_quiet_nan)
@@ -118,6 +119,15 @@ contains
         case (50); call close(); call figure(figsize=[1.5_dp, 1.0_dp]); call plot(x, x)
             call title("Title"); call xlabel("x"); call ylabel("y"); call tight_layout()
         case (51); call imshow(z); call colorbar(fraction=0.99_dp, pad=0.5_dp)
+        case (52); call plot(y, x)
+        ! A negative pad, which matplotlib takes, shrinks the box past nothing.
+        case (53); call plot(x, x); call text(2.0_dp, 2.0_dp, "t", bbox_facecolor="red", bbox_pad=-2.0_dp)
+        ! Finite data far outside the view, and data spanning every double.
+        case (54); call bar([0.0_dp, 1.0_dp], [1.0_dp, 1.0e15_dp]); call ylim(0.0_dp, 2.0_dp)
+        case (55); call fill_between(t(1:3), [0.0_dp, 1.0e20_dp, 0.0_dp]); call ylim(0.0_dp, 1.0_dp)
+        case (56); call plot(x, x, lw=1.0e300_dp)
+        case (57); call hist2d([-huge(1.0_dp), huge(1.0_dp), 0.0_dp], [0.0_dp, 1.0_dp, 2.0_dp])
+        case (58); call plot(x, x); sec = secondary_xaxis("top", scale=2.0_dp)
         end select
     end subroutine draw_case
 
@@ -134,7 +144,7 @@ contains
             print "(a, i0, a)", "missing data case ", k, ": empty output"
             nfail = nfail + 1
         end if
-        if (has_nonfinite(svg) .or. has_nonfinite(eps)) then
+        if (has_nonfinite(svg) .or. has_nonfinite(eps) .or. has_nonfinite(pdf_content(pdf))) then
             print "(a, i0, a)", "missing data case ", k, ": NaN or infinity in the output"
             nfail = nfail + 1
         end if
@@ -165,6 +175,21 @@ contains
             i = j + 1
         end do
     end function has_nonfinite
+
+    ! The page's content stream, the first stream in the file, which is
+    ! the one written as text; the images after it are compressed.
+    function pdf_content(pdf) result(c)
+        character(len=*), intent(in) :: pdf
+        character(len=:), allocatable :: c
+        integer :: i, j
+        i = index(pdf, "stream"//new_line("a"))
+        j = index(pdf, "endstream")
+        if (i == 0 .or. j <= i) then
+            c = "missing content stream: nan"
+        else
+            c = pdf(i + 7:j - 1)
+        end if
+    end function pdf_content
 
     pure logical function is_letter(c)
         character, intent(in) :: c

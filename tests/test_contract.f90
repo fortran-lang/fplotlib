@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 17
+    integer, parameter :: NCASE = 21
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite coordinate", &
@@ -39,7 +39,11 @@ module test_contract
         "fplotlib: scatter: linewidths must be finite and nonnegative", &
         "fplotlib: figure: figsize must be finite and positive", &
         "fplotlib: subplots_adjust: left must be finite", &
-        "fplotlib: pie: values must not be negative"]
+        "fplotlib: pie: values must not be negative", &
+        "fplotlib: scatter: s must be finite and nonnegative", &
+        "fplotlib: set_xscale: linthresh must be finite and positive", &
+        "fplotlib: plot: dashes must not be all zero", &
+        "fplotlib: tick_params: rotation must be finite"]
 
 contains
 
@@ -101,6 +105,14 @@ contains
             call subplots_adjust(left=nan)
         case (17)
             call pie([1.0_dp, -1.0_dp, 2.0_dp])
+        case (18)
+            call scatter([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], s=nan)
+        case (19)
+            call set_xscale("symlog", linthresh=nan)
+        case (20)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[0.0_dp, 0.0_dp])
+        case (21)
+            call tick_params(rotation=nan)
         end select
     end subroutine contract_case
 
@@ -129,9 +141,11 @@ contains
                 end do
                 close (u)
             end if
-            if (cstat /= 0 .or. stat == 0 .or. .not. found) then
+            ! Exit code 1 is a broken precondition; 2 is a file that could
+            ! not be written.
+            if (cstat /= 0 .or. stat /= 1 .or. .not. found) then
                 print "(a, i0, a, i0, a)", "contract case ", k, ": exit status ", stat, &
-                    ", expected a failure with '"//err//"'"
+                    ", expected 1 and '"//err//"'"
                 nfail = nfail + 1
             end if
         end do

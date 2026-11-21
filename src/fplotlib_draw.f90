@@ -4603,7 +4603,7 @@ contains
                 vw = vw - vx + bpad
                 vh = vh - vy + bpad
             else if (len_trim(bbox_inches) > 0) then
-                call contract_error("bbox_inches must be 'tight'")
+                call contract_error("savefig: bbox_inches must be 'tight'")
             end if
         end if
 

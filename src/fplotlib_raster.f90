@@ -39,6 +39,12 @@ module fplotlib_raster
 
     ! A path flattened to polylines: every curve is already line segments, so
     ! the rasterizer never sees a Bezier.
+    ! A subpath with a point further than FAR pixels from the origin is
+    ! clipped to the canvas before it is scanned, and snapping leaves points
+    ! beyond SNAP_LIMIT alone: both keep pixel positions within what a
+    ! default integer holds.
+    real(dp), parameter :: FAR = 1.0e8_dp, SNAP_LIMIT = 1.0e9_dp
+
     type :: pathbuf_t
         real(dp), allocatable :: x(:), y(:)
         integer, allocatable :: sub_beg(:), sub_len(:)
@@ -203,7 +209,7 @@ contains
         x0 = pb%x(pb%n)
         y0 = pb%y(pb%n)
         d = hypot(x1 - x0, y1 - y0) + hypot(x2 - x1, y2 - y1) + hypot(x3 - x2, y3 - y2)
-        n = max(3, min(128, ceiling(d*0.6_dp)))
+        n = max(3, min(128, ceiling(min(d, 1000.0_dp)*0.6_dp)))
         do i = 1, n
             t = real(i, dp)/real(n, dp)
             mt = 1.0_dp - t
@@ -287,14 +293,18 @@ contains
         integer :: i
 
         sv = 0.0_dp
-        if (modulo(nint(line_width_px), 2) == 1) sv = 0.5_dp
+        if (modulo(nint(min(line_width_px, 1.0e9_dp)), 2) == 1) sv = 0.5_dp
         ! A coordinate meant to be exactly x.5 arrives as x.5 plus or minus
         ! 1e-13, and floor(x + 0.5) then picks either pixel depending on the
         ! compiler. Rounding to 1/65536 px first (exact in binary) makes it
         ! x.5 again, and every build snaps it the same way.
+        ! Points far off the canvas are left where they are; they could not
+        ! be snapped through an integer anyway.
         do i = 1, pb%n
-            pb%x(i) = floor(anint(pb%x(i)*65536.0_dp)/65536.0_dp + 0.5_dp) + sv
-            pb%y(i) = floor(anint(pb%y(i)*65536.0_dp)/65536.0_dp + 0.5_dp) + sv
+            if (abs(pb%x(i)) < SNAP_LIMIT) &
+                pb%x(i) = floor(anint(pb%x(i)*65536.0_dp)/65536.0_dp + 0.5_dp) + sv
+            if (abs(pb%y(i)) < SNAP_LIMIT) &
+                pb%y(i) = floor(anint(pb%y(i)*65536.0_dp)/65536.0_dp + 0.5_dp) + sv
         end do
     end subroutine pb_snap
 
@@ -328,8 +338,8 @@ contains
         dxdy = (x1 - x0)/(y1 - y0)
         x = x0
         if (y0 < 0.0_dp) x = x - y0*dxdy
-        yi0 = max(0, floor(y0))
-        yi1 = min(cv%h, ceiling(y1))
+        yi0 = max(0, floor(max(y0, -1.0_dp)))
+        yi1 = min(cv%h, ceiling(min(y1, real(cv%h + 1, dp))))
         y0b = min(y0b, yi0 + 1)
         y1b = max(y1b, yi1)
 
@@ -391,8 +401,9 @@ contains
         integer, intent(in) :: rgb(3)
         real(dp), intent(in) :: alpha
         type(clip_t), intent(in) :: clip
-        integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b
+        integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b, m
         real(dp) :: run, cov, sa, sr, sg, sb_, ia
+        real(dp), allocatable :: cx(:), cy(:)
 
         if (pb%ns == 0 .or. alpha <= 0.0_dp) return
 
@@ -402,6 +413,17 @@ contains
             b = pb%sub_beg(s)
             n = pb%sub_len(s)
             if (n < 2) cycle
+            ! A subpath reaching far off the canvas is cut down to a box just
+            ! around it first, which keeps every pixel's winding and every
+            ! coordinate small enough for the scanline arithmetic.
+            if (maxval(abs(pb%x(b:b + n - 1))) > FAR .or. maxval(abs(pb%y(b:b + n - 1))) > FAR) then
+                call clip_to_box(pb%x(b:b + n - 1), pb%y(b:b + n - 1), &
+                                 -2.0_dp, real(cv%w + 2, dp), -2.0_dp, real(cv%h + 2, dp), cx, cy, m)
+                do i = 1, m
+                    call acc_edge(cv, cx(i), cy(i), cx(mod(i, m) + 1), cy(mod(i, m) + 1), y0b, y1b)
+                end do
+                cycle
+            end if
             do i = b, b + n - 2
                 call acc_edge(cv, pb%x(i), pb%y(i), pb%x(i + 1), pb%y(i + 1), y0b, y1b)
             end do
@@ -433,16 +455,108 @@ contains
         end do
     end subroutine fill_path_buf
 
+    ! The polygon x, y (closed implicitly) cut to the box [x0, x1] by
+    ! [y0, y1], one side at a time (Sutherland and Hodgman). Inside the
+    ! box every point keeps the winding number it had. Crossings are found
+    ! by interpolating between the two ends, which cannot overflow however
+    ! far apart they are.
+    subroutine clip_to_box(x, y, x0, x1, y0, y1, ox, oy, m)
+        real(dp), intent(in) :: x(:), y(:), x0, x1, y0, y1
+        real(dp), allocatable, intent(out) :: ox(:), oy(:)
+        integer, intent(out) :: m
+        real(dp), allocatable :: ax(:), ay(:)
+        integer :: side
+
+        m = size(x)
+        allocate (ox(m), oy(m))
+        ox = x
+        oy = y
+        do side = 1, 4
+            if (m == 0) exit
+            call move_alloc(ox, ax)
+            call move_alloc(oy, ay)
+            call clip_side(ax(1:m), ay(1:m), side, x0, x1, y0, y1, ox, oy, m)
+        end do
+    end subroutine clip_to_box
+
+    subroutine clip_side(x, y, side, x0, x1, y0, y1, ox, oy, m)
+        real(dp), intent(in) :: x(:), y(:), x0, x1, y0, y1
+        integer, intent(in) :: side
+        real(dp), allocatable, intent(out) :: ox(:), oy(:)
+        integer, intent(out) :: m
+        integer :: i, j, n
+        logical :: inp, inq
+        real(dp) :: t
+
+        n = size(x)
+        allocate (ox(2*n), oy(2*n))
+        m = 0
+        do i = 1, n
+            j = mod(i, n) + 1
+            inp = inside_side(x(i), y(i), side, x0, x1, y0, y1)
+            inq = inside_side(x(j), y(j), side, x0, x1, y0, y1)
+            if (inp) then
+                m = m + 1
+                ox(m) = x(i)
+                oy(m) = y(i)
+            end if
+            if (inp .neqv. inq) then
+                select case (side)
+                case (1); t = crossing(x(i), x(j), x0)
+                case (2); t = crossing(x(i), x(j), x1)
+                case (3); t = crossing(y(i), y(j), y0)
+                case default; t = crossing(y(i), y(j), y1)
+                end select
+                m = m + 1
+                ox(m) = x(i)*(1.0_dp - t) + x(j)*t
+                oy(m) = y(i)*(1.0_dp - t) + y(j)*t
+                select case (side)
+                case (1); ox(m) = x0
+                case (2); ox(m) = x1
+                case (3); oy(m) = y0
+                case default; oy(m) = y1
+                end select
+            end if
+        end do
+    end subroutine clip_side
+
+    pure logical function inside_side(px, py, side, x0, x1, y0, y1) result(r)
+        real(dp), intent(in) :: px, py, x0, x1, y0, y1
+        integer, intent(in) :: side
+        select case (side)
+        case (1); r = px >= x0
+        case (2); r = px <= x1
+        case (3); r = py >= y0
+        case default; r = py <= y1
+        end select
+    end function inside_side
+
+    ! Where along a to b the value c is crossed, as a fraction.
+    pure function crossing(a, b, c) result(t)
+        real(dp), intent(in) :: a, b, c
+        real(dp) :: t
+        t = (0.5_dp*c - 0.5_dp*a)/(0.5_dp*b - 0.5_dp*a)
+        t = max(0.0_dp, min(1.0_dp, t))
+    end function crossing
+
+    ! A position in pixels, kept within a pixel or two of the canvas, as an
+    ! integer: anything further off is clipped away by the caller anyway.
+    pure integer function ipix(v, n)
+        real(dp), intent(in) :: v
+        integer, intent(in) :: n
+        ipix = nint(max(-2.0_dp, min(real(n + 2, dp), v)))
+    end function ipix
+
     subroutine clip_box(cv, clip, x0, x1, y0, y1)
         type(canvas_t), intent(in) :: cv
         type(clip_t), intent(in) :: clip
         integer, intent(out) :: x0, x1, y0, y1
 
         if (clip%on) then
-            x0 = max(1, nint(clip%x*cv%scale) + 1)
-            y0 = max(1, nint(clip%y*cv%scale) + 1)
-            x1 = min(cv%w, nint((clip%x + clip%w)*cv%scale))
-            y1 = min(cv%h, nint((clip%y + clip%h)*cv%scale))
+            x0 = max(1, ipix(clip%x*cv%scale, cv%w) + 1)
+            y0 = max(1, ipix(clip%y*cv%scale, cv%h) + 1)
+            x1 = min(cv%w, ipix((clip%x + clip%w)*cv%scale, cv%w))
+            y1 = min(cv%h, ipix((clip%y + clip%h)*cv%scale, cv%h))
         else
             x0 = 1; y0 = 1; x1 = cv%w; y1 = cv%h
         end if
@@ -676,7 +790,7 @@ contains
         real(dp), parameter :: TWOPI = 6.283185307179586_dp
         integer :: i, n
 
-        n = max(8, min(64, ceiling(r*4.0_dp)))
+        n = max(8, min(64, ceiling(min(r, 100.0_dp)*4.0_dp)))
         allocate (px(n), py(n))
         do i = 1, n
             px(i) = cx + r*cos(TWOPI*real(i - 1, dp)/real(n, dp))
@@ -700,17 +814,17 @@ contains
         real(dp) :: sa, ia, u, v
 
         call clip_box(cv, clip, cx0, cx1, cy0, cy1)
-        px0 = max(cx0, nint(x*cv%scale) + 1)
-        py0 = max(cy0, nint(y*cv%scale) + 1)
-        px1 = min(cx1, nint((x + w)*cv%scale))
-        py1 = min(cy1, nint((y + h)*cv%scale))
+        px0 = max(cx0, ipix(x*cv%scale, cv%w) + 1)
+        py0 = max(cy0, ipix(y*cv%scale, cv%h) + 1)
+        px1 = min(cx1, ipix((x + w)*cv%scale, cv%w))
+        py1 = min(cy1, ipix((y + h)*cv%scale, cv%h))
 
         do iy = py0, py1
             v = (real(iy, dp) - 0.5_dp)/cv%scale - y
-            sy = min(ny, max(1, int(v/h*real(ny, dp)) + 1))
+            sy = min(ny, max(1, int(max(-1.0_dp, min(1.0_dp, v/h))*real(ny, dp)) + 1))
             do ix = px0, px1
                 u = (real(ix, dp) - 0.5_dp)/cv%scale - x
-                sx = min(nx, max(1, int(u/w*real(nx, dp)) + 1))
+                sx = min(nx, max(1, int(max(-1.0_dp, min(1.0_dp, u/w))*real(nx, dp)) + 1))
                 sa = alpha*real(rgba(4, sx, sy), dp)/255.0_dp
                 if (sa <= 0.0_dp) cycle
                 ia = 1.0_dp - sa
