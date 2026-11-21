@@ -106,7 +106,7 @@ module fplotlib_render
     public :: ANCHOR_START, ANCHOR_MIDDLE, ANCHOR_END
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
-    public :: MAX_DASH, MAX_COORD
+    public :: MAX_DASH, MAX_COORD, MAX_PEN_PER_DASH
 
     ! Path verbs. A path is x/y vertex arrays plus one verb per vertex group:
     ! MOVE and LINE consume one vertex, CUBIC consumes three (two controls and
@@ -134,6 +134,10 @@ module fplotlib_render
     ! Every coordinate, size and width is finite and at most this far from
     ! zero, in points. The plotting layer clips its geometry long before.
     real(dp), parameter :: MAX_COORD = 1.0e15_dp
+
+    ! A dashed pen with round or square ends is at most this many times as
+    ! wide as its dash pattern is long.
+    real(dp), parameter :: MAX_PEN_PER_DASH = 100.0_dp
 
     ! Rectangular clip. fplotlib only ever clips series to the axes box, and a
     ! rectangle is the one clip shape all four formats support cheaply.
@@ -603,6 +607,12 @@ contains
             if (any(paint%dash(1:paint%n_dash) < 0.0_dp)) call contract_error("paint: negative dash length")
             if (sum(paint%dash(1:paint%n_dash)) <= 0.0_dp) then
                 call contract_error("paint: dash pattern must have positive length")
+            end if
+            ! Round and square ends overlap one another, so every dash a
+            ! pen's width from the canvas has to be drawn; a pen far wider
+            ! than its pattern would mean drawing ever more of them.
+            if (paint%cap /= CAP_BUTT .and. paint%line_width > MAX_PEN_PER_DASH*sum(paint%dash(1:paint%n_dash))) then
+                call contract_error("paint: a pen with round or square dash ends may be at most 100 times its dash pattern")
             end if
         end if
     end subroutine check_paint

@@ -16,9 +16,12 @@ module fplotlib_status
     implicit none
     private
     public :: status_t, contract_error
-    public :: STATUS_OK, ERROR_IO
+    public :: STATUS_OK, ERROR_IO, ERROR_SIZE
 
-    integer, parameter :: STATUS_OK = 0, ERROR_IO = 1
+    ! ERROR_IO: a file could not be opened, written or closed.
+    ! ERROR_SIZE: what was drawn came out too large to encode, as a PNG
+    ! cropped to it with too many pixels.
+    integer, parameter :: STATUS_OK = 0, ERROR_IO = 1, ERROR_SIZE = 2
 
     type :: status_t
         integer :: code = STATUS_OK

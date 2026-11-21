@@ -4572,22 +4572,79 @@ contains
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
-        real(dp) :: W, H, vx, vy, vw, vh, bpad, lim
+        real(dp) :: W, H, vx, vy, vw, vh
         character(len=512) :: esc
         character(len=7) :: face
         logical :: clear
         integer :: i, en, n_grp
 
-        call ensure_fig()
-        ! constrained_layout fits the decorations just before the drawing
-        ! goes out, when every label the figure will carry is known.
-        if (fig_constrained) call tight_layout()
+        ! The window first: it settles a constrained layout as well.
+        call figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
+        W = fig_w_in*PT_PER_IN
+        H = fig_h_in*PT_PER_IN
         clear = .false.
         if (present(transparent)) clear = transparent
         face = resolve_color(facecolor)
         if (len_trim(face) == 0) face = rc_fig_face
         call clear_clip()
 
+        ! The cropped canvas of a PNG has to fit the encoder. savefig finds
+        ! out first and returns the failure; render_png has no status.
+        select type (b)
+        type is (png_renderer_t)
+            if (.not. png_fits(vw, vh, b%dpi)) &
+                call contract_error("render_png: the cropped figure has too many pixels at this dpi")
+        end select
+
+        ! transparent drops the figure patch entirely
+        if (clear) then
+            call b%open_canvas(vw, vh, x0=vx, y0=vy)
+        else
+            call b%open_canvas(vw, vh, bg_rgb=hex_rgb(face), x0=vx, y0=vy)
+        end if
+
+        ! matplotlib counts a colorbar as an axes in its own right, and it is
+        ! drawn after the axes it belongs to, so the numbering interleaves.
+        n_grp = 0
+        do i = 1, n_ax
+            n_grp = n_grp + 1
+            call b%begin_group("axes_"//int_to_str(n_grp))
+            call render_axes(b, ax(i), i, W, H, clear)
+            call b%end_group()
+            if (ax(i)%cbar_on) then
+                n_grp = n_grp + 1
+                call b%begin_group("axes_"//int_to_str(n_grp))
+                call append_colorbar(b, ax(i), i, W, H)
+                call b%end_group()
+            end if
+        end do
+
+        ! suptitle (figure-level, above all axes)
+        if (len_trim(fig_suptitle) > 0) then
+            ! matplotlib anchors the suptitle box (font ascent) at its top
+            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H &
+                             + text_ascent(fig_suptitle_size), &
+                             trim(fig_suptitle), "center", fig_suptitle_size, &
+                             rc_text_color, weight=fig_suptitle_w, &
+                             slant=fig_suptitle_sl)
+        end if
+
+        call b%close_canvas()
+    end subroutine render_figure
+
+    ! The window of the drawing a figure is written through, in points:
+    ! the whole figure, or with bbox_inches="tight" what is drawn and
+    ! pad_inches about it.
+    subroutine figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
+        character(len=*), intent(in), optional :: bbox_inches
+        real(dp), intent(in), optional :: pad_inches
+        real(dp), intent(out) :: vx, vy, vw, vh
+        real(dp) :: W, H, bpad, lim
+
+        call ensure_fig()
+        ! constrained_layout fits the decorations just before the drawing
+        ! goes out, when every label the figure will carry is known.
+        if (fig_constrained) call tight_layout()
         W = fig_w_in*PT_PER_IN
         H = fig_h_in*PT_PER_IN
         vx = 0.0_dp
@@ -4639,49 +4696,14 @@ contains
             end if
         end if
 
-        ! The cropped canvas of a PNG has to fit the encoder, as the figure
-        ! itself does (savefig checks that before rendering).
-        select type (b)
-        type is (png_renderer_t)
-            if (max(1.0_dp, vw*b%dpi/72.0_dp)*max(1.0_dp, vh*b%dpi/72.0_dp) > real(huge(1)/8, dp)) &
-                call contract_error("savefig: the cropped figure has too many pixels at this dpi")
-        end select
+    end subroutine figure_window
 
-        ! transparent drops the figure patch entirely
-        if (clear) then
-            call b%open_canvas(vw, vh, x0=vx, y0=vy)
-        else
-            call b%open_canvas(vw, vh, bg_rgb=hex_rgb(face), x0=vx, y0=vy)
-        end if
-
-        ! matplotlib counts a colorbar as an axes in its own right, and it is
-        ! drawn after the axes it belongs to, so the numbering interleaves.
-        n_grp = 0
-        do i = 1, n_ax
-            n_grp = n_grp + 1
-            call b%begin_group("axes_"//int_to_str(n_grp))
-            call render_axes(b, ax(i), i, W, H, clear)
-            call b%end_group()
-            if (ax(i)%cbar_on) then
-                n_grp = n_grp + 1
-                call b%begin_group("axes_"//int_to_str(n_grp))
-                call append_colorbar(b, ax(i), i, W, H)
-                call b%end_group()
-            end if
-        end do
-
-        ! suptitle (figure-level, above all axes)
-        if (len_trim(fig_suptitle) > 0) then
-            ! matplotlib anchors the suptitle box (font ascent) at its top
-            call append_text(b, 0.5_dp*W, (1.0_dp - SUPTITLE_Y)*H &
-                             + text_ascent(fig_suptitle_size), &
-                             trim(fig_suptitle), "center", fig_suptitle_size, &
-                             rc_text_color, weight=fig_suptitle_w, &
-                             slant=fig_suptitle_sl)
-        end if
-
-        call b%close_canvas()
-    end subroutine render_figure
+    ! Whether a canvas of vw by vh points has few enough pixels at dpi for
+    ! the PNG encoder, which counts in default integers.
+    logical function png_fits(vw, vh, dpi)
+        real(dp), intent(in) :: vw, vh, dpi
+        png_fits = max(1.0_dp, vw*dpi/72.0_dp)*max(1.0_dp, vh*dpi/72.0_dp) <= real(huge(1)/8, dp)
+    end function png_fits
 
     function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches

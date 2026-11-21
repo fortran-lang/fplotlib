@@ -811,7 +811,7 @@ contains
         bx1 = real(cv%w, dp) + reach + 2.0_dp
         by0 = -reach - 2.0_dp
         by1 = real(cv%h, dp) + reach + 2.0_dp
-        call dash_plan(pb, paint, hw, cv%scale, bx0, bx1, by0, by1, walk, cover)
+        call dash_plan(paint, hw, cv%scale, walk, cover)
         if (full_walk .and. paint%n_dash > 0) then
             walk = .true.
             cover = 1.0_dp
@@ -833,25 +833,17 @@ contains
         call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha*cover, paint%clip)
     end subroutine stroke_path_buf
 
-    ! Whether a dashed stroke is walked dash by dash. There are two
-    ! exceptions, both where no dash can be told apart:
-    ! - a pattern finer than half a pixel, drawn solid at the cover it
-    !   gives, the share of dash in it and, with round or square ends,
-    !   what the ends add, half a pen each;
-    ! - round or square ends on so wide a pen that more than MAX_DASHES
-    !   dashes would reach in, a pen some hundred thousand pixels across
-    !   with gaps a ten-thousandth of it, where the ends overlap into the
-    !   solid band they make together.
-    subroutine dash_plan(pb, paint, hw, scale, bx0, bx1, by0, by1, walk, cover)
-        type(pathbuf_t), intent(in) :: pb
+    ! Whether a dashed stroke is walked dash by dash. The one exception is
+    ! a pattern finer than half a pixel, where no dash can be told apart:
+    ! the line is drawn solid at the cover the pattern gives, the share of
+    ! dash in it and, with round or square ends, what the ends add, half a
+    ! pen each.
+    subroutine dash_plan(paint, hw, scale, walk, cover)
         type(paint_t), intent(in) :: paint
-        real(dp), intent(in) :: hw, scale, bx0, bx1, by0, by1
+        real(dp), intent(in) :: hw, scale
         logical, intent(out) :: walk
         real(dp), intent(out) :: cover
-        real(dp), parameter :: MAX_DASHES = 2.0e6_dp
-        real(dp) :: period, seen, ax, ay, ex, ey
-        integer :: s, i, j, b, n
-        logical :: visible, cut0, cut1
+        real(dp) :: period
 
         walk = .false.
         cover = 1.0_dp
@@ -864,24 +856,6 @@ contains
             return
         end if
         walk = .true.
-        if (paint%cap == CAP_BUTT .or. 2.0_dp*hw < MAX_DASHES*period) return
-        ! How many dashes the box would have walked.
-        seen = 0.0_dp
-        do s = 1, pb%ns
-            b = pb%sub_beg(s)
-            n = pb%sub_len(s)
-            do i = b, b + n - 1
-                j = i + 1
-                if (i == b + n - 1) then
-                    if (.not. pb%sub_closed(s)) exit
-                    j = b
-                end if
-                call clip_segment(pb%x(i), pb%y(i), pb%x(j), pb%y(j), bx0, bx1, by0, by1, &
-                                  ax, ay, ex, ey, visible, cut0, cut1)
-                if (visible) seen = seen + hypot(ex - ax, ey - ay)
-            end do
-        end do
-        if (seen > MAX_DASHES*period) walk = .false.
     end subroutine dash_plan
 
     ! The share of a dash pattern that is dash rather than gap.
@@ -968,7 +942,9 @@ contains
             tb = l
             ! Only butt ends: their dashes never overlap, so leaving out the
             ! ones that cannot reach changes no pixel even where coverage is
-            ! summed. Round and square ends overlap and are walked in full.
+            ! summed. Round and square ends overlap and are walked in full
+            ! within the box, which their pen, at most MAX_PEN_PER_DASH
+            ! patterns wide, keeps to a bounded number of dashes.
             wide = hw > max(cw, ch) .and. paint%cap == CAP_BUTT .and. .not. full_walk
             inside = (sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
                       qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1 .and. .not. wide) &

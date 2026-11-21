@@ -21,7 +21,7 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_status, only: status_t, contract_error, STATUS_OK, ERROR_IO
+    use fplotlib_status, only: status_t, contract_error, STATUS_OK, ERROR_IO, ERROR_SIZE
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -31,7 +31,7 @@ module fplotlib
     public :: dp
     ! savefig, save_animation and show return a file that cannot be
     ! written in a status_t; see fplotlib_status.
-    public :: status_t, STATUS_OK, ERROR_IO
+    public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE
     public :: plot, scatter, semilogx, semilogy, loglog
     public :: set_xscale, set_yscale
     public :: bar, barh, hist, fill_between, fill_betweenx, stackplot
@@ -7322,7 +7322,7 @@ contains
         real(dp), intent(in), optional :: dpi, pad_inches
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: data
-        real(dp) :: saved_dpi
+        real(dp) :: saved_dpi, vx, vy, vw, vh
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("savefig", "pad_inches", pad_inches)
@@ -7345,6 +7345,18 @@ contains
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
+        ! Cropped to what is drawn, a PNG's size depends on the drawing,
+        ! which the caller cannot know beforehand: one too large for the
+        ! encoder is a failure at run time, returned like a file that
+        ! cannot be written.
+        if (file_ext(filename) == "png" .and. present(bbox_inches)) then
+            call figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
+            if (.not. png_fits(vw, vh, fig_dpi)) then
+                fig_dpi = saved_dpi
+                call fail_run("savefig", ERROR_SIZE, "the cropped figure has too many pixels at this dpi", status)
+                return
+            end if
+        end if
         select case (file_ext(filename))
         case ("svg")
             data = render_svg(facecolor, transparent, bbox_inches, pad_inches)
@@ -7358,6 +7370,22 @@ contains
         fig_dpi = saved_dpi
         call save_bytes("savefig", filename, data, status)
     end subroutine savefig
+
+    ! A failure a correct program can meet at run time: returned in status
+    ! when the caller passed one, and otherwise the end of the program, with
+    ! its message and exit code 2.
+    subroutine fail_run(proc, code, message, status)
+        character(len=*), intent(in) :: proc, message
+        integer, intent(in) :: code
+        type(status_t), intent(out), optional :: status
+
+        if (present(status)) then
+            call status%set(code, proc//": "//message)
+            return
+        end if
+        write (error_unit, "(a)") "fplotlib: "//proc//": "//message
+        error stop 2
+    end subroutine fail_run
 
     ! Writes data to filename. A failure goes to status when the caller
     ! passed one, and otherwise stops the program with its message.

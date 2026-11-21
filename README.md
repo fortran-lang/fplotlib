@@ -275,7 +275,8 @@ clipped and drawn where it crosses the view.
 
 A failure that a correct program can still meet at run time is returned
 instead, through a `status_t` from `fplotlib_status`. Today that is an
-output file that cannot be written. `savefig` and `save_animation` return
+output file that cannot be written, or a PNG cropped with
+`bbox_inches="tight"` to more pixels than it can hold. `savefig` and `save_animation` return
 it in their optional `status`, and without one stop with the message and
 exit code 2:
 

@@ -21,8 +21,8 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 30
-    character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
+    integer, parameter :: NCASE = 31
+    character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
         "fplotlib: renderer: end_group without begin_group", &
@@ -52,7 +52,8 @@ module test_contract
         "fplotlib: secondary_xaxis: scale must be finite", &
         "fplotlib: tick_format: decimals must be from 0 to 17, got 25", &
         "fplotlib: subplot: a grid of more than 10000 axes", &
-        "fplotlib: figure: num must be from 1 to 100000"]
+        "fplotlib: figure: num must be from 1 to 100000", &
+        "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern"]
 
 contains
 
@@ -145,6 +146,15 @@ contains
             call subplot(1, 20000, 1)
         case (30)
             call figure(num=1000000000)
+        case (31)
+            call png%open_canvas(10.0_dp, 10.0_dp)
+            p%filled = .false.
+            p%stroked = .true.
+            p%line_width = 1000.0_dp
+            p%cap = CAP_ROUND
+            p%n_dash = 2
+            p%dash(1:2) = [1.0_dp, 1.0_dp]
+            call png%draw_path([0.0_dp, 10.0_dp], [5.0_dp, 5.0_dp], [VERB_MOVE, VERB_LINE], 2, p)
         end select
     end subroutine contract_case
 

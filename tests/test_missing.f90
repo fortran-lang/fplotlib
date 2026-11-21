@@ -55,8 +55,26 @@ contains
             call close()
         end do
         call dash_shortcut_check(nfail)
+        call size_status_check(nfail)
         print "(a, i0, a, i0)", "missing data: ", NCASE, " plots, failures = ", nfail
     end subroutine missing_data_check
+
+    ! A label placed a million points off makes a tight crop too large for
+    ! a PNG: a failure at run time, which savefig returns in its status.
+    subroutine size_status_check(nfail)
+        integer, intent(inout) :: nfail
+        type(status_t) :: st
+
+        call figure()
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call ylabel("y", labelpad=1.0e6_dp)
+        call savefig("tests/out/missing_size.png", bbox_inches="tight", status=st)
+        if (st%code /= ERROR_SIZE) then
+            print "(a, i0)", "size status: expected ERROR_SIZE from a tight PNG too large, got ", st%code
+            nfail = nfail + 1
+        end if
+        call close()
+    end subroutine size_status_check
 
     ! The PNG backend skips dash work that cannot be seen. It must not skip
     ! anything that can. Each stroke here is drawn twice at 72 dpi: on a
@@ -191,6 +209,8 @@ contains
                 q%dash(j) = LENGTHS(pick(seed, 5))
             end do
             if (sum(q%dash(1:nd)) < 2.0_dp) q%dash(1) = q%dash(1) + 10.0_dp
+            ! Round and square ends keep to MAX_PEN_PER_DASH patterns.
+            if (q%cap /= CAP_BUTT) q%line_width = min(q%line_width, MAX_PEN_PER_DASH*sum(q%dash(1:nd)))
             q%dash_offset = 0.0_dp
             if (pick(seed, 2) == 1) q%dash_offset = real(pick(seed, 90) - 31, dp)
             nv = 1 + pick(seed, 5)

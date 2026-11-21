@@ -13,7 +13,8 @@ with it but stop.
 A failure that a correct program can still meet at run time, such as an
 output file that cannot be written, is returned instead, through a
 `status_t` argument. `status%ok()` reports success, `status%code` says what
-failed (`ERROR_IO`), and `status%message` is allocated on failure. Use the
+failed (`ERROR_IO`, or `ERROR_SIZE` for a cropped PNG too large to
+encode), and `status%message` is allocated on failure. Use the
 call's other outputs only when `status%ok()` is true. There is no global
 last-error state.
 
@@ -23,10 +24,10 @@ cannot be written is returned in it, and when it is absent the call stops
 with the message, as the exception does in matplotlib, and exit code 2, so
 that a script's caller can tell it from a broken precondition. `show` also
 takes an optional `status`, and without one only reports the failure.
-A PNG whose canvas, after any `bbox_inches="tight"` cropping, has more
-pixels than the encoder can count is a broken precondition, not an I/O
-failure: `savefig` stops with exit code 1 whether or not `status` is
-given.
+A PNG cropped with `bbox_inches="tight"` takes its size from what is
+drawn, which the caller cannot know beforehand. One with more pixels than
+the encoder can count is a failure at run time: `savefig` returns it as
+`ERROR_SIZE`, or stops with exit code 2 without a `status`.
 `fplotlib` re-exports `status_t`, `STATUS_OK` and `ERROR_IO`.
 
 ## Limits
@@ -48,7 +49,8 @@ no longer be written. Going past one is a broken precondition, and stops:
 | `subplots_adjust` fractions, `colorbar` `fraction`, `pad`, `shrink` | at most 1000 in size |
 | `colorbar` `aspect` | 0.001 to 1000 |
 | Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
-| A PNG, after any `bbox_inches="tight"` cropping | fewer than `huge(1)/8` pixels |
+| A renderer pen with round or square dash ends | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
+| A PNG figure, `figsize` times `dpi` | fewer than `huge(1)/8` pixels |
 
 Data is never limited: a value of any size, or a missing one, is drawn or
 left out as the view shows it. Line widths and dash lengths beyond 1e12
