@@ -57,27 +57,53 @@ contains
     end subroutine missing_data_check
 
     ! The PNG backend skips dash work that cannot be seen. It must not skip
-    ! anything that can: a pen wider than the canvas whose one dash covers
-    ! the whole path draws what the solid pen draws, joins and mitres
-    ! included, and round ends a pen apart stay dots, not a bar.
+    ! anything that can. Each stroke here is drawn twice at 72 dpi: on a
+    ! 100 point canvas, where a 400 point pen is wider than the canvas and
+    ! the walk is narrowed to the canvas's span, and on a 500 point canvas
+    ! over the same place, where it is not; the two must agree pixel for
+    ! pixel. Every end and join is tried, with and without a dash offset,
+    ! and once with coordinates near a trillion points. Round ends finer
+    ! than the pen must stay dots, not a bar.
     subroutine dash_shortcut_check(nfail)
         integer, intent(inout) :: nfail
-        character(len=:), allocatable :: dashed, solid, dots, bar
-        integer :: k, worst
+        character(len=:), allocatable :: small, big, dots, bar
+        integer :: k, c, j, worst, path
         real(dp) :: dark_dots, dark_bar
+        integer, parameter :: caps(3) = [CAP_BUTT, CAP_ROUND, CAP_SQUARE]
+        integer, parameter :: joins(2) = [JOIN_MITER, JOIN_ROUND]
 
-        dashed = pixels(400.0_dp, [5000.0_dp, 10.0_dp], CAP_BUTT, JOIN_MITER, .true.)
-        solid = pixels(400.0_dp, [0.0_dp], CAP_BUTT, JOIN_MITER, .true.)
-        worst = 0
-        do k = 1, min(len(dashed), len(solid))
-            worst = max(worst, abs(iachar(dashed(k:k)) - iachar(solid(k:k))))
+        ! A corner just off the canvas, and a straight line ending just
+        ! short of it, which only the end of its last dash reaches.
+        do path = 1, 2
+            do k = 1, 3
+                do j = 1, 2
+                    do c = 0, 1
+                        small = stroke_rgb(path, 100, 0.0_dp, caps(k), joins(j), 7.0_dp*c, 400.0_dp, &
+                                           [20.0_dp, 30.0_dp])
+                        big = crop(stroke_rgb(path, 500, -200.0_dp, caps(k), joins(j), 7.0_dp*c, 400.0_dp, &
+                                              [20.0_dp, 30.0_dp]), 500, 200, 100)
+                        worst = max_diff(small, big)
+                        if (worst > 2) then
+                            print "(a, 4(i0, a), i0)", "dash shortcut: path ", path, ", cap ", caps(k), &
+                                ", join ", joins(j), ", offset ", 7*c, ": differs from the full walk by ", worst
+                            nfail = nfail + 1
+                        end if
+                    end do
+                end do
+            end do
         end do
-        if (len(dashed) /= len(solid) .or. worst > 2) then
-            print "(a, i0)", "dash shortcut: a wide dashed pen differs from the solid one by ", worst
+        ! A pen a trillion points wide round a corner forty billion points
+        ! off, one dash covering it all: no larger canvas can show
+        ! the full walk, but the solid pen is the same stroke.
+        small = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [1.0e14_dp, 10.0_dp])
+        big = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [0.0_dp])
+        worst = max_diff(small, big)
+        if (worst > 2) then
+            print "(a, i0)", "dash shortcut: a far corner of a huge pen differs from the solid pen by ", worst
             nfail = nfail + 1
         end if
-        dots = pixels(8.0_dp, [0.0_dp, 8.0_dp], CAP_ROUND, JOIN_ROUND, .false.)
-        bar = pixels(8.0_dp, [0.0_dp], CAP_ROUND, JOIN_ROUND, .false.)
+        dots = line_rgb([0.0_dp, 8.0_dp])
+        bar = line_rgb([0.0_dp])
         dark_dots = 0.0_dp
         dark_bar = 0.0_dp
         do k = 1, len(dots)
@@ -90,13 +116,13 @@ contains
         end if
     end subroutine dash_shortcut_check
 
-    ! The RGB pixels of one stroke: a corner just off a 100 pt canvas for
-    ! the wide pen, a straight line across it otherwise. dash(1) = 0 alone
-    ! means solid.
-    function pixels(lw, dash, cap, join, corner) result(rgb)
-        real(dp), intent(in) :: lw, dash(:)
-        integer, intent(in) :: cap, join
-        logical, intent(in) :: corner
+    ! A dashed pen of width lw along path 1 (a corner just off the canvas),
+    ! 2 (a straight line ending just short of it) or 3 (a corner forty
+    ! billion points off, where a double's step exceeds a millionth), on an n by n point canvas whose top left corner
+    ! is at (o, o), at 72 dpi. dash(1) = 0 alone means solid.
+    function stroke_rgb(path, n, o, cap, join, offset, lw, dash) result(rgb)
+        integer, intent(in) :: path, n, cap, join
+        real(dp), intent(in) :: o, offset, lw, dash(:)
         character(len=:), allocatable :: rgb
         type(png_renderer_t) :: r
         type(paint_t) :: q
@@ -109,17 +135,72 @@ contains
             q%n_dash = size(dash)
             q%dash(1:size(dash)) = dash
         end if
+        q%dash_offset = offset
         r%keep_pixels = .true.
-        call r%open_canvas(100.0_dp, 100.0_dp, bg_rgb=[255, 255, 255])
-        if (corner) then
+        call r%set_dpi(72.0_dp)
+        call r%open_canvas(real(n, dp), real(n, dp), bg_rgb=[255, 255, 255], x0=o, y0=o)
+        select case (path)
+        case (1)
             call r%draw_path([-300.0_dp, -10.0_dp, -10.0_dp], [50.0_dp, 50.0_dp, 400.0_dp], &
                              [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
-        else
-            call r%draw_path([0.0_dp, 100.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
-        end if
+        case (2)
+            call r%draw_path([-1000.0_dp, -10.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+        case default
+            call r%draw_path([-1.0e12_dp, -4.0e10_dp, -4.0e10_dp], [50.0_dp, 50.0_dp, 1.0e12_dp], &
+                             [VERB_MOVE, VERB_LINE, VERB_LINE], 3, q)
+        end select
         call r%close_canvas()
         rgb = r%rgb
-    end function pixels
+    end function stroke_rgb
+
+    ! The m by m pixels at (k, k) of an n by n RGB raster.
+    function crop(rgb, n, k, m) result(c)
+        character(len=*), intent(in) :: rgb
+        integer, intent(in) :: n, k, m
+        character(len=:), allocatable :: c
+        integer :: y, a
+        allocate (character(len=3*m*m) :: c)
+        do y = 1, m
+            a = 3*((k + y - 1)*n + k)
+            c(3*m*(y - 1) + 1:3*m*y) = rgb(a + 1:a + 3*m)
+        end do
+    end function crop
+
+    integer function max_diff(a, b) result(worst)
+        character(len=*), intent(in) :: a, b
+        integer :: k
+        worst = 0
+        if (len(a) /= len(b)) then
+            worst = 256
+            return
+        end if
+        do k = 1, len(a)
+            worst = max(worst, abs(iachar(a(k:k)) - iachar(b(k:k))))
+        end do
+    end function max_diff
+
+    ! A line across a 100 point canvas, 8 points wide with round ends;
+    ! dash(1) = 0 alone means solid.
+    function line_rgb(dash) result(rgb)
+        real(dp), intent(in) :: dash(:)
+        character(len=:), allocatable :: rgb
+        type(png_renderer_t) :: r
+        type(paint_t) :: q
+
+        q%stroked = .true.
+        q%line_width = 8.0_dp
+        q%cap = CAP_ROUND
+        q%join = JOIN_ROUND
+        if (size(dash) > 1) then
+            q%n_dash = size(dash)
+            q%dash(1:size(dash)) = dash
+        end if
+        r%keep_pixels = .true.
+        call r%open_canvas(100.0_dp, 100.0_dp, bg_rgb=[255, 255, 255])
+        call r%draw_path([0.0_dp, 100.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+        call r%close_canvas()
+        rgb = r%rgb
+    end function line_rgb
 
     subroutine draw_case(k)
         integer, intent(in) :: k

@@ -109,7 +109,7 @@ contains
         ! The product of two counts can overflow an integer; ten thousand
         ! axes is past any figure anyone looks at.
         if (real(m, dp)*real(n, dp) > 1.0e4_dp) &
-            call contract_error("subplots: a grid of more than 10000 axes")
+            call contract_error("axes: a grid of more than 10000 axes")
         cur_i = 0
         if (allocated(ax)) deallocate (ax)
 

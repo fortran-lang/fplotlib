@@ -352,7 +352,8 @@ contains
             call stash_fig(cur_fig)
         end if
         if (present(num)) then
-            if (num < 1) call contract_error("figure: num must be positive")
+            ! Every number up to num gets a slot in the store of figures.
+            if (num < 1 .or. num > 100000) call contract_error("figure: num must be from 1 to 100000")
             k = num
         else
             k = next_free_fig()
@@ -618,6 +619,7 @@ contains
             call contract_error("subplot: expected m, n >= 1 and 1 <= i <= m*n, got m=" &
                                 //int_to_str(m)//", n="//int_to_str(n)//", i="//int_to_str(i))
         end if
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) call contract_error("subplot: a grid of more than 10000 axes")
 
         if (.not. fig_initialized) call clf()
         if (grid_m /= m .or. grid_n /= n) call new_axes_grid(m, n)
@@ -969,6 +971,7 @@ contains
         if (present(sharex)) sx = sharex
         if (present(sharey)) sy = sharey
 
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) call contract_error("subplots: a grid of more than 10000 axes")
         call figure()
         if (m /= 1 .or. n /= 1) call new_axes_grid(m, n)
         cur_i = 1

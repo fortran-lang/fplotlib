@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 28
+    integer, parameter :: NCASE = 30
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -50,7 +50,9 @@ module test_contract
         "fplotlib: hist: bins must be from 1 to 1000000, got 0", &
         "fplotlib: streamplot: density must be at most 10", &
         "fplotlib: secondary_xaxis: scale must be finite", &
-        "fplotlib: tick_format: decimals must be from 0 to 17, got 25"]
+        "fplotlib: tick_format: decimals must be from 0 to 17, got 25", &
+        "fplotlib: subplot: a grid of more than 10000 axes", &
+        "fplotlib: figure: num must be from 1 to 100000"]
 
 contains
 
@@ -139,6 +141,10 @@ contains
             sec = axs(1, 1)%secondary_xaxis(scale=nan)
         case (28)
             call tick_format(style="percent", decimals=25)
+        case (29)
+            call subplot(1, 20000, 1)
+        case (30)
+            call figure(num=1000000000)
         end select
     end subroutine contract_case
 

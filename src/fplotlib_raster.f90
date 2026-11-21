@@ -771,10 +771,10 @@ contains
         if (hw <= 0.0_dp) return
         call pb_reset(out)
         ! The box a dash has to reach into to be seen: the canvas, widened
-        ! by the pen, or by the spike of a mitred corner, which reaches
-        ! miter_limit half widths.
-        reach = hw
-        if (paint%join == JOIN_MITER) reach = hw*max(1.0_dp, paint%miter_limit)
+        ! by the pen and by the corner of a square end. A corner's join, a
+        ! mitre's spike included, is drawn at every point the walk passes
+        ! while a dash is on, so it need not widen the box.
+        reach = 1.5_dp*hw
         bx0 = -reach - 2.0_dp
         bx1 = real(cv%w, dp) + reach + 2.0_dp
         by0 = -reach - 2.0_dp
@@ -797,29 +797,26 @@ contains
         call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha*cover, paint%clip)
     end subroutine stroke_path_buf
 
-    ! Whether a dashed stroke is walked dash by dash, or drawn as a solid
-    ! line of the cover its pattern would give: when the pattern is finer
-    ! than half a pixel, or when round or square ends a pen's width long
-    ! close every gap.
+    ! Whether a dashed stroke is walked dash by dash. The one exception is a
+    ! pattern finer than half a pixel, where no dash can be told apart and
+    ! the line is drawn solid at the cover the pattern gives it: the share
+    ! of dash in it, and with round or square ends also what the ends add,
+    ! half a pen each.
     subroutine dash_plan(paint, hw, scale, walk, cover)
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: hw, scale
         logical, intent(out) :: walk
         real(dp), intent(out) :: cover
-        real(dp) :: g
+        real(dp) :: period
 
         walk = .false.
         cover = 1.0_dp
         if (paint%n_dash == 0) return
-        ! Square ends, half a pen long, close every gap no longer than the
-        ! pen is wide: the line is solid, exactly. Round ends leave a scallop
-        ! of depth g**2/(8 hw) at a gap g along each edge, solid only once
-        ! that is too shallow to see.
-        g = maxval(paint%dash(1:paint%n_dash))*scale
-        if (paint%cap == CAP_SQUARE .and. 2.0_dp*hw >= g) return
-        if (paint%cap == CAP_ROUND .and. 2.0_dp*hw >= g .and. g*g/(8.0_dp*hw) < 0.05_dp) return
-        if (sum(paint%dash(1:paint%n_dash))*scale < 0.5_dp) then
-            if (paint%cap == CAP_BUTT) cover = on_fraction(paint)
+        period = sum(paint%dash(1:paint%n_dash))*scale
+        if (period < 0.5_dp) then
+            cover = on_fraction(paint)
+            if (paint%cap /= CAP_BUTT) &
+                cover = min(1.0_dp, cover + hw*real(paint%n_dash, dp)/max(period, tiny(1.0_dp)))
             return
         end if
         walk = .true.
@@ -882,9 +879,6 @@ contains
         real(dp), allocatable :: rx(:), ry(:)
         integer :: i, di, nr, c
         logical :: on, inside, visible, cut0, cut1, wide, bare
-        ! A step this short along a segment carries a join without adding
-        ! anything that can be seen.
-        real(dp), parameter :: STUB = 1.0e-6_dp
 
         allocate (rx(2*n + 8), ry(2*n + 8))
         bare = .false.
@@ -924,8 +918,17 @@ contains
                     if (lp > 0.0_dp) then
                         ux = (fx - ax)/lp
                         uy = (fy - ay)/lp
+                        ! Round and square ends reach a pen width past
+                        ! a dash, but of the dashes beyond either side
+                        ! only the nearest can reach in, its end covering
+                        ! all a further one could: the window takes in
+                        ! one whole pattern more at most.
                         ce = 0.0_dp
-                        if (paint%cap /= CAP_BUTT) ce = hw
+                        if (paint%cap /= CAP_BUTT) then
+                            period = sum(paint%dash(1:paint%n_dash))*scale
+                            if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
+                            ce = min(1.5_dp*hw, period)
+                        end if
                         p0 = huge(1.0_dp)
                         p1 = -huge(1.0_dp)
                         do c = 0, 3
@@ -957,8 +960,8 @@ contains
                     if (on .and. nr > 0) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
                         nr = nr + 1
-                        rx(nr) = px(i) + STUB*vx
-                        ry(nr) = py(i) + STUB*vy
+                        rx(nr) = px(i) + stub_at(px(i), py(i))*vx
+                        ry(nr) = py(i) + stub_at(px(i), py(i))*vy
                         call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare, bare1=.true.)
                     end if
                     nr = 0
@@ -970,8 +973,8 @@ contains
                     ! that reaches the canvas.
                     if (on .and. i < n - 1) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
-                        rx(1) = px(i + 1) - STUB*vx
-                        ry(1) = py(i + 1) - STUB*vy
+                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
+                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
                         rx(2) = px(i + 1)
                         ry(2) = py(i + 1)
                         nr = 2
@@ -980,6 +983,9 @@ contains
                     cycle
                 end if
                 call dash_advance(min(hypot(ax - sx, ay - sy), huge(1.0_dp)), paint, scale, di, rem, on)
+                ! A dash under way where the walk resumes is not starting
+                ! there: the run it begins gets no cap at that end.
+                if (cut0 .and. on) bare = .true.
                 sx = ax; sy = ay
                 l = hypot(fx - ax, fy - ay)
                 qx = fx; qy = fy
@@ -1029,8 +1035,8 @@ contains
                     ! so that the join at that point is drawn.
                     if (on .and. i < n - 1) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
-                        rx(1) = px(i + 1) - STUB*vx
-                        ry(1) = py(i + 1) - STUB*vy
+                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
+                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
                         rx(2) = px(i + 1)
                         ry(2) = py(i + 1)
                         nr = 2
@@ -1041,6 +1047,16 @@ contains
         end do
         if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare)
     end subroutine stroke_dashed
+
+    ! A step along a segment from (x, y) short enough to carry a join there
+    ! without adding anything that can be seen, and long enough still to
+    ! move the point: a millionth of a pixel, more where a double is
+    ! coarser than that.
+    pure function stub_at(x, y) result(d)
+        real(dp), intent(in) :: x, y
+        real(dp) :: d
+        d = 1.0e-6_dp + 1.0e3_dp*epsilon(1.0_dp)*max(abs(x), abs(y))
+    end function stub_at
 
     ! The unit vector from (x0, y0) to (x1, y1), scaled down first so that
     ! ends however far apart cannot overflow.
