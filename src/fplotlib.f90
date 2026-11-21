@@ -2439,12 +2439,22 @@ contains
         end if
     end subroutine check_positive_args
 
+    ! Error bar lengths: never negative, as matplotlib requires, but a
+    ! missing one only leaves its bar out.
+    subroutine check_errors_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (any(v < 0.0_dp)) call contract_error(proc//": "//name//" must not be negative")
+    end subroutine check_errors_arg
+
     ! Dash and gap lengths in points, as many as the renderer can carry,
     ! not all of them zero.
     subroutine check_dashes_arg(proc, name, v)
         character(len=*), intent(in) :: proc, name
         real(dp), intent(in), optional :: v(:)
         if (.not. present(v)) return
+        call check_size_args(proc, name, v)
         if (size(v) > MAX_DASH) call contract_error(proc//": "//name//" has more than " &
                                                     //int_to_str(MAX_DASH)//" lengths")
         if (size(v) > 0) then
@@ -2992,7 +3002,7 @@ contains
         integer, allocatable :: ij(:, :)
         integer :: i, j, k
 
-        call check_size_arg("spy", "precision", precision)
+        call check_finite_arg("spy", "precision", precision)
         call check_size_arg("spy", "markersize", markersize)
 
         tol = 0.0_dp
@@ -3075,7 +3085,7 @@ contains
         real(dp) :: off, len_
 
         call check_finite_arg("eventplot", "lineoffset", lineoffset)
-        call check_size_arg("eventplot", "linelength", linelength)
+        call check_finite_arg("eventplot", "linelength", linelength)
         call check_size_arg("eventplot", "lw", lw)
 
         off = 1.0_dp
@@ -5530,6 +5540,7 @@ contains
         call check_finite_arg("bar", "width", width)
         call check_unit_arg("bar", "alpha", alpha)
         call check_size_arg("bar", "linewidth", linewidth)
+        call check_errors_arg("bar", "yerr", yerr)
         call check_size_arg("bar", "capsize", capsize)
 
         call ensure_fig()
@@ -6102,6 +6113,12 @@ contains
         integer :: is, n, mk, ls
         character(len=7) :: col
 
+        call check_errors_arg("errorbar", "yerr", yerr)
+        call check_errors_arg("errorbar", "xerr", xerr)
+        call check_errors_arg("errorbar", "yerr_lo", yerr_lo)
+        call check_errors_arg("errorbar", "yerr_hi", yerr_hi)
+        call check_errors_arg("errorbar", "xerr_lo", xerr_lo)
+        call check_errors_arg("errorbar", "xerr_hi", xerr_hi)
         call check_size_arg("errorbar", "capsize", capsize)
         call check_size_arg("errorbar", "elinewidth", elinewidth)
         call check_size_arg("errorbar", "lw", lw)

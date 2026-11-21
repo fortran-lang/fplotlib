@@ -9,6 +9,7 @@ module fplotlib_artist
     use fplotlib_colors
     use fplotlib_style
     use fplotlib_render
+    use fplotlib_raster, only: clip_to_box, clip_segment
     use fplotlib_state
     use fplotlib_mathtext
     use fplotlib_text, only: text_face, text_layout, text_width, run_shift
@@ -17,6 +18,7 @@ module fplotlib_artist
     public
     ! put_path's own bookkeeping.
     private :: finite_point, path_move, path_put
+    private :: emit_path, far_path, grow_put, push_point, view_box
 
 contains
 
@@ -186,7 +188,7 @@ contains
             return
         end if
         if (all(ieee_is_finite(x(1:np))) .and. all(ieee_is_finite(y(1:np)))) then
-            call b%draw_path(x, y, verbs, n_verb, paint)
+            call emit_path(b, x, y, verbs, n_verb, paint)
             return
         end if
 
@@ -245,8 +247,201 @@ contains
                 no = no - 1
             end if
         end if
-        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, paint)
+        if (nv > 0) call emit_path(b, ox(1:no), oy(1:no), ov(1:nv), nv, paint)
     end subroutine put_path
+
+    ! Data far outside the view is finite but can be as large as a double
+    ! goes, and nothing gains from handing the renderer coordinates a
+    ! file format cannot write. Geometry is therefore cut down to a box ten
+    ! canvases wide around the canvas, which changes nothing that can be
+    ! seen: a filled contour is clipped as a polygon (Sutherland and
+    ! Hodgman), a stroked one segment by segment (Liang and Barsky), so
+    ! every line keeps its direction. A path inside the box is untouched.
+    subroutine view_box(b, bx0, bx1, by0, by1)
+        class(renderer_t), intent(in) :: b
+        real(dp), intent(out) :: bx0, bx1, by0, by1
+        real(dp) :: m
+        m = 10.0_dp*max(b%width, b%height, 72.0_dp)
+        bx0 = -m
+        bx1 = b%width + m
+        by0 = -m
+        by1 = b%height + m
+    end subroutine view_box
+
+    subroutine emit_path(b, x, y, verbs, n_verb, paint)
+        class(renderer_t), intent(inout) :: b
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+        real(dp) :: bx0, bx1, by0, by1
+        real(dp), allocatable :: ox(:), oy(:)
+        integer, allocatable :: ov(:)
+        integer :: i, np, no, nv
+
+        np = 0
+        do i = 1, n_verb
+            if (verbs(i) == VERB_MOVE .or. verbs(i) == VERB_LINE) np = np + 1
+            if (verbs(i) == VERB_CUBIC) np = np + 3
+        end do
+        call view_box(b, bx0, bx1, by0, by1)
+        if (all(x(1:np) >= bx0 .and. x(1:np) <= bx1 .and. y(1:np) >= by0 .and. y(1:np) <= by1)) then
+            call b%draw_path(x, y, verbs, n_verb, paint)
+            return
+        end if
+        call far_path(x, y, verbs, n_verb, paint%filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
+        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, paint)
+    end subroutine emit_path
+
+    subroutine far_path(x, y, verbs, n_verb, filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
+        real(dp), intent(in) :: x(:), y(:), bx0, bx1, by0, by1
+        integer, intent(in) :: verbs(:), n_verb
+        logical, intent(in) :: filled
+        real(dp), allocatable, intent(out) :: ox(:), oy(:)
+        integer, allocatable, intent(out) :: ov(:)
+        integer, intent(out) :: no, nv
+        real(dp), allocatable :: cx(:), cy(:), qx(:), qy(:)
+        real(dp) :: ax, ay, ex, ey, t, mt
+        integer :: i, j, k, kc, v, m, nc, q, ns
+        logical :: inside, pen, visible, cut0, cut1
+
+        allocate (ox(16), oy(16), ov(16))
+        no = 0
+        nv = 0
+        k = 0
+        i = 1
+        do while (i <= n_verb)
+            ! One contour: from a move to the next one.
+            j = i + 1
+            do while (j <= n_verb)
+                if (verbs(j) == VERB_MOVE) exit
+                j = j + 1
+            end do
+            kc = 0
+            do v = i, j - 1
+                if (verbs(v) == VERB_MOVE .or. verbs(v) == VERB_LINE) kc = kc + 1
+                if (verbs(v) == VERB_CUBIC) kc = kc + 3
+            end do
+            inside = all(x(k + 1:k + kc) >= bx0 .and. x(k + 1:k + kc) <= bx1 .and. &
+                         y(k + 1:k + kc) >= by0 .and. y(k + 1:k + kc) <= by1)
+            if (inside) then
+                q = k
+                do v = i, j - 1
+                    select case (verbs(v))
+                    case (VERB_MOVE, VERB_LINE)
+                        call grow_put(ox, oy, ov, no, nv, verbs(v), x(q + 1:q + 1), y(q + 1:q + 1))
+                        q = q + 1
+                    case (VERB_CUBIC)
+                        call grow_put(ox, oy, ov, no, nv, VERB_CUBIC, x(q + 1:q + 3), y(q + 1:q + 3))
+                        q = q + 3
+                    case (VERB_CLOSE)
+                        call grow_put(ox, oy, ov, no, nv, VERB_CLOSE, x(1:0), y(1:0))
+                    end select
+                end do
+            else
+                ! The contour as a polyline, curves flattened, closed by an
+                ! explicit return to its start.
+                nc = 0
+                allocate (cx(16), cy(16))
+                q = k
+                do v = i, j - 1
+                    select case (verbs(v))
+                    case (VERB_MOVE, VERB_LINE)
+                        call push_point(cx, cy, nc, x(q + 1), y(q + 1))
+                        q = q + 1
+                    case (VERB_CUBIC)
+                        ax = cx(nc)
+                        ay = cy(nc)
+                        do ns = 1, 32
+                            t = real(ns, dp)/32.0_dp
+                            mt = 1.0_dp - t
+                            call push_point(cx, cy, nc, &
+                                mt**3*ax + 3.0_dp*mt*mt*t*x(q + 1) + 3.0_dp*mt*t*t*x(q + 2) + t**3*x(q + 3), &
+                                mt**3*ay + 3.0_dp*mt*mt*t*y(q + 1) + 3.0_dp*mt*t*t*y(q + 2) + t**3*y(q + 3))
+                        end do
+                        q = q + 3
+                    case (VERB_CLOSE)
+                        call push_point(cx, cy, nc, cx(1), cy(1))
+                    end select
+                end do
+                if (filled) then
+                    call clip_to_box(cx(1:nc), cy(1:nc), bx0, bx1, by0, by1, qx, qy, m)
+                    if (m >= 2) then
+                        call grow_put(ox, oy, ov, no, nv, VERB_MOVE, qx(1:1), qy(1:1))
+                        do v = 2, m
+                            call grow_put(ox, oy, ov, no, nv, VERB_LINE, qx(v:v), qy(v:v))
+                        end do
+                        call grow_put(ox, oy, ov, no, nv, VERB_CLOSE, x(1:0), y(1:0))
+                    end if
+                else
+                    pen = .false.
+                    do v = 1, nc - 1
+                        call clip_segment(cx(v), cy(v), cx(v + 1), cy(v + 1), &
+                                          bx0, bx1, by0, by1, ax, ay, ex, ey, visible, cut0, cut1)
+                        if (.not. visible) then
+                            pen = .false.
+                            cycle
+                        end if
+                        if (.not. (pen .and. .not. cut0)) then
+                            call grow_put(ox, oy, ov, no, nv, VERB_MOVE, [ax], [ay])
+                        end if
+                        call grow_put(ox, oy, ov, no, nv, VERB_LINE, [ex], [ey])
+                        pen = .not. cut1
+                    end do
+                end if
+                deallocate (cx, cy)
+            end if
+            k = k + kc
+            i = j
+        end do
+    end subroutine far_path
+
+    subroutine grow_put(ox, oy, ov, no, nv, verb, px, py)
+        real(dp), allocatable, intent(inout) :: ox(:), oy(:)
+        integer, allocatable, intent(inout) :: ov(:)
+        integer, intent(inout) :: no, nv
+        integer, intent(in) :: verb
+        real(dp), intent(in) :: px(:), py(:)
+        real(dp), allocatable :: tx(:)
+        integer, allocatable :: tv(:)
+
+        if (no + size(px) > size(ox)) then
+            allocate (tx(2*(no + size(px))))
+            tx(1:no) = ox(1:no)
+            call move_alloc(tx, ox)
+            allocate (tx(size(ox)))
+            tx(1:no) = oy(1:no)
+            call move_alloc(tx, oy)
+        end if
+        if (nv + 1 > size(ov)) then
+            allocate (tv(2*(nv + 1)))
+            tv(1:nv) = ov(1:nv)
+            call move_alloc(tv, ov)
+        end if
+        nv = nv + 1
+        ov(nv) = verb
+        ox(no + 1:no + size(px)) = px
+        oy(no + 1:no + size(py)) = py
+        no = no + size(px)
+    end subroutine grow_put
+
+    subroutine push_point(cx, cy, n, px, py)
+        real(dp), allocatable, intent(inout) :: cx(:), cy(:)
+        integer, intent(inout) :: n
+        real(dp), intent(in) :: px, py
+        real(dp), allocatable :: t(:)
+
+        if (n + 1 > size(cx)) then
+            allocate (t(2*(n + 1)))
+            t(1:n) = cx(1:n)
+            call move_alloc(t, cx)
+            allocate (t(size(cx)))
+            t(1:n) = cy(1:n)
+            call move_alloc(t, cy)
+        end if
+        n = n + 1
+        cx(n) = px
+        cy(n) = py
+    end subroutine push_point
 
     pure logical function finite_point(x, y, k)
         real(dp), intent(in) :: x(:), y(:)
@@ -286,16 +481,50 @@ contains
         real(dp), intent(in) :: x, y, w, h
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
+        real(dp) :: bx0, bx1, by0, by1, x0, x1, y0, y1
+
         if (.not. all(ieee_is_finite([x, y, w, h]))) return
-        call b%draw_rect(x, y, w, h, paint, radius)
+        call view_box(b, bx0, bx1, by0, by1)
+        if (x >= bx0 .and. y >= by0 .and. x + w <= bx1 .and. y + h <= by1) then
+            call b%draw_rect(x, y, w, h, paint, radius)
+            return
+        end if
+        x0 = max(x, bx0)
+        y0 = max(y, by0)
+        x1 = min(x + w, bx1)
+        y1 = min(y + h, by1)
+        if (x1 < x0 .or. y1 < y0) return
+        call b%draw_rect(x0, y0, x1 - x0, y1 - y0, paint, radius)
     end subroutine put_rect
 
     subroutine put_circle(b, cx, cy, r, paint)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: cx, cy, r
         type(paint_t), intent(in) :: paint
+        real(dp) :: bx0, bx1, by0, by1, a
+        real(dp), allocatable :: px(:), py(:)
+        integer, allocatable :: v(:)
+        integer :: i, n
+
         if (.not. all(ieee_is_finite([cx, cy, r]))) return
-        call b%draw_circle(cx, cy, r, paint)
+        call view_box(b, bx0, bx1, by0, by1)
+        if (cx - r >= bx0 .and. cx + r <= bx1 .and. cy - r >= by0 .and. cy + r <= by1) then
+            call b%draw_circle(cx, cy, r, paint)
+            return
+        end if
+        ! Fine enough that a chord strays less than a tenth of a point
+        ! from the circle, capped where only a sliver could be in view.
+        n = max(64, min(200000, ceiling(PI*sqrt(min(r, 1.0e10_dp)/0.8_dp))))
+        allocate (px(n), py(n), v(n + 1))
+        do i = 1, n
+            a = 2.0_dp*PI*real(i - 1, dp)/real(n, dp)
+            px(i) = cx + r*cos(a)
+            py(i) = cy + r*sin(a)
+            v(i) = VERB_LINE
+        end do
+        v(1) = VERB_MOVE
+        v(n + 1) = VERB_CLOSE
+        call emit_path(b, px, py, v, n + 1, paint)
     end subroutine put_circle
 
     ! Markers at missing points are dropped; a marker whose own size is
@@ -306,6 +535,8 @@ contains
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         logical, allocatable :: keep(:)
+        real(dp) :: bx0, bx1, by0, by1, e
+        integer :: i
 
         if (.not. all(ieee_is_finite(mx)) .or. .not. all(ieee_is_finite(my))) return
         if (size(x) /= size(y)) then
@@ -314,6 +545,20 @@ contains
         end if
         allocate (keep(size(x)))
         keep = ieee_is_finite(x) .and. ieee_is_finite(y)
+        call view_box(b, bx0, bx1, by0, by1)
+        e = max(maxval(abs(mx)), maxval(abs(my)), 0.0_dp)
+        if (e > bx1 - bx0) then
+            ! A marker larger than the box itself is drawn as the path it is.
+            do i = 1, size(x)
+                if (keep(i)) call emit_path(b, mx + x(i), my + y(i), mverbs, n_mverb, paint)
+            end do
+            return
+        end if
+        ! A marker further off the canvas than its own size cannot be seen.
+        do i = 1, size(x)
+            if (keep(i)) keep(i) = x(i) >= bx0 - e .and. x(i) <= bx1 + e .and. &
+                                   y(i) >= by0 - e .and. y(i) <= by1 + e
+        end do
         if (all(keep)) then
             call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
         else
@@ -327,7 +572,17 @@ contains
         type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
+        real(dp) :: bx0, bx1, by0, by1
+
         if (.not. all(ieee_is_finite([x, y, angle]))) return
+        ! Text anchored outside the box, or set so large that it reaches
+        ! past it, is out of sight.
+        call view_box(b, bx0, bx1, by0, by1)
+        if (x < bx0 .or. x > bx1 .or. y < by0 .or. y > by1) return
+        if (run%n > 0) then
+            if (maxval(abs(run%x(1:run%n))) + maxval(run%size(1:run%n)) > bx1 - bx0 .or. &
+                maxval(abs(run%y(1:run%n))) + maxval(run%size(1:run%n)) > by1 - by0) return
+        end if
         call b%draw_glyphs(x, y, run, paint, angle)
     end subroutine put_glyphs
 

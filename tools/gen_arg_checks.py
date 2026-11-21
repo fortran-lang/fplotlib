@@ -20,6 +20,8 @@ Each real argument is one of:
   positive  finite, > 0                       (scales, thresholds)
   finite    any finite value                  (angles, offsets, limits)
   margin    finite, > -0.5                    (margins)
+  errors    not negative, NaN allowed         (error bar lengths, arrays only)
+  dashes    finite, >= 0, not all zero        (dash patterns, arrays only)
   data      may be missing: NaN is left out of the picture
   own       checked by hand in the procedure itself
 """
@@ -34,8 +36,7 @@ BY_NAME = {
     'length': 'size', 'capsize': 'size', 'elinewidth': 'size', 'arrowlw': 'size',
     's': 'size', 'rwidth': 'size', 'fraction': 'size', 'shrink': 'size',
     'radius': 'size', 'arrowsize': 'size', 'density': 'size', 'linelength': 'size',
-    'labelsep': 'size', 'precision': 'size', 'size': 'size', 'title': 'size',
-    'labels': 'size', 'ticks': 'size', 'legend': 'size', 'z': 'size',
+    'labelsep': 'size',
     'dpi': 'own', 'fps': 'own', 'ratio': 'own',
     'linthresh': 'positive', 'linscale': 'positive', 'gamma': 'positive', 'base': 'positive',
     'aspect': 'positive',
@@ -53,6 +54,14 @@ BY_NAME = {
     'ymax': 'data', 'position': 'data', 'lo': 'data', 'hi': 'data',
 }
 BY_PROC = {
+    ('set_fontsize', 'size'): 'size', ('set_fontsize', 'title'): 'size',
+    ('set_fontsize', 'labels'): 'size', ('set_fontsize', 'ticks'): 'size',
+    ('set_fontsize', 'legend'): 'size',
+    # matplotlib's own rule is any number; fplotlib has always kept zorder
+    # nonnegative.
+    ('set_zorder', 'z'): 'size',
+    ('eventplot', 'linelength'): 'finite',
+    ('spy', 'precision'): 'finite',
     ('margins', 'x'): 'margin', ('margins', 'y'): 'margin',
     ('xlim', 'xmin'): 'own', ('xlim', 'xmax'): 'own',
     ('ylim', 'ymin'): 'own', ('ylim', 'ymax'): 'own',
@@ -71,11 +80,21 @@ ARRAYS = {
     'vals': 'finite', 'extent': 'finite', 'boundaries': 'finite', 'col_widths': 'size',
     'levels': 'finite', 'explode': 'finite', 'dashes': 'dashes', 'bin_edges': 'finite',
     'figsize': 'own', 'rect': 'own',
+    'yerr': 'errors', 'xerr': 'errors', 'yerr_lo': 'errors', 'yerr_hi': 'errors',
+    'xerr_lo': 'errors', 'xerr_hi': 'errors',
+    'col_widths': 'size',
+}
+# Arrays of data, which may hold missing values. An array argument that is
+# in neither table stops the script.
+DATA_ARRAYS = {
+    'x', 'y', 'z', 'u', 'v', 'w', 'c', 'a', 'sizes', 'cvals', 'positions', 'xranges',
+    'yrange', 'dz', 'theta', 'r', 'values', 'y1', 'y2', 'x1', 'x2', 'height',
+    'bottom', 'width', 'left', 'ydata', 'weights', 'xy', 'xy1', 'xy2',
 }
 HELPER = {'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
           'finite': 'check_finite_arg', 'margin': 'check_margin_arg'}
-AHELPER = {'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
-GEN = re.compile(r'^        call check_(unit|size|finite|positive|margin|dashes)_args?\(')
+AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
+GEN = re.compile(r'^        call check_(unit|size|finite|positive|margin|dashes|errors)_args?\("')
 
 # Drop what an earlier run generated, and the blank line it added.
 out = []
@@ -145,7 +164,9 @@ while i < len(L):
             if '(' in part:
                 kind = ARRAYS.get(arg)
                 if kind is None:
-                    continue  # data arrays
+                    if arg not in DATA_ARRAYS:
+                        unknown.append((user, arg))
+                    continue
                 if kind == 'own': continue
                 calls.append(f'        call {AHELPER[kind]}("{user}", "{arg}", {arg})')
                 continue

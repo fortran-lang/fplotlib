@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 21
+    integer, parameter :: NCASE = 24
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite coordinate", &
@@ -43,7 +43,10 @@ module test_contract
         "fplotlib: scatter: s must be finite and nonnegative", &
         "fplotlib: set_xscale: linthresh must be finite and positive", &
         "fplotlib: plot: dashes must not be all zero", &
-        "fplotlib: tick_params: rotation must be finite"]
+        "fplotlib: tick_params: rotation must be finite", &
+        "fplotlib: plot: dashes must be finite and nonnegative", &
+        "fplotlib: errorbar: yerr must not be negative", &
+        "fplotlib: savefig: pad_inches leaves nothing of the figure"]
 
 contains
 
@@ -113,6 +116,13 @@ contains
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[0.0_dp, 0.0_dp])
         case (21)
             call tick_params(rotation=nan)
+        case (22)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[nan, 1.0_dp])
+        case (23)
+            call errorbar([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], yerr=[0.1_dp, -0.1_dp])
+        case (24)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+            call savefig("tests/out/contract.svg", bbox_inches="tight", pad_inches=-100.0_dp)
         end select
     end subroutine contract_case
 

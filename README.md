@@ -264,9 +264,12 @@ plotting procedures check their arguments as they come in: an alpha must
 be in [0, 1], and a line width, marker size or font size must be finite
 and not negative (matplotlib quietly accepts some negative sizes; here
 they are taken for the mistakes they are). `tools/gen_arg_checks.py`
-writes these checks from one table of every argument. Missing data is not such a bug: as in
-matplotlib, a NaN or an infinity in plotted data is left out of the
-picture, and a line breaks around it.
+writes these checks from one table of every argument.
+
+Missing data is not such a bug: as in matplotlib, a NaN or an infinity in
+plotted data is left out of the picture, and a line breaks around it. Data
+far outside the view, such as a fill value of 1e30 under a `ylim`, is
+clipped and drawn where it crosses the view.
 
 A failure that a correct program can still meet at run time is returned
 instead, through a `status_t` from `fplotlib_status`. Today that is an

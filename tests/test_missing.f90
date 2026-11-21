@@ -17,7 +17,7 @@ module test_missing
 
     public :: missing_data_check
 
-    integer, parameter :: NCASE = 58
+    integer, parameter :: NCASE = 67
 
 contains
 
@@ -128,6 +128,18 @@ contains
         case (56); call plot(x, x, lw=1.0e300_dp)
         case (57); call hist2d([-huge(1.0_dp), huge(1.0_dp), 0.0_dp], [0.0_dp, 1.0_dp, 2.0_dp])
         case (58); call plot(x, x); sec = secondary_xaxis("top", scale=2.0_dp)
+        ! Far off the view: a fill value of 1e30, a dashed line far longer
+        ! than the canvas, text and a marker out of all proportion.
+        case (59); call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e30_dp]); call ylim(0.0_dp, 1.0_dp)
+        case (60); call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e7_dp], linestyle="--"); call ylim(0.0_dp, 1.0_dp)
+        case (61); call plot(x, x); call text(1.0e300_dp, 1.0_dp, "far")
+        case (62); call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], "o", markersize=1.0e300_dp)
+        case (63); call plot(x, x); call xlim(0.0_dp, 1.0e-300_dp)
+        case (64); call scatter([0.0_dp, 1.0e30_dp], [0.0_dp, 1.0_dp]); call xlim(0.0_dp, 1.0_dp)
+        ! Lines and fills crossing the view between ends as far as a double goes.
+        case (65); call plot(t(1:3), [0.0_dp, 1.0e300_dp, 0.5_dp], linestyle="--"); call ylim(0.0_dp, 1.0_dp)
+        case (66); call plot(t(1:2), [-1.0e300_dp, 1.0e300_dp]); call ylim(0.0_dp, 1.0_dp)
+        case (67); call fill_between(t(1:3), [-1.0e300_dp, 1.0e300_dp, -1.0e300_dp]); call ylim(0.0_dp, 1.0_dp)
         end select
     end subroutine draw_case
 
@@ -146,6 +158,11 @@ contains
         end if
         if (has_nonfinite(svg) .or. has_nonfinite(eps) .or. has_nonfinite(pdf_content(pdf))) then
             print "(a, i0, a)", "missing data case ", k, ": NaN or infinity in the output"
+            nfail = nfail + 1
+        end if
+        ! A number too large for its field is written as asterisks.
+        if (index(svg, "**") > 0 .or. index(eps, "**") > 0 .or. index(pdf_content(pdf), "**") > 0) then
+            print "(a, i0, a)", "missing data case ", k, ": a number overflowed its field in the output"
             nfail = nfail + 1
         end if
     end subroutine check_case

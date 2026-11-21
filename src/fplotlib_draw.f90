@@ -4593,7 +4593,11 @@ contains
         if (present(bbox_inches)) then
             if (lower(trim(bbox_inches)) == "tight") then
                 bpad = 0.1_dp
-                if (present(pad_inches)) bpad = pad_inches
+                if (present(pad_inches)) then
+                    if (.not. ieee_is_finite(pad_inches)) &
+                        call contract_error("savefig: pad_inches must be finite")
+                    bpad = pad_inches
+                end if
                 bpad = bpad*PT_PER_IN
                 ! Cropping moves the window onto the drawing, so the drawing
                 ! itself needs no translation.
@@ -4602,6 +4606,10 @@ contains
                 vy = vy - bpad
                 vw = vw - vx + bpad
                 vh = vh - vy + bpad
+                ! A negative pad, which matplotlib takes, may not eat the
+                ! whole drawing.
+                if (vw <= 0.0_dp .or. vh <= 0.0_dp) &
+                    call contract_error("savefig: pad_inches leaves nothing of the figure")
             else if (len_trim(bbox_inches) > 0) then
                 call contract_error("savefig: bbox_inches must be 'tight'")
             end if

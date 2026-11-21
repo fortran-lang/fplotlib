@@ -36,6 +36,7 @@ module fplotlib_raster
     public :: pb_reset, pb_move, pb_line, pb_cubic, pb_close, pb_poly
     public :: pb_should_snap, pb_snap
     public :: fill_path_buf, stroke_path_buf, blit_image
+    public :: clip_to_box, clip_segment
 
     ! A path flattened to polylines: every curve is already line segments, so
     ! the rasterizer never sees a Bezier.
@@ -467,10 +468,7 @@ contains
         real(dp), allocatable :: ax(:), ay(:)
         integer :: side
 
-        m = size(x)
-        allocate (ox(m), oy(m))
-        ox = x
-        oy = y
+        call refine_far_edges(x, y, x0, x1, y0, y1, ox, oy, m)
         do side = 1, 4
             if (m == 0) exit
             call move_alloc(ox, ax)
@@ -484,9 +482,9 @@ contains
         integer, intent(in) :: side
         real(dp), allocatable, intent(out) :: ox(:), oy(:)
         integer, intent(out) :: m
-        integer :: i, j, n
+        integer :: i, j, n, u, v
         logical :: inp, inq
-        real(dp) :: t
+        real(dp) :: t, c
 
         n = size(x)
         allocate (ox(2*n), oy(2*n))
@@ -501,15 +499,29 @@ contains
                 oy(m) = y(i)
             end if
             if (inp .neqv. inq) then
+                ! Measured from the end nearer the side, where a fraction
+                ! of a long edge is still exact.
+                u = i
+                v = j
                 select case (side)
-                case (1); t = crossing(x(i), x(j), x0)
-                case (2); t = crossing(x(i), x(j), x1)
-                case (3); t = crossing(y(i), y(j), y0)
-                case default; t = crossing(y(i), y(j), y1)
+                case (1, 2)
+                    c = merge(x0, x1, side == 1)
+                    if (abs(x(j) - c) < abs(x(i) - c)) then
+                        u = j
+                        v = i
+                    end if
+                    t = crossing(x(u), x(v), c)
+                case default
+                    c = merge(y0, y1, side == 3)
+                    if (abs(y(j) - c) < abs(y(i) - c)) then
+                        u = j
+                        v = i
+                    end if
+                    t = crossing(y(u), y(v), c)
                 end select
                 m = m + 1
-                ox(m) = x(i)*(1.0_dp - t) + x(j)*t
-                oy(m) = y(i)*(1.0_dp - t) + y(j)*t
+                ox(m) = x(u)*(1.0_dp - t) + x(v)*t
+                oy(m) = y(u)*(1.0_dp - t) + y(v)*t
                 select case (side)
                 case (1); ox(m) = x0
                 case (2); ox(m) = x1
@@ -519,6 +531,142 @@ contains
             end if
         end do
     end subroutine clip_side
+
+    ! An edge with both ends far outside the box that still passes near it
+    ! is split in half until one end of every piece is near: a fraction of
+    ! an edge spanning 1e300 cannot otherwise place the point where it
+    ! crosses a box a few hundred wide.
+    subroutine refine_far_edges(x, y, x0, x1, y0, y1, ox, oy, m)
+        real(dp), intent(in) :: x(:), y(:), x0, x1, y0, y1
+        real(dp), allocatable, intent(out) :: ox(:), oy(:)
+        integer, intent(out) :: m
+        integer :: i, j, n
+
+        n = size(x)
+        allocate (ox(max(16, 2*n)), oy(max(16, 2*n)))
+        m = 0
+        do i = 1, n
+            j = mod(i, n) + 1
+            call push_xy(ox, oy, m, x(i), y(i))
+            call split_far(x(i), y(i), x(j), y(j), x0, x1, y0, y1, ox, oy, m, 0)
+        end do
+    end subroutine refine_far_edges
+
+    recursive subroutine split_far(ax, ay, bx, by, x0, x1, y0, y1, ox, oy, m, depth)
+        real(dp), intent(in) :: ax, ay, bx, by, x0, x1, y0, y1
+        real(dp), allocatable, intent(inout) :: ox(:), oy(:)
+        integer, intent(inout) :: m
+        integer, intent(in) :: depth
+        real(dp) :: mx, my
+
+        if (depth > 1100) return
+        if (.not. both_far(ax, ay, bx, by, x0, x1, y0, y1)) return
+        mx = 0.5_dp*ax + 0.5_dp*bx
+        my = 0.5_dp*ay + 0.5_dp*by
+        call split_far(ax, ay, mx, my, x0, x1, y0, y1, ox, oy, m, depth + 1)
+        call push_xy(ox, oy, m, mx, my)
+        call split_far(mx, my, bx, by, x0, x1, y0, y1, ox, oy, m, depth + 1)
+    end subroutine split_far
+
+    ! Whether both ends lie further from the box than a thousand times its
+    ! size while the segment's bounding box still reaches it.
+    pure logical function both_far(ax, ay, bx, by, x0, x1, y0, y1) result(r)
+        real(dp), intent(in) :: ax, ay, bx, by, x0, x1, y0, y1
+        real(dp) :: n
+        n = 1.0e3_dp*max(x1 - x0, y1 - y0)
+        r = .not. near_box(ax, ay, x0 - n, x1 + n, y0 - n, y1 + n) .and. &
+            .not. near_box(bx, by, x0 - n, x1 + n, y0 - n, y1 + n) .and. &
+            min(ax, bx) <= x1 .and. max(ax, bx) >= x0 .and. &
+            min(ay, by) <= y1 .and. max(ay, by) >= y0
+    end function both_far
+
+    pure logical function near_box(px, py, x0, x1, y0, y1) result(r)
+        real(dp), intent(in) :: px, py, x0, x1, y0, y1
+        r = px >= x0 .and. px <= x1 .and. py >= y0 .and. py <= y1
+    end function near_box
+
+    subroutine push_xy(ox, oy, m, px, py)
+        real(dp), allocatable, intent(inout) :: ox(:), oy(:)
+        integer, intent(inout) :: m
+        real(dp), intent(in) :: px, py
+        real(dp), allocatable :: t(:)
+        if (m + 1 > size(ox)) then
+            allocate (t(2*(m + 1)))
+            t(1:m) = ox(1:m)
+            call move_alloc(t, ox)
+            allocate (t(size(ox)))
+            t(1:m) = oy(1:m)
+            call move_alloc(t, oy)
+        end if
+        m = m + 1
+        ox(m) = px
+        oy(m) = py
+    end subroutine push_xy
+
+    ! The part of the segment from (x0, y0) to (x1, y1) inside the box,
+    ! from (ax, ay) to (ex, ey). cut0 and cut1 say whether the start and the
+    ! end were cut off. The points are found from the end nearer the box,
+    ! and a segment both of whose ends are far is halved first, so that
+    ! even a segment spanning the whole range of a double is placed
+    ! exactly where it crosses the box.
+    recursive subroutine clip_segment(x0, y0, x1, y1, bx0, bx1, by0, by1, &
+                                      ax, ay, ex, ey, visible, cut0, cut1, depth)
+        real(dp), intent(in) :: x0, y0, x1, y1, bx0, bx1, by0, by1
+        real(dp), intent(out) :: ax, ay, ex, ey
+        logical, intent(out) :: visible, cut0, cut1
+        integer, intent(in), optional :: depth
+        real(dp) :: ta, tb, mx, my, a2x, a2y, e2x, e2y
+        logical :: v2, c20, c21
+        integer :: d
+
+        d = 0
+        if (present(depth)) d = depth
+        if (d < 1100 .and. both_far(x0, y0, x1, y1, bx0, bx1, by0, by1)) then
+            mx = 0.5_dp*x0 + 0.5_dp*x1
+            my = 0.5_dp*y0 + 0.5_dp*y1
+            call clip_segment(x0, y0, mx, my, bx0, bx1, by0, by1, ax, ay, ex, ey, &
+                              visible, cut0, cut1, d + 1)
+            call clip_segment(mx, my, x1, y1, bx0, bx1, by0, by1, a2x, a2y, e2x, e2y, &
+                              v2, c20, c21, d + 1)
+            if (visible .and. v2) then
+                ex = e2x
+                ey = e2y
+                cut1 = c21
+            else if (v2) then
+                ax = a2x
+                ay = a2y
+                ex = e2x
+                ey = e2y
+                visible = .true.
+                cut0 = .true.
+                cut1 = c21
+            else if (visible) then
+                cut1 = .true.
+            end if
+            return
+        end if
+        if (abs(x1 - 0.5_dp*(bx0 + bx1)) + abs(y1 - 0.5_dp*(by0 + by1)) < &
+            abs(x0 - 0.5_dp*(bx0 + bx1)) + abs(y0 - 0.5_dp*(by0 + by1))) then
+            ! From the second end, which is the nearer.
+            call segment_in_box(x1, y1, x0, y0, bx0, bx1, by0, by1, ta, tb)
+            visible = tb > ta
+            ex = x1*(1.0_dp - ta) + x0*ta
+            ey = y1*(1.0_dp - ta) + y0*ta
+            ax = x1*(1.0_dp - tb) + x0*tb
+            ay = y1*(1.0_dp - tb) + y0*tb
+            cut0 = tb < 1.0_dp
+            cut1 = ta > 0.0_dp
+        else
+            call segment_in_box(x0, y0, x1, y1, bx0, bx1, by0, by1, ta, tb)
+            visible = tb > ta
+            ax = x0*(1.0_dp - ta) + x1*ta
+            ay = y0*(1.0_dp - ta) + y1*ta
+            ex = x0*(1.0_dp - tb) + x1*tb
+            ey = y0*(1.0_dp - tb) + y1*tb
+            cut0 = ta > 0.0_dp
+            cut1 = tb < 1.0_dp
+        end if
+    end subroutine clip_segment
 
     pure logical function inside_side(px, py, side, x0, x1, y0, y1) result(r)
         real(dp), intent(in) :: px, py, x0, x1, y0, y1
@@ -591,7 +739,9 @@ contains
             if (n < 1) cycle
             call gather(pb, b, n, pb%sub_closed(s), dx, dy, nd)
             if (paint%n_dash > 0) then
-                call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale)
+                call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, &
+                                   -hw - 2.0_dp, real(cv%w, dp) + hw + 2.0_dp, &
+                                   -hw - 2.0_dp, real(cv%h, dp) + hw + 2.0_dp)
             else
                 call stroke_run(out, dx, dy, nd, hw, paint, pb%sub_closed(s))
             end if
@@ -620,16 +770,21 @@ contains
 
     ! Walk the polyline handing out alternating on and off runs of the dash
     ! pattern. Each on run is stroked as its own open subpath, which is why
-    ! dash caps are applied per dash and not per line.
-    subroutine stroke_dashed(out, px, py, n, hw, paint, scale)
+    ! dash caps are applied per dash and not per line. A segment reaching
+    ! outside the box [bx0, bx1] by [by0, by1], the canvas widened by the
+    ! pen, is only walked where it is inside: the rest just moves the
+    ! pattern along, so that a line far longer than the canvas costs no
+    ! more than one across it.
+    subroutine stroke_dashed(out, px, py, n, hw, paint, scale, bx0, bx1, by0, by1)
         type(pathbuf_t), intent(inout) :: out
-        real(dp), intent(in) :: px(:), py(:), hw, scale
+        real(dp), intent(in) :: px(:), py(:), hw, scale, bx0, bx1, by0, by1
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
-        real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l
+        real(dp) :: rem, seg, t0, t1, ex, ey, sx, sy, l, ta, tb
+        real(dp) :: qx, qy, ax, ay, fx, fy
         real(dp), allocatable :: rx(:), ry(:)
         integer :: i, di, nr
-        logical :: on
+        logical :: on, inside, visible, cut0, cut1
 
         allocate (rx(n + 4), ry(n + 4))
         di = 1
@@ -639,19 +794,41 @@ contains
 
         do i = 1, n - 1
             sx = px(i); sy = py(i)
-            l = hypot(px(i + 1) - sx, py(i + 1) - sy)
+            qx = px(i + 1); qy = py(i + 1)
+            l = hypot(qx - sx, qy - sy)
             if (l <= 0.0_dp) cycle
             t0 = 0.0_dp
-            do while (t0 < l)
-                seg = min(rem, l - t0)
+            tb = l
+            inside = sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
+                     qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1
+            if (.not. inside) then
+                ! What lies outside is skipped, ending any dash under way;
+                ! the walk then runs over the visible piece alone.
+                call clip_segment(sx, sy, qx, qy, bx0, bx1, by0, by1, &
+                                  ax, ay, fx, fy, visible, cut0, cut1)
+                if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                nr = 0
+                if (.not. visible) then
+                    call dash_advance(min(l, huge(1.0_dp)), paint, scale, di, rem, on)
+                    cycle
+                end if
+                call dash_advance(min(hypot(ax - sx, ay - sy), huge(1.0_dp)), paint, scale, di, rem, on)
+                sx = ax; sy = ay
+                l = hypot(fx - ax, fy - ay)
+                qx = fx; qy = fy
+                tb = l
+                if (l <= 0.0_dp) cycle
+            end if
+            do while (t0 < tb)
+                seg = min(rem, tb - t0)
                 t1 = t0 + seg
-                ex = sx + (px(i + 1) - sx)*(t1/l)
-                ey = sy + (py(i + 1) - sy)*(t1/l)
+                ex = sx + (qx - sx)*(t1/l)
+                ey = sy + (qy - sy)*(t1/l)
                 if (on) then
                     if (nr == 0) then
                         nr = 1
-                        rx(1) = sx + (px(i + 1) - sx)*(t0/l)
-                        ry(1) = sy + (py(i + 1) - sy)*(t0/l)
+                        rx(1) = sx + (qx - sx)*(t0/l)
+                        ry(1) = sy + (qy - sy)*(t0/l)
                     end if
                     nr = nr + 1
                     rx(nr) = ex
@@ -671,9 +848,88 @@ contains
                     nr = 0
                 end if
             end do
+            if (.not. inside) then
+                if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
+                nr = 0
+                call dash_advance(min(hypot(px(i + 1) - qx, py(i + 1) - qy), huge(1.0_dp)), &
+                                  paint, scale, di, rem, on)
+            end if
         end do
         if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false.)
     end subroutine stroke_dashed
+
+    ! Moves the dash pattern on by a distance d without drawing: whole
+    ! periods at once, then element by element.
+    subroutine dash_advance(d, paint, scale, di, rem, on)
+        real(dp), intent(in) :: d, scale
+        type(paint_t), intent(in) :: paint
+        integer, intent(inout) :: di
+        real(dp), intent(inout) :: rem
+        logical, intent(inout) :: on
+        real(dp) :: left, period
+
+        left = d
+        if (left < rem) then
+            rem = rem - left
+            return
+        end if
+        left = left - rem
+        on = .not. on
+        di = di + 1
+        if (di > paint%n_dash) di = 1
+        rem = paint%dash(di)*scale
+        ! An odd number of lengths flips on and off each time round, so the
+        ! pattern repeats only after going round twice.
+        period = sum(paint%dash(1:paint%n_dash))*scale
+        if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
+        if (period > 0.0_dp) left = mod(left, period)
+        do while (left >= rem)
+            left = left - rem
+            on = .not. on
+            di = di + 1
+            if (di > paint%n_dash) di = 1
+            rem = paint%dash(di)*scale
+        end do
+        rem = rem - left
+    end subroutine dash_advance
+
+    ! The part of the segment from (x0, y0) to (x1, y1) inside the box, as
+    ! fractions [ta, tb] of the way along it (Liang and Barsky); ta = tb
+    ! when none of it is. Differences are taken of halves, so that ends
+    ! far apart cannot overflow.
+    pure subroutine segment_in_box(x0, y0, x1, y1, bx0, bx1, by0, by1, ta, tb)
+        real(dp), intent(in) :: x0, y0, x1, y1, bx0, bx1, by0, by1
+        real(dp), intent(out) :: ta, tb
+        real(dp) :: p(4), q(4), r
+        integer :: k
+
+        p = [-(0.5_dp*x1 - 0.5_dp*x0), 0.5_dp*x1 - 0.5_dp*x0, &
+             -(0.5_dp*y1 - 0.5_dp*y0), 0.5_dp*y1 - 0.5_dp*y0]
+        q = [0.5_dp*x0 - 0.5_dp*bx0, 0.5_dp*bx1 - 0.5_dp*x0, &
+             0.5_dp*y0 - 0.5_dp*by0, 0.5_dp*by1 - 0.5_dp*y0]
+        ta = 0.0_dp
+        tb = 1.0_dp
+        do k = 1, 4
+            if (p(k) == 0.0_dp) then
+                if (q(k) < 0.0_dp) then
+                    ta = 1.0_dp
+                    tb = 1.0_dp
+                    return
+                end if
+            else
+                r = q(k)/p(k)
+                if (p(k) < 0.0_dp) then
+                    ta = max(ta, r)
+                else
+                    tb = min(tb, r)
+                end if
+            end if
+        end do
+        if (ta > tb) then
+            ta = 1.0_dp
+            tb = 1.0_dp
+        end if
+    end subroutine segment_in_box
 
     subroutine stroke_run(out, px, py, n, hw, paint, closed)
         type(pathbuf_t), intent(inout) :: out

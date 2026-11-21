@@ -95,7 +95,10 @@ contains
             return
         end if
 
-        write (tmp, "(F24.6)") x
+        ! Beyond 1e15 the digits would overflow the field into asterisks,
+        ! which no format can read; that far off any canvas the value does
+        ! not change what is drawn.
+        write (tmp, "(F24.6)") max(-1.0e15_dp, min(1.0e15_dp, x))
         ! left-trim spaces
         j = 1
         do while (j < 24 .and. tmp(j:j) == " ")
