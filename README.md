@@ -256,20 +256,21 @@ fpm build --compiler lfortran
 ## Errors
 
 A call that breaks a documented precondition is a bug in the calling
-program, and it stops with a message naming the rule and exit code 1:
-`savefig` of an unknown format, `xlim` with an infinite limit, or, below
-the plotting API, drawing on a canvas that is not open or passing a
-nonfinite coordinate to a renderer. Missing data is not such a bug: as in
+program, and it stops with a message naming the call and the rule, and
+exit code 1: `plot(alpha=1.5)`, `savefig` of an unknown format, `xlim`
+with an infinite limit, or, below the plotting API, drawing on a canvas
+that is not open or passing a nonfinite coordinate to a renderer. Missing data is not such a bug: as in
 matplotlib, a NaN or an infinity in plotted data is left out of the
 picture, and a line breaks around it.
 
 A failure that a correct program can still meet at run time is returned
 instead, through a `status_t` from `fplotlib_status`. Today that is an
 output file that cannot be written. `savefig` and `save_animation` return
-it in their optional `status`, and stop with the message without one:
+it in their optional `status`, and without one stop with the message and
+exit code 2:
 
 ```fortran
-use fplotlib_status, only: status_t
+use fplotlib
 type(status_t) :: st
 call savefig("results/plot.png", status=st)
 if (.not. st%ok()) print *, st%message

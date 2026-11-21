@@ -15,6 +15,8 @@ module fplotlib_artist
     use fplotlib_glyphs, only: face_ascent, face_descent, FACE_REGULAR
     implicit none
     public
+    ! put_path's own bookkeeping.
+    private :: finite_point, path_move, path_put
 
 contains
 
@@ -200,8 +202,9 @@ contains
             select case (verbs(i))
             case (VERB_MOVE)
                 k = k + 1
-                broken = .false.
                 pen = finite_point(x, y, k)
+                ! A contour whose first point is missing is broken already.
+                broken = .not. pen
                 if (pen) call path_move(ox, oy, ov, no, nv, x(k), y(k))
             case (VERB_LINE)
                 k = k + 1

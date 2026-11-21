@@ -19,6 +19,9 @@ Its public methods are `non_overridable`: each checks the call and keeps
 the canvas state, then calls the backend's deferred `*_impl` method
 (`open_canvas_impl`, `draw_path_impl`, ..., `bytes_impl`). A new backend
 implements only those, and may assume every call it receives is valid.
+The `*_impl` bindings are public only so that a backend in another module
+can implement them; code that draws calls the methods without the suffix,
+since calling an `*_impl` directly skips the checks.
 
 ```{f:module} fplotlib_render
 ```

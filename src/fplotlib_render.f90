@@ -81,6 +81,13 @@
 ! cannot forget a check, and no two backends can disagree about one. A call
 ! that draws nothing -- a path without verbs, markers at no points, an empty
 ! glyph run -- returns before it reaches the backend.
+!
+! The *_impl bindings and the state components are public only because
+! Fortran cannot otherwise let a backend in another module implement or
+! read them. They are for backends: code that draws calls the methods
+! without the suffix, since calling an *_impl directly skips the checks.
+! open_canvas records width and height after open_canvas_impl returns, so
+! a backend sizes itself from its arguments, not from those components.
 
 module fplotlib_render
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite

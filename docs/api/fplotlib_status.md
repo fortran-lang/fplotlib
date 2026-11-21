@@ -20,7 +20,10 @@ last-error state.
 `fplotlib_io:write_bytes` requires its `status`. `savefig` and
 `save_animation` take an optional one: when it is present a file that
 cannot be written is returned in it, and when it is absent the call stops
-with the message, as the exception does in matplotlib.
+with the message, as the exception does in matplotlib, and exit code 2, so
+that a script's caller can tell it from a broken precondition. `show` also
+takes an optional `status`, and without one only reports the failure.
+`fplotlib` re-exports `status_t`, `STATUS_OK` and `ERROR_IO`.
 
 ```{f:module} fplotlib_status
 ```

@@ -48,11 +48,11 @@ contains
     end subroutine write_bytes
 
     ! The compiler's message, with the file name in front unless the
-    ! message already names it, as gfortran's does.
+    ! message already quotes it, as gfortran's does.
     function io_message(what, filename, message) result(m)
         character(len=*), intent(in) :: what, filename, message
         character(len=:), allocatable :: m
-        if (index(message, trim(filename)) > 0) then
+        if (index(message, "'"//trim(filename)//"'") > 0) then
             m = trim(message)
         else
             m = what//" '"//trim(filename)//"': "//trim(message)

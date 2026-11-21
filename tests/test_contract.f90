@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 12
+    integer, parameter :: NCASE = 17
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite coordinate", &
@@ -34,7 +34,12 @@ module test_contract
         "fplotlib: png: dpi must be finite and positive", &
         "fplotlib: text: font size must be finite and nonnegative", &
         "fplotlib: savefig: supported formats are", &
-        "fplotlib: xlim: limits must be finite"]
+        "fplotlib: xlim: limits must be finite", &
+        "fplotlib: plot: alpha must be in [0, 1], got 1.5", &
+        "fplotlib: scatter: linewidths must be finite and nonnegative", &
+        "fplotlib: figure: figsize must be finite and positive", &
+        "fplotlib: subplots_adjust: left must be finite", &
+        "fplotlib: pie: values must not be negative"]
 
 contains
 
@@ -86,6 +91,16 @@ contains
             call savefig("tests/out/contract.jpg")
         case (12)
             call xlim(0.0_dp, nan)
+        case (13)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], alpha=1.5_dp)
+        case (14)
+            call scatter([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], linewidths=nan)
+        case (15)
+            call figure(figsize=[nan, 2.0_dp])
+        case (16)
+            call subplots_adjust(left=nan)
+        case (17)
+            call pie([1.0_dp, -1.0_dp, 2.0_dp])
         end select
     end subroutine contract_case
 

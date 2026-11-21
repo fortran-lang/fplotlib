@@ -17,7 +17,7 @@ module test_missing
 
     public :: missing_data_check
 
-    integer, parameter :: NCASE = 48
+    integer, parameter :: NCASE = 51
 
 contains
 
@@ -112,6 +112,12 @@ contains
         case (46); call scatter(x, x, cvals=[nan, nan, nan, nan, nan, nan]); call colorbar()
         case (47); call pcolormesh(t(1:3), t(1:3), reshape([nan, nan, nan, inf], [2, 2])); call colorbar()
         case (48); call scatter3d(y, y, y)
+        ! A missing first vertex must not let the polygon close across the gap.
+        case (49); call add_polygon([nan, 1.0_dp, 1.0_dp, 0.0_dp], [0.0_dp, 0.0_dp, 1.0_dp, 1.0_dp])
+        ! Layouts that leave the axes or the colorbar no room are not drawn.
+        case (50); call close(); call figure(figsize=[1.5_dp, 1.0_dp]); call plot(x, x)
+            call title("Title"); call xlabel("x"); call ylabel("y"); call tight_layout()
+        case (51); call imshow(z); call colorbar(fraction=0.99_dp, pad=0.5_dp)
         end select
     end subroutine draw_case
 

@@ -17,6 +17,7 @@ module fplotlib_draw
     use fplotlib_render
     use fplotlib_status, only: contract_error
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use, intrinsic :: iso_fortran_env, only: error_unit
     use fplotlib_backend_svg
     use fplotlib_backend_pdf
     use fplotlib_backend_eps
@@ -252,7 +253,11 @@ contains
         p = 1.08_dp * TICK_FONT
         ! constrained_layout pads by a flat 1/24 inch instead.
         if (fig_constrained) p = PT_PER_IN / 24.0_dp
-        if (present(pad)) p = pad * TICK_FONT
+        if (present(pad)) then
+            if (.not. ieee_is_finite(pad) .or. pad < 0.0_dp) &
+                call contract_error("tight_layout: pad must be finite and nonnegative")
+            p = pad * TICK_FONT
+        end if
         W = fig_w_in * PT_PER_IN
         H = fig_h_in * PT_PER_IN
         need_l = 0.0_dp
@@ -278,6 +283,15 @@ contains
         end do
         if (len_trim(fig_suptitle) > 0) need_t = need_t + LABEL_BOX * fig_suptitle_size
 
+        ! A figure too small for its decorations keeps the layout it had,
+        ! with the warning matplotlib gives, rather than axes of negative
+        ! size.
+        if ((p + need_l) / W >= 1.0_dp - (p + need_r) / W .or. &
+            (p + need_b) / H >= 1.0_dp - (p + need_t) / H) then
+            write (error_unit, "(a)") "fplotlib: tight_layout not applied: " &
+                //"the decorations leave no room for the axes"
+            return
+        end if
         fig_left = (p + need_l) / W
         fig_right = 1.0_dp - (p + need_r) / W
         fig_bottom = (p + need_b) / H
@@ -2683,6 +2697,8 @@ contains
         character(len=512) :: esc
 
         call cbar_box(a, W, H, bx, bt, bw, bh)
+        ! A bar the layout left no room for is not drawn.
+        if (.not. (bw > 0.0_dp .and. bh > 0.0_dp)) return
         bb = bt + bh
 
         ! Slices are grown slightly so they abut without seams, so keep them
@@ -3961,6 +3977,9 @@ contains
         ax_t = (1.0_dp - a%top) * H
         ax_w = ax_r - ax_l
         ax_h = ax_b - ax_t
+        ! An axes the layout left no room for, as matplotlib's would be
+        ! with the same subplot parameters, has nothing to show.
+        if (.not. (ax_w > 0.0_dp .and. ax_h > 0.0_dp)) return
 
         if (a%polar) then
             call render_polar(b, a, ax_l, ax_r, ax_b, ax_t)

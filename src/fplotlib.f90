@@ -21,7 +21,7 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_status, only: status_t, contract_error
+    use fplotlib_status, only: status_t, contract_error, STATUS_OK, ERROR_IO
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -29,6 +29,9 @@ module fplotlib
     private
 
     public :: dp
+    ! savefig, save_animation and show return a file that cannot be
+    ! written in a status_t; see fplotlib_status.
+    public :: status_t, STATUS_OK, ERROR_IO
     public :: plot, scatter, semilogx, semilogy, loglog
     public :: set_xscale, set_yscale
     public :: bar, barh, hist, fill_between, fill_betweenx, stackplot
@@ -349,7 +352,7 @@ contains
             call stash_fig(cur_fig)
         end if
         if (present(num)) then
-            if (num < 1) call contract_error("figure num must be positive")
+            if (num < 1) call contract_error("figure: num must be positive")
             k = num
         else
             k = next_free_fig()
@@ -368,13 +371,14 @@ contains
         fig_h_in = FIG_H_DEFAULT
         fig_dpi = DPI_DEFAULT
         if (present(figsize)) then
-            if (figsize(1) <= 0.0_dp .or. figsize(2) <= 0.0_dp) &
-                call contract_error("figure figsize must be positive")
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp)) &
+                call contract_error("figure: figsize must be finite and positive")
             fig_w_in = figsize(1)
             fig_h_in = figsize(2)
         end if
         if (present(dpi)) then
-            if (dpi <= 0.0_dp) call contract_error("figure dpi must be positive")
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("figure: dpi must be finite and positive")
             fig_dpi = dpi
         end if
     end subroutine figure
@@ -475,6 +479,17 @@ contains
         character(len=*), intent(in), optional :: grid_color, text_color
         character(len=7), intent(in), optional :: color_cycle(:)
 
+        call check_size_arg("rc", "fontsize", fontsize)
+        call check_size_arg("rc", "linewidth", linewidth)
+        if (present(figsize)) then
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp)) &
+                call contract_error("rc: figsize must be finite and positive")
+        end if
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("rc: dpi must be finite and positive")
+        end if
+
         if (present(figsize)) then
             fig_w_in = figsize(1)
             fig_h_in = figsize(2)
@@ -545,6 +560,13 @@ contains
 
     subroutine subplots_adjust(left, right, bottom, top, wspace, hspace)
         real(dp), intent(in), optional :: left, right, bottom, top, wspace, hspace
+
+        call check_finite_arg("subplots_adjust", "left", left)
+        call check_finite_arg("subplots_adjust", "right", right)
+        call check_finite_arg("subplots_adjust", "bottom", bottom)
+        call check_finite_arg("subplots_adjust", "top", top)
+        call check_size_arg("subplots_adjust", "wspace", wspace)
+        call check_size_arg("subplots_adjust", "hspace", hspace)
         call ensure_fig()
         if (present(left)) fig_left = left
         if (present(right)) fig_right = right
@@ -553,7 +575,7 @@ contains
         if (present(wspace)) fig_wspace = wspace
         if (present(hspace)) fig_hspace = hspace
         if (fig_right <= fig_left .or. fig_top <= fig_bottom) &
-            call contract_error("subplots_adjust left<right and bottom<top required")
+            call contract_error("subplots_adjust: left < right and bottom < top required")
         call layout_grid()
     end subroutine subplots_adjust
 
@@ -624,6 +646,8 @@ contains
         real(dp), intent(in) :: rect(4)
         type(axes) :: h
 
+        if (.not. all(ieee_is_finite(rect)) .or. rect(3) < 0.0_dp .or. rect(4) < 0.0_dp) &
+            call contract_error("add_axes: rect must be finite, with nonnegative width and height")
         call push_axes()
         ax(cur_i)%fixed_pos = .true.
         ax(cur_i)%left = rect(1)
@@ -1850,6 +1874,9 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize
         character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        call check_size_arg("suptitle", "fontsize", fontsize)
+
         call ensure_fig()
         fig_suptitle = s
         if (present(fontsize)) fig_suptitle_size = fontsize
@@ -1861,6 +1888,9 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize
         character(len=*), intent(in), optional :: fontweight, fontstyle, loc
+
+        call check_size_arg("title", "fontsize", fontsize)
+
         call ensure_fig()
         ax(cur_i)%title = s
         if (present(loc)) ax(cur_i)%title_loc = loc
@@ -1873,6 +1903,9 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        call check_size_arg("xlabel", "fontsize", fontsize)
+
         call ensure_fig()
         ax(cur_i)%xlabel = s
         if (present(labelpad)) ax(cur_i)%xlabel_pad = labelpad
@@ -1885,6 +1918,9 @@ contains
         character(len=*), intent(in) :: s
         real(dp), intent(in), optional :: fontsize, labelpad
         character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        call check_size_arg("ylabel", "fontsize", fontsize)
+
         call ensure_fig()
         ax(cur_i)%ylabel = s
         if (present(labelpad)) ax(cur_i)%ylabel_pad = labelpad
@@ -1916,6 +1952,11 @@ contains
         real(dp), intent(in), optional :: size, title, labels, ticks, legend
         integer :: i
 
+        call check_size_arg("set_fontsize", "size", size)
+        call check_size_arg("set_fontsize", "title", title)
+        call check_size_arg("set_fontsize", "labels", labels)
+        call check_size_arg("set_fontsize", "ticks", ticks)
+        call check_size_arg("set_fontsize", "legend", legend)
         call ensure_fig()
         if (present(size)) then
             ! Keep matplotlib's proportions: the title is a little larger than
@@ -1948,6 +1989,9 @@ contains
     subroutine set_facecolor(color, alpha)
         character(len=*), intent(in) :: color
         real(dp), intent(in), optional :: alpha
+
+        call check_unit_arg("set_facecolor", "alpha", alpha)
+
         call ensure_fig()
         ax(cur_i)%facecolor = resolve_color(color)
         if (present(alpha)) ax(cur_i)%face_alpha = alpha
@@ -1957,6 +2001,10 @@ contains
         logical, intent(in) :: on
         character(len=*), intent(in), optional :: axis, which, color, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        call check_size_arg("grid", "lw", lw)
+        call check_unit_arg("grid", "alpha", alpha)
+
         call ensure_fig()
         ax(cur_i)%grid_on = on
         if (present(axis)) ax(cur_i)%grid_axis = axis
@@ -1983,6 +2031,8 @@ contains
         logical, intent(in), optional :: frameon
         integer :: i, j, is, host, n_before
         type(axes) :: h
+
+        call check_size_arg("figlegend", "fontsize", fontsize)
 
         call ensure_fig()
         n_before = n_ax
@@ -2015,6 +2065,9 @@ contains
         integer, intent(in), optional :: ncol
         logical, intent(in), optional :: frameon
         integer :: i
+
+        call check_size_arg("legend", "fontsize", fontsize)
+
         call ensure_fig()
         ! matplotlib's legend(labels): the names are handed to the artists
         ! in the order they were added, whatever they were called before.
@@ -2291,6 +2344,54 @@ contains
         if (a > b) call swap(lo, hi)
     end subroutine user_limits
 
+    ! Style arguments are checked where they come in, so that a bad one
+    ! stops naming the call it was passed to rather than whatever part of
+    ! the drawing first tripped over it. Absent arguments pass.
+    subroutine check_unit_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v < 0.0_dp .or. v > 1.0_dp) then
+            call contract_error(proc//": "//name//" must be in [0, 1], got "//arg_str(v))
+        end if
+    end subroutine check_unit_arg
+
+    ! A width or a size, in points: finite and not negative.
+    subroutine check_size_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v < 0.0_dp) then
+            call contract_error(proc//": "//name//" must be finite and nonnegative, got "//arg_str(v))
+        end if
+    end subroutine check_size_arg
+
+    subroutine check_finite_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v)) call contract_error(proc//": "//name//" must be finite, got "//arg_str(v))
+    end subroutine check_finite_arg
+
+    ! matplotlib's margins take anything above -0.5, where the view would
+    ! shrink to nothing.
+    subroutine check_margin_arg(name, v)
+        character(len=*), intent(in) :: name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v <= -0.5_dp) then
+            call contract_error("margins: "//name//" must be finite and greater than -0.5, got "//arg_str(v))
+        end if
+    end subroutine check_margin_arg
+
+    function arg_str(v) result(s)
+        real(dp), intent(in) :: v
+        character(len=:), allocatable :: s
+        character(len=32) :: buf
+        write (buf, "(g0)") v
+        s = trim(adjustl(buf))
+    end function arg_str
+
     ! The limits actually in force, autoscaling included, so that a caller
     ! can place something relative to what the axes ended up showing.
     subroutine get_xlim(xmin, xmax)
@@ -2345,6 +2446,10 @@ contains
         integer :: is
         real(dp), allocatable :: sx(:), sy(:)
 
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+        call check_size_arg("plot", "markersize", markersize)
+
         call ensure_fig()
         if (present(drawstyle)) then
             ! A drawstyle is a step under another name, so it is drawn by
@@ -2387,6 +2492,10 @@ contains
         integer :: i
         real(dp) :: idx(size(ydata))
 
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+        call check_size_arg("plot", "markersize", markersize)
+
         do i = 1, size(ydata)
             idx(i) = real(i - 1, dp)
         end do
@@ -2400,6 +2509,10 @@ contains
         real(dp), intent(in) :: y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         real(dp), intent(in), optional :: lw, alpha
+
+        call check_size_arg("plot", "lw", lw)
+        call check_unit_arg("plot", "alpha", alpha)
+
         call plot_num(category_positions(size(cats)), y, fmt, label, lw, color, &
                       marker, linestyle, alpha)
         call xticks(category_positions(size(cats)), cats)
@@ -2418,6 +2531,9 @@ contains
         character(len=*), intent(in), optional :: c, marker, label, cmap, edgecolors
         integer :: is, n, k, id
         real(dp) :: lo, hi
+
+        call check_unit_arg("scatter", "alpha", alpha)
+        call check_size_arg("scatter", "linewidths", linewidths)
 
         call ensure_fig()
         if (present(marker)) then
@@ -2513,6 +2629,9 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("semilogx", "lw", lw)
+
         call ensure_fig()
         ax(cur_i)%xsc%kind = SCALE_LOG
         call add_series(cur_i, x, y, fmt, label, lw, color)
@@ -2522,6 +2641,9 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("semilogy", "lw", lw)
+
         call ensure_fig()
         ax(cur_i)%ysc%kind = SCALE_LOG
         call add_series(cur_i, x, y, fmt, label, lw, color)
@@ -2531,6 +2653,9 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("loglog", "lw", lw)
+
         call ensure_fig()
         ax(cur_i)%xsc%kind = SCALE_LOG
         ax(cur_i)%ysc%kind = SCALE_LOG
@@ -2751,6 +2876,8 @@ contains
         integer, allocatable :: ij(:, :)
         integer :: i, j, k
 
+        call check_size_arg("spy", "markersize", markersize)
+
         tol = 0.0_dp
         if (present(precision)) tol = abs(precision)
         allocate (mask(size(a, 1), size(a, 2)))
@@ -2779,6 +2906,8 @@ contains
         integer :: nr, nc
         real(dp) :: ms
         character(len=:), allocatable :: mk
+
+        call check_size_arg("spy", "markersize", markersize)
 
         if (size(ij, 1) /= 2) call contract_error("spy needs a (2, nnz) index array")
         nr = 0
@@ -2825,6 +2954,8 @@ contains
         character(len=*), intent(in), optional :: color
         real(dp) :: off, len_
 
+        call check_size_arg("eventplot", "lw", lw)
+
         off = 1.0_dp
         len_ = 1.0_dp
         if (present(lineoffset)) off = lineoffset
@@ -2850,6 +2981,9 @@ contains
         real(dp), intent(in), optional :: alpha, lw
         integer :: i, is
 
+        call check_unit_arg("broken_barh", "alpha", alpha)
+        call check_size_arg("broken_barh", "lw", lw)
+
         call ensure_fig()
         do i = 1, size(xranges, 1)
             call add_rectangle([xranges(i, 1), yrange(1)], xranges(i, 2), yrange(2), &
@@ -2867,6 +3001,8 @@ contains
         character(len=*), intent(in), optional :: col_labels(:), row_labels(:), loc
         real(dp), intent(in), optional :: col_widths(:), fontsize
         integer :: nr, nc, i, j
+
+        call check_size_arg("table", "fontsize", fontsize)
 
         call ensure_fig()
         nr = size(cell_text, 1)
@@ -2929,6 +3065,8 @@ contains
         real(dp) :: dx, dy, x0, y0, dens, tot, sl, half, ca
         integer :: nx, ny, i, j, np, is, na, k, nseed, sx, sy, sd(5)
         character(len=32) :: col
+
+        call check_size_arg("streamplot", "lw", lw)
 
         call ensure_fig()
         nx = size(x)
@@ -3472,8 +3610,9 @@ contains
 
         ! Patches never ask for room of their own, so the axes is told what
         ! the binning covered, margins and all.
-        call xlim(x0 - 0.05_dp*(x1 - x0), x1 + 0.05_dp*(x1 - x0))
-        call ylim(y0 - 0.05_dp*(y1 - y0), y1 + 0.05_dp*(y1 - y0))
+        ! Each end scaled before the difference, which cannot overflow.
+        call xlim(x0 - (0.05_dp*x1 - 0.05_dp*x0), x1 + (0.05_dp*x1 - 0.05_dp*x0))
+        call ylim(y0 - (0.05_dp*y1 - 0.05_dp*y0), y1 + (0.05_dp*y1 - 0.05_dp*y0))
     end subroutine hexbin
 
     ! A grid of coloured cells with edges of the caller's choosing. x and
@@ -3611,6 +3750,9 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         integer :: is, n
 
+        call check_size_arg("plot3d", "lw", lw)
+        call check_unit_arg("plot3d", "alpha", alpha)
+
         call axes3d()
         call add_series(cur_i, x, y, fmt, label, lw, color, marker, linestyle, alpha)
         is = ax(cur_i)%n_series
@@ -3627,6 +3769,8 @@ contains
         real(dp), intent(in), optional :: s, alpha
         character(len=*), intent(in), optional :: c, marker, label
         integer :: is, n
+
+        call check_unit_arg("scatter3d", "alpha", alpha)
 
         call axes3d()
         call scatter(x, y, s, c, marker, label, alpha)
@@ -3645,6 +3789,8 @@ contains
         character(len=*), intent(in), optional :: color, cmap
         real(dp), intent(in), optional :: alpha
         integer :: is, nx, ny
+
+        call check_unit_arg("plot_surface", "alpha", alpha)
 
         call axes3d()
         ny = size(z, 1)
@@ -3678,6 +3824,8 @@ contains
         integer, allocatable :: tri(:, :)
         integer :: is, n, nt
 
+        call check_unit_arg("plot_trisurf", "alpha", alpha)
+
         call axes3d()
         n = min(size(x), min(size(y), size(z)))
         if (n < 3) return
@@ -3709,6 +3857,8 @@ contains
         character(len=*), intent(in), optional :: color
         real(dp), intent(in), optional :: alpha
         integer :: is, n
+
+        call check_unit_arg("bar3d", "alpha", alpha)
 
         call axes3d()
         n = min(min(size(x), size(y)), min(size(z), size(dz)))
@@ -3745,6 +3895,8 @@ contains
         real(dp) :: segx(2), segy(2), segz(2)
         character(len=32) :: col
         integer :: n, i, k
+
+        call check_size_arg("quiver3d", "lw", lw)
 
         call axes3d()
         n = min(min(size(x), size(y)), size(z))
@@ -3898,6 +4050,9 @@ contains
         real(dp), intent(in), optional :: alpha, lw
         integer :: is
 
+        call check_unit_arg("plot_wireframe", "alpha", alpha)
+        call check_size_arg("plot_wireframe", "lw", lw)
+
         call plot_surface(x, y, z, color, alpha)
         is = ax(cur_i)%n_series
         if (is < 1) return
@@ -3921,6 +4076,8 @@ contains
         real(dp), allocatable :: ex(:), ey(:)
         integer :: nt, i, k
         real(dp) :: nan, zero
+
+        call check_size_arg("triplot", "lw", lw)
 
         call ensure_fig()
         call delaunay(x, y, tri, nt)
@@ -3959,6 +4116,8 @@ contains
         integer :: nt, i, cm
         real(dp) :: lo, hi, v, tx(3), ty(3)
         real(dp), allocatable :: fv(:)
+
+        call check_unit_arg("tripcolor", "alpha", alpha)
 
         call ensure_fig()
         call delaunay(x, y, tri, nt)
@@ -4003,6 +4162,9 @@ contains
         real(dp), intent(in) :: x(:), y(:), z(:)
         real(dp), intent(in), optional :: levels(:), lw
         character(len=*), intent(in), optional :: cmap
+
+        call check_size_arg("tricontour", "lw", lw)
+
         call add_tricontour(x, y, z, levels, cmap, lw, filled=.false.)
     end subroutine tricontour
 
@@ -4104,6 +4266,8 @@ contains
     subroutine clabel(fontsize)
         real(dp), intent(in), optional :: fontsize
 
+        call check_size_arg("clabel", "fontsize", fontsize)
+
         call ensure_fig()
         ax(cur_i)%cont_labels = .true.
         if (present(fontsize)) ax(cur_i)%clab_size = fontsize
@@ -4172,6 +4336,9 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         character(len=8) :: w
         real(dp), allocatable :: sx(:), sy(:)
+
+        call check_size_arg("step", "lw", lw)
+        call check_unit_arg("step", "alpha", alpha)
 
         w = "pre"
         if (present(where)) w = where
@@ -4254,6 +4421,9 @@ contains
         character(len=*), intent(in), optional :: colors(:)
         integer :: is
 
+        call check_unit_arg("barh", "alpha", alpha)
+        call check_size_arg("barh", "linewidth", linewidth)
+
         call ensure_fig()
         is = new_shape_series(SERIES_BARH, y, width, color, label, alpha)
         if (is < 1) return
@@ -4268,6 +4438,10 @@ contains
         real(dp), intent(in), optional :: height, alpha, left(:), linewidth
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
+
+        call check_unit_arg("barh", "alpha", alpha)
+        call check_size_arg("barh", "linewidth", linewidth)
+
         call barh_num(category_positions(size(cats)), width, height, color, &
                       label, alpha, left, colors, edgecolor, linewidth, hatch)
         call yticks(category_positions(size(cats)), cats)
@@ -4279,6 +4453,8 @@ contains
         character(len=*), intent(in), optional :: color, label
         real(dp), intent(in), optional :: alpha
         integer :: is
+
+        call check_unit_arg("stem", "alpha", alpha)
 
         call ensure_fig()
         is = new_shape_series(SERIES_STEM, x, y, color, label, alpha)
@@ -4301,6 +4477,9 @@ contains
         character(len=*), intent(in), optional :: color, label, linestyle, marker
         real(dp), intent(in), optional :: lw, alpha
 
+        call check_size_arg("polar", "lw", lw)
+        call check_unit_arg("polar", "alpha", alpha)
+
         call ensure_fig()
         call set_polar()
         call plot(theta, r, color=color, label=label, lw=lw, &
@@ -4322,6 +4501,9 @@ contains
         real(dp) :: px(4), py(4), rx(4), ry(4), a, ca, sa
         integer :: i
 
+        call check_size_arg("add_rectangle", "lw", lw)
+        call check_unit_arg("add_rectangle", "alpha", alpha)
+
         px = [0.0_dp, width, width, 0.0_dp]
         py = [0.0_dp, 0.0_dp, height, height]
         a = 0.0_dp
@@ -4341,6 +4523,10 @@ contains
         real(dp), intent(in), optional :: lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
+
+        call check_size_arg("add_circle", "lw", lw)
+        call check_unit_arg("add_circle", "alpha", alpha)
+
         call add_ellipse(xy, 2.0_dp*radius, 2.0_dp*radius, 0.0_dp, &
                          facecolor, edgecolor, lw, alpha, fill)
     end subroutine add_circle
@@ -4353,6 +4539,9 @@ contains
         integer, parameter :: N = 72
         real(dp) :: px(N), py(N), t, cx, cy, a, ca, sa
         integer :: i
+
+        call check_size_arg("add_ellipse", "lw", lw)
+        call check_unit_arg("add_ellipse", "alpha", alpha)
 
         a = 0.0_dp
         if (present(angle)) a = angle
@@ -4374,6 +4563,9 @@ contains
         character(len=*), intent(in), optional :: facecolor, edgecolor, hatch
         logical, intent(in), optional :: fill
         integer :: is
+
+        call check_size_arg("add_polygon", "lw", lw)
+        call check_unit_arg("add_polygon", "alpha", alpha)
 
         call ensure_fig()
         is = new_shape_series(SERIES_PATCH, x, y, facecolor, alpha=alpha)
@@ -4409,6 +4601,9 @@ contains
         real(dp) :: w, ln, ct, st, ax_(7), ay(7), u, v
         integer :: j
 
+        call check_size_arg("add_arrow", "lw", lw)
+        call check_unit_arg("add_arrow", "alpha", alpha)
+
         w = 1.0_dp
         if (present(width)) w = width
         ln = hypot(dx, dy)
@@ -4435,6 +4630,9 @@ contains
         logical, intent(in), optional :: fill
         integer :: is, j, np, nv
         integer :: v(len_trim(codes))
+
+        call check_size_arg("add_path", "lw", lw)
+        call check_unit_arg("add_path", "alpha", alpha)
 
         nv = len_trim(codes)
         np = 0
@@ -4509,6 +4707,8 @@ contains
         character(len=*), intent(in), optional :: coordinates, color, labelpos, labelcolor
         integer :: is
 
+        call check_size_arg("quiverkey", "fontsize", fontsize)
+
         call ensure_fig()
         do is = ax(cur_i)%n_series, 1, -1
             if (ax(cur_i)%series(is)%kind == SERIES_QUIVER) exit
@@ -4556,13 +4756,16 @@ contains
         real(dp) :: rad, pd, ld, off
         real(dp), allocatable :: v(:)
 
+        call check_size_arg("pie", "linewidth", linewidth)
+
         call ensure_fig()
         n = size(values)
         if (n <= 0) return
         ! A missing value is a wedge of nothing.
         allocate (v(n))
         v = merge(values, 0.0_dp, ieee_is_finite(values))
-        if (any(v < 0.0_dp) .or. sum(v) <= 0.0_dp) return
+        if (any(v < 0.0_dp)) call contract_error("pie: values must not be negative")
+        if (sum(v) <= 0.0_dp) return
 
         is = new_shape_series(SERIES_PIE, v, v)
         if (is < 1) return
@@ -4718,6 +4921,8 @@ contains
         logical :: dox, doy
         real(dp) :: d
 
+        call check_size_arg("tick_params", "labelsize", labelsize)
+
         call ensure_fig()
         dox = .true.
         doy = .true.
@@ -4801,6 +5006,10 @@ contains
     ! the drawn length. One value sets both axes, x= and y= one each.
     subroutine margins(m, x, y)
         real(dp), intent(in), optional :: m, x, y
+
+        call check_margin_arg("m", m)
+        call check_margin_arg("x", x)
+        call check_margin_arg("y", y)
         call ensure_fig()
         if (present(m)) then
             ax(cur_i)%xmargin = m
@@ -4870,7 +5079,8 @@ contains
         real(dp), intent(in) :: ratio
         character(len=*), intent(in), optional :: adjustable
         call ensure_fig()
-        if (ratio <= 0.0_dp) call contract_error("aspect ratio must be positive")
+        if (.not. ieee_is_finite(ratio) .or. ratio <= 0.0_dp) &
+            call contract_error("set_aspect: ratio must be finite and positive")
         ax(cur_i)%aspect = ratio
         ax(cur_i)%aspect_datalim = .false.
         if (present(adjustable)) then
@@ -5042,6 +5252,11 @@ contains
         character(len=*), intent(in), optional :: label, orientation
         real(dp), intent(in), optional :: fraction, pad, shrink, aspect
         real(dp) :: keep
+
+        call check_size_arg("colorbar", "fraction", fraction)
+        call check_finite_arg("colorbar", "pad", pad)
+        call check_size_arg("colorbar", "shrink", shrink)
+        call check_size_arg("colorbar", "aspect", aspect)
         call ensure_fig()
         if (.not. ax(cur_i)%has_cmap_src) return
         if (ax(cur_i)%cbar_on) return
@@ -5089,6 +5304,10 @@ contains
         real(dp), allocatable :: pos(:)
         integer :: is, n
 
+        call check_unit_arg("bar", "alpha", alpha)
+        call check_size_arg("bar", "linewidth", linewidth)
+        call check_size_arg("bar", "capsize", capsize)
+
         call ensure_fig()
         n = min(size(x), size(height))
         allocate (pos(n))
@@ -5128,6 +5347,10 @@ contains
         real(dp), intent(in), optional :: width, alpha, bottom(:), linewidth
         character(len=*), intent(in), optional :: color, label, edgecolor, hatch
         character(len=*), intent(in), optional :: colors(:)
+
+        call check_unit_arg("bar", "alpha", alpha)
+        call check_size_arg("bar", "linewidth", linewidth)
+
         call bar_num(category_positions(size(cats)), height, width, color, &
                      label, alpha, bottom, colors, edgecolor, linewidth, hatch)
         call xticks(category_positions(size(cats)), cats)
@@ -5179,6 +5402,8 @@ contains
         real(dp), intent(in), optional :: padding, fontsize
         integer :: i
 
+        call check_size_arg("bar_label", "fontsize", fontsize)
+
         call ensure_fig()
         do i = ax(cur_i)%n_series, 1, -1
             if (ax(cur_i)%series(i)%kind == SERIES_BAR .or. &
@@ -5210,6 +5435,12 @@ contains
         logical :: norm, cum, stk, horiz
         character(len=16) :: ht
 
+        call check_unit_arg("hist", "alpha", alpha)
+        call check_size_arg("hist", "rwidth", rwidth)
+        if (present(bin_edges)) then
+            if (.not. all(ieee_is_finite(bin_edges))) call contract_error("hist: bin_edges must be finite")
+        end if
+
         n = size(x)
         if (n <= 0) return
         norm = .false.
@@ -5232,8 +5463,15 @@ contains
             nb = 10
             if (present(bins)) nb = bins
             if (nb < 1) return
-            lo = minval(x)
-            hi = maxval(x)
+            ! Missing values are in no bin and do not stretch the range.
+            lo = huge(1.0_dp)
+            hi = -huge(1.0_dp)
+            do i = 1, n
+                if (.not. ieee_is_finite(x(i))) cycle
+                lo = min(lo, x(i))
+                hi = max(hi, x(i))
+            end do
+            if (lo > hi) return
             if (hi <= lo) then
                 lo = lo - 0.5_dp
                 hi = hi + 0.5_dp
@@ -5257,6 +5495,7 @@ contains
             widths(i) = edges(i + 1) - edges(i)
         end do
         do i = 1, n
+            if (.not. ieee_is_finite(x(i))) cycle
             if (x(i) < edges(1) .or. x(i) > edges(nb + 1)) cycle
             k = bin_of(x(i), edges, nb)
             if (present(weights)) then
@@ -5384,6 +5623,9 @@ contains
         character(len=*), intent(in), optional :: color, label, hatch, edgecolor
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:), interpolate
+
+        call check_unit_arg("fill_between", "alpha", alpha)
+
         call fill_core(.false., x, y1, y2, color, label, alpha, where, hatch, edgecolor, &
                        interpolate)
     end subroutine fill_between
@@ -5399,6 +5641,9 @@ contains
         character(len=*), intent(in), optional :: color, label, hatch, edgecolor
         real(dp), intent(in), optional :: alpha
         logical, intent(in), optional :: where(:), interpolate
+
+        call check_unit_arg("fill_betweenx", "alpha", alpha)
+
         call fill_core(.true., y, x1, x2, color, label, alpha, where, hatch, edgecolor, &
                        interpolate)
     end subroutine fill_betweenx
@@ -5552,6 +5797,8 @@ contains
         integer :: n, nl, k
         logical :: has_c, has_l
 
+        call check_unit_arg("stackplot", "alpha", alpha)
+
         call ensure_fig()
         n = min(size(x), size(y, 2))
         nl = size(y, 1)
@@ -5627,6 +5874,11 @@ contains
         integer :: is, n, mk, ls
         character(len=7) :: col
 
+        call check_size_arg("errorbar", "capsize", capsize)
+        call check_size_arg("errorbar", "elinewidth", elinewidth)
+        call check_size_arg("errorbar", "lw", lw)
+        call check_unit_arg("errorbar", "alpha", alpha)
+
         call ensure_fig()
         is = new_shape_series(SERIES_ERRORBAR, x, y, color, label, alpha)
         if (is < 1) return
@@ -5673,6 +5925,9 @@ contains
         real(dp), intent(in) :: y
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("axhline", "lw", lw)
+
         call add_ref_line(SERIES_HLINE, y, color, linestyle, lw, label)
     end subroutine axhline
 
@@ -5680,6 +5935,9 @@ contains
         real(dp), intent(in) :: x
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("axvline", "lw", lw)
+
         call add_ref_line(SERIES_VLINE, x, color, linestyle, lw, label)
     end subroutine axvline
 
@@ -5694,6 +5952,8 @@ contains
         real(dp), intent(in), optional :: lw
         real(dp) :: p2(2)
         integer :: is
+
+        call check_size_arg("axline", "lw", lw)
 
         call ensure_fig()
         if (present(xy2)) then
@@ -5739,6 +5999,9 @@ contains
         real(dp), intent(in) :: y(:), xmin, xmax
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("hlines", "lw", lw)
+
         call add_lines(SERIES_HLINES, y, xmin, xmax, color, linestyle, lw, label)
     end subroutine hlines
 
@@ -5746,6 +6009,9 @@ contains
         real(dp), intent(in) :: x(:), ymin, ymax
         character(len=*), intent(in), optional :: color, linestyle, label
         real(dp), intent(in), optional :: lw
+
+        call check_size_arg("vlines", "lw", lw)
+
         call add_lines(SERIES_VLINES, x, ymin, ymax, color, linestyle, lw, label)
     end subroutine vlines
 
@@ -5783,6 +6049,9 @@ contains
         real(dp), intent(in) :: ymin, ymax
         real(dp), intent(in), optional :: xmin, xmax, alpha
         character(len=*), intent(in), optional :: color, label
+
+        call check_unit_arg("axhspan", "alpha", alpha)
+
         call add_span(SERIES_HSPAN, ymin, ymax, xmin, xmax, color, alpha, label)
     end subroutine axhspan
 
@@ -5790,6 +6059,9 @@ contains
         real(dp), intent(in) :: xmin, xmax
         real(dp), intent(in), optional :: ymin, ymax, alpha
         character(len=*), intent(in), optional :: color, label
+
+        call check_unit_arg("axvspan", "alpha", alpha)
+
         call add_span(SERIES_VSPAN, xmin, xmax, ymin, ymax, color, alpha, label)
     end subroutine axvspan
 
@@ -5866,6 +6138,10 @@ contains
         character(len=*), intent(in), optional :: va, bbox_facecolor, bbox_edgecolor
         character(len=*), intent(in), optional :: transform, boxstyle
         real(dp), intent(in), optional :: fontsize, rotation, bbox_alpha, bbox_pad
+
+        call check_size_arg("text", "fontsize", fontsize)
+        call check_unit_arg("text", "bbox_alpha", bbox_alpha)
+
         call add_text(x, y, s, color, fontsize, ha, .false., 0.0_dp, 0.0_dp, &
                       fontweight, fontstyle, va, rotation, bbox_facecolor, &
                       bbox_edgecolor, bbox_alpha, bbox_pad, transform, &
@@ -5882,6 +6158,9 @@ contains
         character(len=*), intent(in), optional :: va
         real(dp), intent(in), optional :: fontsize, rotation
         integer :: it
+
+        call check_size_arg("figtext", "fontsize", fontsize)
+
         call add_text(x, y, s, color, fontsize, ha, .false., 0.0_dp, 0.0_dp, &
                       fontweight, fontstyle, va, rotation)
         it = ax(cur_i)%n_texts
@@ -5905,6 +6184,10 @@ contains
         real(dp), intent(in), optional :: arrowlw, shrink
         real(dp) :: xt, yt
         logical :: arrow
+
+        call check_size_arg("annotate", "fontsize", fontsize)
+        call check_unit_arg("annotate", "bbox_alpha", bbox_alpha)
+        call check_size_arg("annotate", "arrowlw", arrowlw)
 
         xt = x
         yt = y
@@ -6165,6 +6448,7 @@ contains
         character(len=:), allocatable :: data
         real(dp) :: saved_dpi
 
+        call check_size_arg("savefig", "pad_inches", pad_inches)
         select case (file_ext(filename))
         case ("svg", "pdf", "png", "eps")
         case default
@@ -6207,8 +6491,10 @@ contains
         end if
         call write_bytes(filename, data, local)
         if (local%ok()) return
+        ! Exit code 2, so that a script's caller can tell a file that could
+        ! not be written from a broken precondition, which exits with 1.
         write (error_unit, "(a)") "fplotlib: "//local%message
-        error stop 1
+        error stop 2
     end subroutine save_bytes
 
     ! ------------------------------------------------------------------
@@ -6290,7 +6576,7 @@ contains
 
         ! GIF counts delays in hundredths of a second and viewers treat 0 as
         ! "as fast as you like", so a frame never asks for less than one.
-        delay = max(1, nint(100.0_dp/rate))
+        delay = max(1, nint(min(100.0_dp/rate, 65535.0_dp)))
         if (file_ext(filename) == "gif") then
             call save_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
                                                  anim_pix(1:anim_len), delay, rep), status)
@@ -6299,7 +6585,7 @@ contains
             ! to hundredths of a second.
             call save_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
-                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep), status)
+                             max(1, nint(min(1000.0_dp/rate, 65535.0_dp))), 1000, rep), status)
         end if
         ! Frames that could not be written are kept, so that the caller can
         ! try another file name.
@@ -6313,11 +6599,22 @@ contains
         deallocate (anim_pix)
     end subroutine save_animation
 
-    subroutine show()
-        ! File backend. In LFortran Jupyter notebooks, prefer:
-        !   use lfortran_display
-        !   call display_data("image/svg+xml", render_svg())
-        call savefig("fplotlib_show.svg")
+    ! There is no window to show the figure in, so it goes to a file. A file
+    ! that cannot be written is returned in status when it is present, and
+    ! otherwise only reported: show is a convenience, not a step a script
+    ! depends on. In LFortran Jupyter notebooks, prefer:
+    !   use lfortran_display
+    !   call display_data("image/svg+xml", render_svg())
+    subroutine show(status)
+        type(status_t), intent(out), optional :: status
+        type(status_t) :: local
+
+        call savefig("fplotlib_show.svg", status=local)
+        if (present(status)) status = local
+        if (.not. local%ok()) then
+            if (.not. present(status)) write (error_unit, "(a)") "fplotlib: show: "//local%message
+            return
+        end if
         print *, "fplotlib: wrote fplotlib_show.svg"
         print *, "fplotlib: for Jupyter use display_data('image/svg+xml', render_svg())"
     end subroutine show
