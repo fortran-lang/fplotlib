@@ -3344,6 +3344,7 @@ contains
         call ensure_fig()
         n = min(size(x), size(y))
         ! A point with a missing coordinate is in no bin.
+        allocate (ok(n))
         ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
         if (.not. any(ok)) return
         nb = [10, 10]
@@ -3391,6 +3392,7 @@ contains
         call ensure_fig()
         n = min(size(x), size(y))
         ! A point with a missing coordinate is in no cell.
+        allocate (ok(n))
         ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
         if (.not. any(ok)) return
         nx = 100
@@ -4552,13 +4554,17 @@ contains
         logical, intent(in), optional :: counterclock
         integer :: is, i, n
         real(dp) :: rad, pd, ld, off
+        real(dp), allocatable :: v(:)
 
         call ensure_fig()
         n = size(values)
         if (n <= 0) return
-        if (any(values < 0.0_dp) .or. sum(values) <= 0.0_dp) return
+        ! A missing value is a wedge of nothing.
+        allocate (v(n))
+        v = merge(values, 0.0_dp, ieee_is_finite(values))
+        if (any(v < 0.0_dp) .or. sum(v) <= 0.0_dp) return
 
-        is = new_shape_series(SERIES_PIE, values, values)
+        is = new_shape_series(SERIES_PIE, v, v)
         if (is < 1) return
         allocate (ax(cur_i)%series(is)%pcolor(n))
         do i = 1, n
@@ -4600,12 +4606,12 @@ contains
             off = ax(cur_i)%series(is)%pexp(i)
             if (present(labels)) then
                 if (i <= size(labels)) &
-                    call add_pie_text(ax(cur_i)%series(is), values, i, labels(i), &
+                    call add_pie_text(ax(cur_i)%series(is), v, i, labels(i), &
                                       ld*rad, off*rad)
             end if
             if (present(autopct)) &
-                call add_pie_text(ax(cur_i)%series(is), values, i, &
-                                  pct_text(autopct, 100.0_dp*values(i)/sum(values)), &
+                call add_pie_text(ax(cur_i)%series(is), v, i, &
+                                  pct_text(autopct, 100.0_dp*v(i)/sum(v)), &
                                   pd*rad, off*rad)
         end do
 

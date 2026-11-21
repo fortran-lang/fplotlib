@@ -309,6 +309,7 @@ contains
             call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
             return
         end if
+        allocate (keep(size(x)))
         keep = ieee_is_finite(x) .and. ieee_is_finite(y)
         if (all(keep)) then
             call b%draw_markers(x, y, mx, my, mverbs, n_mverb, paint)
@@ -1131,6 +1132,9 @@ contains
         real(dp) :: t0, t1, dt, al
         type(paint_t) :: p
 
+        ! A wedge of a missing size, or about a missing centre, is not
+        ! drawn; its angle would not even give a number of segments.
+        if (.not. all(ieee_is_finite([cx, cy, rx, ry, a0, a1]))) return
         nseg = max(1, min(MAXSEG, int(abs(a1 - a0)/(0.5_dp*PI)) + 1))
         dt = (a1 - a0)/real(nseg, dp)
         ! y grows downwards on the canvas, so the sine term is subtracted.

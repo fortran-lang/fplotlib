@@ -16,6 +16,7 @@ module fplotlib_draw
     use fplotlib_svg
     use fplotlib_render
     use fplotlib_status, only: contract_error
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_backend_svg
     use fplotlib_backend_pdf
     use fplotlib_backend_eps
@@ -3302,34 +3303,30 @@ contains
         have = .false.
         do i = 1, a%n_series
             select case (a%series(i)%kind)
+            ! Missing values have no extent, as they have in 2D.
             case (SERIES_LINE3D, SERIES_SCATTER3D, SERIES_TRISURF)
                 if (a%series(i)%nolim) cycle
-                do k = 1, a%series(i)%n
-                    lo(1) = min(lo(1), a%series(i)%x(k))
-                    hi(1) = max(hi(1), a%series(i)%x(k))
-                    lo(2) = min(lo(2), a%series(i)%y(k))
-                    hi(2) = max(hi(2), a%series(i)%y(k))
-                    lo(3) = min(lo(3), a%series(i)%z(k))
-                    hi(3) = max(hi(3), a%series(i)%z(k))
-                end do
-                have = .true.
+                k = a%series(i)%n
+                call fold_finite(lo(1), hi(1), a%series(i)%x(1:k), a%series(i)%x(1:k), have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y(1:k), a%series(i)%y(1:k), have)
+                call fold_finite(lo(3), hi(3), a%series(i)%z(1:k), a%series(i)%z(1:k), have)
             case (SERIES_BAR3D)
-                lo(1) = min(lo(1), minval(a%series(i)%x))
-                hi(1) = max(hi(1), maxval(a%series(i)%x) + a%series(i)%d3x)
-                lo(2) = min(lo(2), minval(a%series(i)%y))
-                hi(2) = max(hi(2), maxval(a%series(i)%y) + a%series(i)%d3y)
-                lo(3) = min(lo(3), minval(a%series(i)%z))
-                hi(3) = max(hi(3), maxval(a%series(i)%z2))
-                have = .true.
+                call fold_finite(lo(1), hi(1), a%series(i)%x, a%series(i)%x + a%series(i)%d3x, have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y, a%series(i)%y + a%series(i)%d3y, have)
+                call fold_finite(lo(3), hi(3), a%series(i)%z, a%series(i)%z2, have)
             case (SERIES_SURFACE)
-                lo(1) = min(lo(1), minval(a%series(i)%x))
-                hi(1) = max(hi(1), maxval(a%series(i)%x))
-                lo(2) = min(lo(2), minval(a%series(i)%y))
-                hi(2) = max(hi(2), maxval(a%series(i)%y))
-                lo(3) = min(lo(3), minval(a%series(i)%zg))
-                hi(3) = max(hi(3), maxval(a%series(i)%zg))
-                have = .true.
+                call fold_finite(lo(1), hi(1), a%series(i)%x, a%series(i)%x, have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y, a%series(i)%y, have)
+                call fold_finite(lo(3), hi(3), reshape(a%series(i)%zg, [size(a%series(i)%zg)]), &
+                                 reshape(a%series(i)%zg, [size(a%series(i)%zg)]), have)
             end select
+        end do
+        ! An axis whose every value is missing gets the unit range.
+        do i = 1, 3
+            if (lo(i) > hi(i)) then
+                lo(i) = 0.0_dp
+                hi(i) = 1.0_dp
+            end if
         end do
         if (.not. have) then
             lo = 0.0_dp
@@ -3364,6 +3361,23 @@ contains
         if (a%ylim_set) lims(3:4) = [a%ymin_user, a%ymax_user]
         if (a%zlim_set) lims(5:6) = [a%zmin_user, a%zmax_user]
     end subroutine limits3d
+
+    ! Widens [lo, hi] to take in the finite values of low and high, the
+    ! lower and upper ends of what one series spans; have records that
+    ! there was something to take in.
+    pure subroutine fold_finite(lo, hi, low, high, have)
+        real(dp), intent(inout) :: lo, hi
+        real(dp), intent(in) :: low(:), high(:)
+        logical, intent(inout) :: have
+        integer :: k
+        do k = 1, size(low)
+            if (ieee_is_finite(low(k))) lo = min(lo, low(k))
+        end do
+        do k = 1, size(high)
+            if (ieee_is_finite(high(k))) hi = max(hi, high(k))
+        end do
+        have = .true.
+    end subroutine fold_finite
 
     ! A data point to device points, with the projected depth alongside.
     subroutine dev3(M, bl, bt, side, x, y, z, ux, uy, uz)
@@ -3600,6 +3614,7 @@ contains
         real(dp), intent(in) :: M(4, 4), bl, bt, side
         real(dp), allocatable :: px(:), py(:), pd(:)
         integer, allocatable :: idx(:)
+        logical, allocatable :: ok(:)
         real(dp) :: sat, lo, span, one(1), oney(1)
         integer :: i, k, n
         type(paint_t) :: p
@@ -3630,11 +3645,20 @@ contains
                 end do
                 call order_far_first(pd, n, idx)
                 ! Depth shading: the further a point is, the more it fades
-                ! into the background, down to three tenths opacity.
-                lo = minval(pd)
-                span = sqrt((maxval(px) - minval(px))**2 + (maxval(py) - minval(py))**2 &
-                            + (maxval(pd) - lo)**2)
+                ! into the background, down to three tenths opacity. A point
+                ! with a missing coordinate is not drawn and does not count.
+                allocate (ok(n))
+                ok = ieee_is_finite(px) .and. ieee_is_finite(py) .and. ieee_is_finite(pd)
+                if (.not. any(ok)) then
+                    deallocate (px, py, pd, idx, ok)
+                    cycle
+                end if
+                lo = minval(pd, mask=ok)
+                span = sqrt((maxval(px, mask=ok) - minval(px, mask=ok))**2 &
+                            + (maxval(py, mask=ok) - minval(py, mask=ok))**2 &
+                            + (maxval(pd, mask=ok) - lo)**2)
                 do k = 1, n
+                    if (.not. ok(idx(k))) cycle
                     sat = 1.0_dp
                     if (span > 0.0_dp) sat = 1.0_dp - (pd(idx(k)) - lo)/span
                     sat = max(0.3_dp, min(1.0_dp, sat))
@@ -3644,7 +3668,7 @@ contains
                                         a%series(i)%markersize, a%series(i)%color, &
                                         a%series(i)%alpha*sat)
                 end do
-                deallocate (px, py, pd, idx)
+                deallocate (px, py, pd, idx, ok)
             case (SERIES_SURFACE)
                 call render_surface(b, a%series(i), M, bl, bt, side)
             case (SERIES_TRISURF)

@@ -17,7 +17,7 @@ module test_missing
 
     public :: missing_data_check
 
-    integer, parameter :: NCASE = 44
+    integer, parameter :: NCASE = 48
 
 contains
 
@@ -107,6 +107,11 @@ contains
         case (43); call plot_trisurf(tx, ty, tz)
         ! Limits too close to tell apart are widened, not divided by.
         case (44); call plot(x, x); call xlim(2.0_dp, 2.0_dp); call ylim(0.0_dp, 1.0e-320_dp)
+        ! Nothing but missing data: no extent, and a colorbar with no range.
+        case (45); call boxplot([nan, nan, nan])
+        case (46); call scatter(x, x, cvals=[nan, nan, nan, nan, nan, nan]); call colorbar()
+        case (47); call pcolormesh(t(1:3), t(1:3), reshape([nan, nan, nan, inf], [2, 2])); call colorbar()
+        case (48); call scatter3d(y, y, y)
         end select
     end subroutine draw_case
 
