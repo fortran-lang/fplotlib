@@ -371,8 +371,10 @@ contains
         fig_h_in = FIG_H_DEFAULT
         fig_dpi = DPI_DEFAULT
         if (present(figsize)) then
-            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp)) &
-                call contract_error("figure: figsize must be finite and positive")
+            ! A billion inches is past any page and keeps every coordinate
+            ! well within what the renderer takes (MAX_COORD).
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp) .or. any(figsize > 1.0e9_dp)) &
+                call contract_error("figure: figsize must be positive and at most 1e9 inches")
             fig_w_in = figsize(1)
             fig_h_in = figsize(2)
         end if
@@ -483,8 +485,8 @@ contains
         call check_size_arg("rc", "linewidth", linewidth)
 
         if (present(figsize)) then
-            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp)) &
-                call contract_error("rc: figsize must be finite and positive")
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp) .or. any(figsize > 1.0e9_dp)) &
+                call contract_error("rc: figsize must be positive and at most 1e9 inches")
         end if
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
@@ -790,6 +792,9 @@ contains
         type(axes_t), allocatable :: tmp(:)
         integer :: rs, cs
 
+        call check_count_arg("subplot2grid", "rowspan", rowspan)
+        call check_count_arg("subplot2grid", "colspan", colspan)
+
         rs = 1
         cs = 1
         if (present(rowspan)) rs = max(1, rowspan)
@@ -894,6 +899,9 @@ contains
         logical, intent(in), optional :: sharex, sharey
         integer :: r, c
 
+        call check_count_arg("subplots", "nrows", nrows)
+        call check_count_arg("subplots", "ncols", ncols)
+
         call make_grid(nrows, ncols, sharex, sharey)
         allocate (axs(nrows, ncols))
         do r = 1, nrows
@@ -908,6 +916,9 @@ contains
         type(axes), allocatable, intent(out) :: axs(:)
         logical, intent(in), optional :: sharex, sharey
         integer :: i
+
+        call check_count_arg("subplots", "nrows", nrows)
+        call check_count_arg("subplots", "ncols", ncols)
 
         call make_grid(nrows, ncols, sharex, sharey)
         allocate (axs(nrows*ncols))
@@ -2054,6 +2065,7 @@ contains
         type(axes) :: h
 
         call check_size_arg("figlegend", "fontsize", fontsize)
+        call check_count_arg("figlegend", "ncol", ncol)
 
         call ensure_fig()
         n_before = n_ax
@@ -2089,6 +2101,7 @@ contains
 
         call check_size_arg("legend", "fontsize", fontsize)
         call check_finite_args("legend", "bbox_to_anchor", bbox_to_anchor)
+        call check_count_arg("legend", "ncol", ncol)
 
         call ensure_fig()
         ! matplotlib's legend(labels): the names are handed to the artists
@@ -2175,6 +2188,7 @@ contains
         logical :: dox, doy
         integer :: st, dec
 
+        call check_nonneg_arg("tick_format", "decimals", decimals)
         call check_finite_arg("tick_format", "whole", whole)
 
         call ensure_fig()
@@ -2211,6 +2225,7 @@ contains
         logical :: dox, doy
 
         call check_positive_arg("tick_locator", "base", base)
+        call check_count_arg("tick_locator", "nbins", nbins)
 
         call ensure_fig()
         call which_axis(axis, dox, doy)
@@ -2295,6 +2310,9 @@ contains
         character(len=*), intent(in), optional :: axis, prune
         integer, intent(in), optional :: nbins
         logical :: dox, doy
+
+        call check_count_arg("locator_params", "nbins", nbins)
+
         call ensure_fig()
         call which_axis(axis, dox, doy)
         if (present(nbins)) then
@@ -2439,6 +2457,29 @@ contains
         end if
     end subroutine check_positive_args
 
+    ! A count of bins, columns or ticks: at least one, as matplotlib
+    ! requires.
+    subroutine check_count_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v
+        if (.not. present(v)) return
+        if (v < 1) call contract_error(proc//": "//name//" must be at least 1, got "//int_to_str(v))
+    end subroutine check_count_arg
+
+    subroutine check_count_args(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v(:)
+        if (.not. present(v)) return
+        if (any(v < 1)) call contract_error(proc//": "//name//" must be at least 1")
+    end subroutine check_count_args
+
+    subroutine check_nonneg_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        integer, intent(in), optional :: v
+        if (.not. present(v)) return
+        if (v < 0) call contract_error(proc//": "//name//" must not be negative, got "//int_to_str(v))
+    end subroutine check_nonneg_arg
+
     ! Error bar lengths: never negative, as matplotlib requires, but a
     ! missing one only leaves its bar out.
     subroutine check_errors_arg(proc, name, v)
@@ -2552,6 +2593,7 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_count_arg("plot", "markevery", markevery)
 
         call ensure_fig()
         if (present(drawstyle)) then
@@ -2600,6 +2642,7 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_count_arg("plot", "markevery", markevery)
 
         do i = 1, size(ydata)
             idx(i) = real(i - 1, dp)
@@ -3203,6 +3246,10 @@ contains
         call check_size_arg("streamplot", "lw", lw)
         call check_size_arg("streamplot", "arrowsize", arrowsize)
 
+        ! Each unit of density is a 30 by 30 grid of cells to keep track of.
+        if (present(density)) then
+            if (density > 100.0_dp) call contract_error("streamplot: density must be at most 100")
+        end if
         call ensure_fig()
         nx = size(x)
         ny = size(y)
@@ -3614,6 +3661,7 @@ contains
         real(dp), allocatable :: xe(:), ye(:), h(:, :)
         logical, allocatable :: ok(:)
 
+        call check_count_args("hist2d", "bins", bins)
         call check_finite_arg("hist2d", "vmin", vmin)
         call check_finite_arg("hist2d", "vmax", vmax)
 
@@ -3690,6 +3738,9 @@ contains
         real(dp) :: hx(6), hy(6)
         real(dp), allocatable :: c1(:, :), c2(:, :)
         logical, allocatable :: ok(:)
+
+        call check_count_arg("hexbin", "gridsize", gridsize)
+        call check_nonneg_arg("hexbin", "mincnt", mincnt)
 
         call ensure_fig()
         n = min(size(x), size(y))
@@ -5672,6 +5723,7 @@ contains
         logical :: norm, cum, stk, horiz
         character(len=16) :: ht
 
+        call check_count_arg("hist", "bins", bins)
         call check_unit_arg("hist", "alpha", alpha)
         call check_finite_args("hist", "bin_edges", bin_edges)
         call check_size_arg("hist", "rwidth", rwidth)

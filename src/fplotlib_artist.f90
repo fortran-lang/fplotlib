@@ -19,7 +19,7 @@ module fplotlib_artist
     ! put_path's own bookkeeping.
     private :: finite_point, path_move, path_put
     private :: emit_path, far_path, grow_put, push_point, view_box, tame
-    private :: flatten_cubic, image_groups
+    private :: flatten_cubic, image_groups, set_along
 
 contains
 
@@ -258,11 +258,19 @@ contains
     ! seen: a filled contour is clipped as a polygon (Sutherland and
     ! Hodgman), a stroked one segment by segment (Liang and Barsky), so
     ! every line keeps its direction. A path inside the box is untouched.
-    subroutine view_box(b, bx0, bx1, by0, by1)
+    subroutine view_box(b, bx0, bx1, by0, by1, paint)
         class(renderer_t), intent(in) :: b
         real(dp), intent(out) :: bx0, bx1, by0, by1
+        type(paint_t), intent(in), optional :: paint
+        type(paint_t) :: p
         real(dp) :: m
-        m = 10.0_dp*max(b%width, b%height, 72.0_dp)
+        m = min(10.0_dp*max(b%width, b%height, 72.0_dp), 1.0e13_dp)
+        ! A stroke reaches past its line by half its width, and a mitred
+        ! corner further: an edge the clip makes must stay out of reach.
+        if (present(paint)) then
+            p = tame(paint)
+            if (p%stroked) m = m + p%line_width*max(1.5_dp, 0.5_dp*min(p%miter_limit, 20.0_dp))
+        end if
         bx0 = -m
         bx1 = b%width + m
         by0 = -m
@@ -292,39 +300,84 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
-        real(dp) :: bx0, bx1, by0, by1
-        real(dp), allocatable :: ox(:), oy(:)
+        real(dp) :: bx0, bx1, by0, by1, period
+        real(dp), allocatable :: ox(:), oy(:), al(:)
         integer, allocatable :: ov(:)
-        integer :: i, np, no, nv
+        integer :: i, np, no, nv, i0, i1, k0, k1
+        type(paint_t) :: p, pf, ps, pd
 
         np = 0
         do i = 1, n_verb
             if (verbs(i) == VERB_MOVE .or. verbs(i) == VERB_LINE) np = np + 1
             if (verbs(i) == VERB_CUBIC) np = np + 3
         end do
-        call view_box(b, bx0, bx1, by0, by1)
+        call view_box(b, bx0, bx1, by0, by1, paint)
         if (all(x(1:np) >= bx0 .and. x(1:np) <= bx1 .and. y(1:np) >= by0 .and. y(1:np) <= by1)) then
             call b%draw_path(x, y, verbs, n_verb, tame(paint))
             return
         end if
-        call far_path(x, y, verbs, n_verb, paint%filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
-        if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, tame(paint))
+        ! The fill is clipped as a polygon and the stroke as lines, apart:
+        ! the edges the clip adds to a polygon are not edges of the shape.
+        p = tame(paint)
+        if (p%filled) then
+            pf = p
+            pf%stroked = .false.
+            call far_path(x, y, verbs, n_verb, .true., bx0, bx1, by0, by1, ox, oy, ov, al, no, nv)
+            if (nv > 0) call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, pf)
+        end if
+        if (.not. p%stroked) return
+        ps = p
+        ps%filled = .false.
+        call far_path(x, y, verbs, n_verb, .false., bx0, bx1, by0, by1, ox, oy, ov, al, no, nv)
+        if (nv == 0) return
+        if (ps%n_dash == 0) then
+            call b%draw_path(ox(1:no), oy(1:no), ov(1:nv), nv, ps)
+            return
+        end if
+        ! A dashed line cut into pieces would start its pattern afresh at
+        ! each cut. Each piece goes out on its own instead, with the offset
+        ! of the pattern where it begins along the whole line.
+        period = sum(ps%dash(1:ps%n_dash))
+        if (mod(ps%n_dash, 2) == 1) period = 2.0_dp*period
+        k0 = 1
+        i0 = 1
+        do while (i0 <= nv)
+            i1 = i0 + 1
+            k1 = k0 + 1
+            do while (i1 <= nv)
+                if (ov(i1) == VERB_MOVE) exit
+                if (ov(i1) == VERB_LINE) k1 = k1 + 1
+                if (ov(i1) == VERB_CUBIC) k1 = k1 + 3
+                i1 = i1 + 1
+            end do
+            pd = ps
+            ! Beyond a quadrillion periods along, a double no longer knows
+            ! where in the pattern it is, and mod need not either.
+            pd%dash_offset = 0.0_dp
+            if (al(i0) < 1.0e15_dp*period) pd%dash_offset = mod(ps%dash_offset + mod(al(i0), period), period)
+            call b%draw_path(ox(k0:k1 - 1), oy(k0:k1 - 1), ov(i0:i1 - 1), i1 - i0, pd)
+            i0 = i1
+            k0 = k1
+        end do
     end subroutine emit_path
 
-    subroutine far_path(x, y, verbs, n_verb, filled, bx0, bx1, by0, by1, ox, oy, ov, no, nv)
+    ! al(v) is, for a move at verb v of the output, how far along the
+    ! original contour it starts, for a dash pattern to carry on from.
+    subroutine far_path(x, y, verbs, n_verb, filled, bx0, bx1, by0, by1, ox, oy, ov, al, no, nv)
         real(dp), intent(in) :: x(:), y(:), bx0, bx1, by0, by1
         integer, intent(in) :: verbs(:), n_verb
         logical, intent(in) :: filled
-        real(dp), allocatable, intent(out) :: ox(:), oy(:)
+        real(dp), allocatable, intent(out) :: ox(:), oy(:), al(:)
         integer, allocatable, intent(out) :: ov(:)
         integer, intent(out) :: no, nv
-        real(dp), allocatable :: cx(:), cy(:), qx(:), qy(:)
+        real(dp), allocatable :: cx(:), cy(:), qx(:), qy(:), cum(:)
         real(dp), allocatable :: sa(:, :)
         logical, allocatable :: sv(:), s0(:), s1(:)
         integer :: i, j, k, kc, v, m, nc, q, ns, first, t_i
         logical :: inside, pen, closed
 
-        allocate (ox(16), oy(16), ov(16))
+        allocate (ox(16), oy(16), ov(16), al(16))
+        al = 0.0_dp
         no = 0
         nv = 0
         k = 0
@@ -391,10 +444,26 @@ contains
                 else
                     ns = nc - 1
                     allocate (sa(4, max(ns, 1)), sv(max(ns, 1)), s0(max(ns, 1)), s1(max(ns, 1)))
+                    allocate (cum(max(ns, 1) + 1))
+                    cum(1) = 0.0_dp
                     do v = 1, ns
                         call clip_segment(cx(v), cy(v), cx(v + 1), cy(v + 1), bx0, bx1, by0, by1, &
                                           sa(1, v), sa(2, v), sa(3, v), sa(4, v), sv(v), s0(v), s1(v))
+                        cum(v + 1) = min(cum(v) + hypot(cx(v + 1) - cx(v), cy(v + 1) - cy(v)), huge(1.0_dp))
                     end do
+                    ! Not cut anywhere: the contour as it was, closed.
+                    if (closed .and. all(sv(1:ns)) .and. .not. any(s0(1:ns)) .and. .not. any(s1(1:ns))) then
+                        call grow_put(ox, oy, ov, no, nv, VERB_MOVE, cx(1:1), cy(1:1))
+                        call set_along(al, nv, 0.0_dp)
+                        do v = 2, ns
+                            call grow_put(ox, oy, ov, no, nv, VERB_LINE, cx(v:v), cy(v:v))
+                        end do
+                        call grow_put(ox, oy, ov, no, nv, VERB_CLOSE, x(1:0), y(1:0))
+                        deallocate (sa, sv, s0, s1, cum, cx, cy)
+                        k = k + kc
+                        i = j
+                        cycle
+                    end if
                     ! Where to begin: the first segment after a break, if the
                     ! contour closes on itself.
                     first = 1
@@ -417,17 +486,23 @@ contains
                         end if
                         if (.not. (pen .and. .not. s0(v))) then
                             call grow_put(ox, oy, ov, no, nv, VERB_MOVE, sa(1:1, v), sa(2:2, v))
+                            ! Pieces after the wrap of a closed contour come
+                            ! once round it later.
+                            call set_along(al, nv, min(cum(v) + hypot(sa(1, v) - cx(v), sa(2, v) - cy(v)) &
+                                                       + merge(cum(ns + 1), 0.0_dp, v < first), huge(1.0_dp)))
                         end if
                         call grow_put(ox, oy, ov, no, nv, VERB_LINE, sa(3:3, v), sa(4:4, v))
                         pen = .not. s1(v)
                     end do
-                    deallocate (sa, sv, s0, s1)
+                    deallocate (sa, sv, s0, s1, cum)
                 end if
                 deallocate (cx, cy)
             end if
             k = k + kc
             i = j
         end do
+        ! Every verb has its entry, zero where nothing set one.
+        if (nv > size(al)) call set_along(al, nv, 0.0_dp)
     end subroutine far_path
 
     ! Appends the cubic from (px(1), py(1)) to (px(4), py(4)) to the
@@ -469,6 +544,20 @@ contains
         call flatten_cubic(cx, cy, nc, lx, ly, bx0, bx1, by0, by1, depth + 1)
         call flatten_cubic(cx, cy, nc, rx, ry, bx0, bx1, by0, by1, depth + 1)
     end subroutine flatten_cubic
+
+    subroutine set_along(al, nv, d)
+        real(dp), allocatable, intent(inout) :: al(:)
+        integer, intent(in) :: nv
+        real(dp), intent(in) :: d
+        real(dp), allocatable :: t(:)
+        if (nv > size(al)) then
+            allocate (t(2*nv))
+            t = 0.0_dp
+            t(1:size(al)) = al
+            call move_alloc(t, al)
+        end if
+        al(nv) = d
+    end subroutine set_along
 
     subroutine grow_put(ox, oy, ov, no, nv, verb, px, py)
         real(dp), allocatable, intent(inout) :: ox(:), oy(:)
@@ -559,11 +648,13 @@ contains
         real(dp) :: bx0, bx1, by0, by1, x0, x1, y0, y1
 
         if (.not. all(ieee_is_finite([x, y, w, h]))) return
-        call view_box(b, bx0, bx1, by0, by1)
+        call view_box(b, bx0, bx1, by0, by1, paint)
         if (x >= bx0 .and. y >= by0 .and. x + w <= bx1 .and. y + h <= by1) then
             call b%draw_rect(x, y, w, h, tame(paint), radius)
             return
         end if
+        ! Cut to the box. The box lies further out than the stroke reaches,
+        ! so the sides the cut makes cannot be seen.
         x0 = max(x, bx0)
         y0 = max(y, by0)
         x1 = min(x + w, bx1)
@@ -582,7 +673,7 @@ contains
         integer :: i, n
 
         if (.not. all(ieee_is_finite([cx, cy, r]))) return
-        call view_box(b, bx0, bx1, by0, by1)
+        call view_box(b, bx0, bx1, by0, by1, paint)
         if (cx - r >= bx0 .and. cx + r <= bx1 .and. cy - r >= by0 .and. cy + r <= by1) then
             call b%draw_circle(cx, cy, r, tame(paint))
             return
@@ -620,7 +711,7 @@ contains
         end if
         allocate (keep(size(x)))
         keep = ieee_is_finite(x) .and. ieee_is_finite(y)
-        call view_box(b, bx0, bx1, by0, by1)
+        call view_box(b, bx0, bx1, by0, by1, paint)
         e = max(maxval(abs(mx)), maxval(abs(my)), 0.0_dp)
         if (e > bx1 - bx0) then
             ! A marker larger than the box itself is drawn as the path it is.

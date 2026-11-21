@@ -24,6 +24,7 @@ module test_missing
     ! a file format makes of it.
     type, extends(renderer_t) :: extent_renderer_t
         real(dp) :: far = 0.0_dp
+        real(dp) :: widest = 0.0_dp   ! the widest stroke
     contains
         procedure :: open_canvas_impl => ext_open
         procedure :: close_canvas_impl => ext_close
@@ -35,7 +36,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 71
+    integer, parameter :: NCASE = 74
 
 contains
 
@@ -167,6 +168,14 @@ contains
                                                      edgecolor="k", lw=8.0_dp)
         case (70); call plot(x, x)
         case (71); call plot(x, x); call text(2.0_dp, 2.0_dp, "big", fontsize=800.0_dp)
+        ! A stroke wider than the clip margin, a figure of a hundred million
+        ! inches with far data, and a dashed line leaving the view and back.
+        case (72); call pie([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], startangle=45.0_dp, radius=1.0e4_dp, &
+                            linewidth=2.0e4_dp, edgecolor="k")
+            call xlim(5000.0_dp, 5001.0_dp); call ylim(1.0_dp, 2.0_dp)
+        case (73); call close(); call figure(figsize=[1.0e8_dp, 1.0_dp])
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e30_dp]); call ylim(0.0_dp, 1.0_dp)
+        case (74); call plot(t(1:3), [0.0_dp, 1.0e7_dp, 0.5_dp], linestyle="--"); call ylim(0.0_dp, 1.0_dp)
         end select
     end subroutine draw_case
 
@@ -185,7 +194,9 @@ contains
             svg = render_svg()
             pdf = render_pdf()
             eps = render_eps()
-            png = render_png()
+            ! A figure a hundred million inches wide has no PNG.
+            png = "-"
+            if (k /= 73) png = render_png()
         end if
         if (len(png) == 0 .or. len(pdf) == 0) then
             print "(a, i0, a)", "missing data case ", k, ": empty output"
@@ -196,9 +207,10 @@ contains
             nfail = nfail + 1
         end if
         ! Everything drawn lies within the clip box around the canvas, ten
-        ! canvases wide, however far off the data was.
+        ! canvases wide and widened by what a stroke reaches, however far
+        ! off the data was.
         call render_figure(r)
-        if (r%far > 1.0e5_dp) then
+        if (r%far > 12.0_dp*max(r%width, r%height, 72.0_dp) + 1.0e5_dp + 6.0_dp*r%widest) then
             print "(a, i0, a, es10.3)", "missing data case ", k, ": drew as far out as ", r%far
             nfail = nfail + 1
         end if
@@ -256,6 +268,7 @@ contains
         integer, intent(in), optional :: bg_rgb(3)
         real(dp), intent(in), optional :: bg_alpha, x0, y0
         self%far = 0.0_dp
+        self%widest = 0.0_dp
     end subroutine ext_open
 
     subroutine ext_close(self)
@@ -275,6 +288,7 @@ contains
         type(paint_t), intent(in) :: paint
         call see(self, x)
         call see(self, y)
+        if (paint%stroked) self%widest = max(self%widest, paint%line_width)
     end subroutine ext_path
 
     subroutine ext_rect(self, x, y, w, h, paint, radius)

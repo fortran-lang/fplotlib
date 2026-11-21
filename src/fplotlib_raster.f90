@@ -764,11 +764,19 @@ contains
         type(pathbuf_t) :: out
         real(dp), allocatable :: dx(:), dy(:)
         integer :: s, b, n, nd
-        real(dp) :: hw
+        real(dp) :: hw, cover
 
         hw = 0.5_dp*paint%line_width*cv%scale
         if (hw <= 0.0_dp) return
         call pb_reset(out)
+        ! Butt ends add nothing to a dash, so a pattern too fine to draw
+        ! covers the line in the proportion of its dashes; round and square
+        ! ends, a pen's width long, close the gaps of so fine a pattern.
+        cover = 1.0_dp
+        if (paint%n_dash > 0 .and. paint%cap == CAP_BUTT) then
+            if (sum(paint%dash(1:paint%n_dash))*cv%scale < 0.5_dp) &
+                cover = on_fraction(paint)
+        end if
 
         do s = 1, pb%ns
             b = pb%sub_beg(s)
@@ -776,7 +784,7 @@ contains
             if (n < 1) cycle
             call gather(pb, b, n, pb%sub_closed(s), dx, dy, nd)
             ! A pattern shorter than half a pixel cannot be told from a
-            ! solid line, and would take forever to walk.
+            ! line of its average cover, and would take forever to walk.
             if (paint%n_dash > 0 .and. sum(paint%dash(1:max(paint%n_dash, 1)))*cv%scale >= 0.5_dp) then
                 call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, &
                                    -hw - 2.0_dp, real(cv%w, dp) + hw + 2.0_dp, &
@@ -786,8 +794,25 @@ contains
             end if
         end do
 
-        call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha, paint%clip)
+        call fill_path_buf(cv, out, paint%stroke_rgb, paint%stroke_alpha*cover, paint%clip)
     end subroutine stroke_path_buf
+
+    ! The share of a dash pattern that is dash rather than gap.
+    pure function on_fraction(paint) result(f)
+        type(paint_t), intent(in) :: paint
+        real(dp) :: f, on, total
+        integer :: i
+        on = 0.0_dp
+        total = 0.0_dp
+        do i = 1, paint%n_dash
+            total = total + paint%dash(i)
+            if (mod(i, 2) == 1) on = on + paint%dash(i)
+        end do
+        ! An odd count repeats with dash and gap swapped, half and half.
+        if (mod(paint%n_dash, 2) == 1) on = 0.5_dp*total
+        f = 1.0_dp
+        if (total > 0.0_dp) f = on/total
+    end function on_fraction
 
     subroutine gather(pb, b, n, closed, dx, dy, nd)
         type(pathbuf_t), intent(in) :: pb
@@ -830,6 +855,8 @@ contains
         rem = paint%dash(1)*scale
         on = .true.
         nr = 0
+        ! The pattern begins dash_offset into itself, as in SVG and PDF.
+        if (paint%dash_offset > 0.0_dp) call dash_advance(paint%dash_offset*scale, paint, scale, di, rem, on)
 
         do i = 1, n - 1
             sx = px(i); sy = py(i)
@@ -927,7 +954,14 @@ contains
         ! pattern repeats only after going round twice.
         period = sum(paint%dash(1:paint%n_dash))*scale
         if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
-        if (period > 0.0_dp) left = mod(left, period)
+        if (period > 0.0_dp) then
+            if (left < 1.0e15_dp*period) then
+                left = mod(left, period)
+            else
+                ! Too far along for a double to place within the pattern.
+                left = 0.0_dp
+            end if
+        end if
         do while (left >= rem)
             left = left - rem
             on = .not. on

@@ -4594,8 +4594,8 @@ contains
             if (lower(trim(bbox_inches)) == "tight") then
                 bpad = 0.1_dp
                 if (present(pad_inches)) then
-                    if (.not. ieee_is_finite(pad_inches)) &
-                        call contract_error("savefig: pad_inches must be finite")
+                    if (.not. ieee_is_finite(pad_inches) .or. abs(pad_inches) > 1.0e9_dp) &
+                        call contract_error("savefig: pad_inches must be finite and at most 1e9 inches")
                     bpad = pad_inches
                 end if
                 bpad = bpad*PT_PER_IN

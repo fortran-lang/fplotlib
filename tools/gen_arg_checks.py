@@ -24,6 +24,12 @@ Each real argument is one of:
   dashes    finite, >= 0, not all zero        (dash patterns, arrays only)
   data      may be missing: NaN is left out of the picture
   own       checked by hand in the procedure itself
+
+and each integer argument one of:
+  count     at least 1                         (bins, columns, grid sizes)
+  nonneg    not negative                       (decimals, minimum counts)
+  any       any value
+  own       checked by hand in the procedure itself
 """
 import re, sys
 p = 'src/fplotlib.f90'
@@ -91,10 +97,19 @@ DATA_ARRAYS = {
     'yrange', 'dz', 'theta', 'r', 'values', 'y1', 'y2', 'x1', 'x2', 'height',
     'bottom', 'width', 'left', 'ydata', 'weights', 'xy', 'xy1', 'xy2',
 }
+INTS = {
+    'ncol': 'count', 'nbins': 'count', 'markevery': 'count', 'bins': 'count',
+    'gridsize': 'count', 'nrows': 'count', 'ncols': 'count', 'colspan': 'count',
+    'rowspan': 'count', 'mincnt': 'nonneg', 'decimals': 'nonneg',
+    'scilimits': 'any', 'ij': 'any', 'm': 'own', 'n': 'own', 'i': 'own',
+    'num': 'own', 'loc': 'own', 'shape': 'own',
+}
+IHELPER = {'count': 'check_count_arg', 'nonneg': 'check_nonneg_arg'}
+IAHELPER = {'count': 'check_count_args'}
 HELPER = {'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
           'finite': 'check_finite_arg', 'margin': 'check_margin_arg'}
 AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
-GEN = re.compile(r'^        call check_(unit|size|finite|positive|margin|dashes|errors)_args?\("')
+GEN = re.compile(r'^        call check_(unit|size|finite|positive|margin|dashes|errors|count|nonneg)_args?\("')
 
 # Drop what an earlier run generated, and the blank line it added.
 out = []
@@ -156,6 +171,18 @@ while i < len(L):
         decls.append(L[i]); out.append(L[i]); i += 1
     calls = []
     for d in decls:
+        if d.strip().startswith('integer') and 'intent(in)' in d:
+            for part in split_names(d):
+                arg = part.split('(')[0].strip()
+                kind = INTS.get(arg)
+                if kind is None:
+                    unknown.append((user, arg)); continue
+                if kind in ('any', 'own'): continue
+                if '(' in part:
+                    calls.append(f'        call {IAHELPER[kind]}("{user}", "{arg}", {arg})')
+                else:
+                    calls.append(f'        call {IHELPER[kind]}("{user}", "{arg}", {arg})')
+            continue
         if not d.strip().startswith('real(dp)') or 'intent(in)' not in d:
             continue
         opt = 'optional' in d

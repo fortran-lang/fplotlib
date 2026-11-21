@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 23
+    integer, parameter :: NCASE = 26
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=64) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -37,7 +37,7 @@ module test_contract
         "fplotlib: xlim: limits must be finite", &
         "fplotlib: plot: alpha must be in [0, 1], got 1.5", &
         "fplotlib: scatter: linewidths must be finite and nonnegative", &
-        "fplotlib: figure: figsize must be finite and positive", &
+        "fplotlib: figure: figsize must be positive and at most 1e9 inches", &
         "fplotlib: subplots_adjust: left must be finite", &
         "fplotlib: pie: values must not be negative", &
         "fplotlib: scatter: s must be finite and nonnegative", &
@@ -45,7 +45,10 @@ module test_contract
         "fplotlib: plot: dashes must not be all zero", &
         "fplotlib: tick_params: rotation must be finite", &
         "fplotlib: plot: dashes must be finite and nonnegative", &
-        "fplotlib: errorbar: yerr must not be negative"]
+        "fplotlib: errorbar: yerr must not be negative", &
+        "fplotlib: figure: figsize must be positive and at most 1e9 inches", &
+        "fplotlib: hist: bins must be at least 1, got 0", &
+        "fplotlib: streamplot: density must be at most 100"]
 
 contains
 
@@ -119,6 +122,13 @@ contains
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[nan, 1.0_dp])
         case (23)
             call errorbar([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], yerr=[0.1_dp, -0.1_dp])
+        case (24)
+            call figure(figsize=[1.0e13_dp, 1.0_dp])
+        case (25)
+            call hist([1.0_dp, 2.0_dp], bins=0)
+        case (26)
+            call streamplot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), &
+                            reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), density=1000.0_dp)
         end select
     end subroutine contract_case
 
