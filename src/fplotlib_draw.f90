@@ -15,6 +15,7 @@ module fplotlib_draw
     use fplotlib_ticks
     use fplotlib_svg
     use fplotlib_render
+    use fplotlib_status, only: contract_error
     use fplotlib_backend_svg
     use fplotlib_backend_pdf
     use fplotlib_backend_eps
@@ -4559,7 +4560,7 @@ contains
                 vw = vw - vx + bpad
                 vh = vh - vy + bpad
             else if (len_trim(bbox_inches) > 0) then
-                error stop "fplotlib: bbox_inches must be 'tight'"
+                call contract_error("bbox_inches must be 'tight'")
             end if
         end if
 
@@ -4641,19 +4642,5 @@ contains
         call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
         png = r%bytes()
     end function render_png
-
-    pure function lower(s) result(t)
-        character(len=*), intent(in) :: s
-        character(len=len(s)) :: t
-        integer :: i, c
-        do i = 1, len(s)
-            c = iachar(s(i:i))
-            if (c >= iachar("A") .and. c <= iachar("Z")) then
-                t(i:i) = achar(c + 32)
-            else
-                t(i:i) = s(i:i)
-            end if
-        end do
-    end function lower
 
 end module fplotlib_draw

@@ -1,5 +1,6 @@
 ! Shared file output for plots and animations.
 module fplotlib_io
+    use fplotlib_style, only: lower
     use fplotlib_status
     implicit none
     private
@@ -7,21 +8,18 @@ module fplotlib_io
 
 contains
 
-    ! A filename without an extension selects SVG.
+    ! The extension, in lower case, picks the format, as it does in
+    ! matplotlib. A name with no extension at all is taken as SVG.
     function file_ext(filename) result(ext)
         character(len=*), intent(in) :: filename
         character(len=:), allocatable :: ext
-        integer :: dot, slash, i, c
+        integer :: dot, slash
         dot = index(filename, ".", back=.true.)
         slash = max(index(filename, "/", back=.true.), index(filename, achar(92), back=.true.))
         if (dot <= slash + 1) then
             ext = "svg"
         else
-            ext = filename(dot + 1:len_trim(filename))
-            do i = 1, len(ext)
-                c = iachar(ext(i:i))
-                if (c >= iachar("A") .and. c <= iachar("Z")) ext(i:i) = achar(c + 32)
-            end do
+            ext = lower(filename(dot + 1:len_trim(filename)))
         end if
     end function file_ext
 
@@ -33,20 +31,32 @@ contains
         open (newunit=u, file=trim(filename), status="replace", action="write", &
               form="unformatted", access="stream", iostat=ios, iomsg=message)
         if (ios /= 0) then
-            call status%set(ERROR_IO, "Cannot open '"//trim(filename)//"': "//trim(message))
+            call status%set(ERROR_IO, io_message("cannot open", filename, message))
             return
         end if
         if (len(data) > 0) then
             write (u, iostat=ios, iomsg=message) data
             if (ios /= 0) then
-                call status%set(ERROR_IO, "Cannot write '"//trim(filename)//"': "//trim(message))
+                call status%set(ERROR_IO, io_message("cannot write", filename, message))
                 close (u, iostat=close_ios, iomsg=close_message)
                 if (close_ios /= 0) status%message = status%message//"; close failed: "//trim(close_message)
                 return
             end if
         end if
         close (u, iostat=ios, iomsg=message)
-        if (ios /= 0) call status%set(ERROR_IO, "Cannot close '"//trim(filename)//"': "//trim(message))
+        if (ios /= 0) call status%set(ERROR_IO, io_message("cannot close", filename, message))
     end subroutine write_bytes
+
+    ! The compiler's message, with the file name in front unless the
+    ! message already names it, as gfortran's does.
+    function io_message(what, filename, message) result(m)
+        character(len=*), intent(in) :: what, filename, message
+        character(len=:), allocatable :: m
+        if (index(message, trim(filename)) > 0) then
+            m = trim(message)
+        else
+            m = what//" '"//trim(filename)//"': "//trim(message)
+        end if
+    end function io_message
 
 end module fplotlib_io

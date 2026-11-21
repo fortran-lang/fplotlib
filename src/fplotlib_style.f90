@@ -37,6 +37,7 @@ module fplotlib_style
     public :: default_linewidth
     public :: default_markersize
     public :: utf8_next, utf8_char
+    public :: lower
 
     real(dp), parameter :: default_linewidth = 1.5_dp
     real(dp), parameter :: default_markersize = 6.0_dp
@@ -258,5 +259,20 @@ contains
             linestyle = LINE_SOLID
         end if
     end subroutine parse_fmt
+
+    ! s with ASCII capitals made lower case.
+    pure function lower(s) result(t)
+        character(len=*), intent(in) :: s
+        character(len=len(s)) :: t
+        integer :: i, c
+        do i = 1, len(s)
+            c = iachar(s(i:i))
+            if (c >= iachar("A") .and. c <= iachar("Z")) then
+                t(i:i) = achar(c + 32)
+            else
+                t(i:i) = s(i:i)
+            end if
+        end do
+    end function lower
 
 end module fplotlib_style

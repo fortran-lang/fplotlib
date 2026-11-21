@@ -24,7 +24,6 @@ fplotlib_png
 fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
-fplotlib_render_checks
 fplotlib_scale
 fplotlib_state
 fplotlib_status

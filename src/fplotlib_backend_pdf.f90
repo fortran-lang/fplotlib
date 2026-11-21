@@ -21,7 +21,6 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
-    use fplotlib_render_checks
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
@@ -34,9 +33,6 @@ module fplotlib_backend_pdf
     private
 
     public :: pdf_renderer_t
-
-    integer, parameter :: MAX_ALPHA = 64
-    integer, parameter :: MAX_IMG = 16
 
     ! An image already compressed and ready to become an XObject. The samples
     ! are kept as the deflated stream rather than as pixels because that is
@@ -58,24 +54,23 @@ module fplotlib_backend_pdf
         real(dp) :: x0 = 0.0_dp, y0 = 0.0_dp
         ! Distinct alpha pairs, each of which becomes an /ExtGState.
         integer :: n_alpha = 0
-        real(dp) :: alpha_fill(MAX_ALPHA) = 1.0_dp
-        real(dp) :: alpha_stroke(MAX_ALPHA) = 1.0_dp
+        real(dp), allocatable :: alpha_fill(:), alpha_stroke(:)
         logical :: clip_open = .false.
         type(clip_t) :: cur_clip
         integer :: n_img = 0
-        type(pdf_image_t) :: img(MAX_IMG)
+        type(pdf_image_t), allocatable :: img(:)
         ! The glyphs the page has drawn, and the fonts they went into.
         type(t3set_t) :: t3
     contains
-        procedure :: open_canvas => pdf_open_canvas
-        procedure :: close_canvas => pdf_close_canvas
-        procedure :: bytes => pdf_bytes
-        procedure :: draw_path => pdf_draw_path
-        procedure :: draw_rect => pdf_draw_rect
-        procedure :: draw_circle => pdf_draw_circle
-        procedure :: draw_markers => pdf_draw_markers
-        procedure :: draw_glyphs => pdf_draw_glyphs
-        procedure :: draw_image => pdf_draw_image
+        procedure :: open_canvas_impl => pdf_open_canvas
+        procedure :: close_canvas_impl => pdf_close_canvas
+        procedure :: bytes_impl => pdf_bytes
+        procedure :: draw_path_impl => pdf_draw_path
+        procedure :: draw_rect_impl => pdf_draw_rect
+        procedure :: draw_circle_impl => pdf_draw_circle
+        procedure :: draw_markers_impl => pdf_draw_markers
+        procedure :: draw_glyphs_impl => pdf_draw_glyphs
+        procedure :: draw_image_impl => pdf_draw_image
     end type pdf_renderer_t
 
 
@@ -137,14 +132,24 @@ contains
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: fa, sa
         integer :: id, i
-        id = 0
+        real(dp), allocatable :: grown(:)
+
         do i = 1, self%n_alpha
             if (self%alpha_fill(i) == fa .and. self%alpha_stroke(i) == sa) then
                 id = i
                 return
             end if
         end do
-        if (self%n_alpha >= MAX_ALPHA) return
+        if (.not. allocated(self%alpha_fill)) then
+            allocate (self%alpha_fill(16), self%alpha_stroke(16))
+        else if (self%n_alpha == size(self%alpha_fill)) then
+            allocate (grown(2*self%n_alpha))
+            grown(1:self%n_alpha) = self%alpha_fill
+            call move_alloc(grown, self%alpha_fill)
+            allocate (grown(2*self%n_alpha))
+            grown(1:self%n_alpha) = self%alpha_stroke
+            call move_alloc(grown, self%alpha_stroke)
+        end if
         self%n_alpha = self%n_alpha + 1
         self%alpha_fill(self%n_alpha) = fa
         self%alpha_stroke(self%n_alpha) = sa
@@ -227,11 +232,6 @@ contains
         real(dp), intent(in), optional :: x0, y0
         type(paint_t) :: p
 
-        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
-        self%has_output = .false.
-        self%width = width
-        self%height = height
-        self%is_open = .true.
         self%w = width
         self%h = height
         self%x0 = 0.0_dp
@@ -295,9 +295,6 @@ contains
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
-        call check_open(self)
-        call check_path(x, y, verbs, n_verb, paint)
-        if (n_verb <= 0) return
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
         call end_paint(self, paint)
@@ -309,8 +306,6 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: radius
 
-        call check_open(self)
-        call check_rect(x, y, w, h, paint, radius)
         call begin_paint(self, paint)
         ! Rounded corners are rare enough that they go through the general
         ! path; the plain case gets the single "re" operator.
@@ -329,8 +324,6 @@ contains
         real(dp) :: x(13), y(13), k
         integer :: v(6)
 
-        call check_open(self)
-        call check_rect(cx, cy, r, r, paint)
         k = r*0.5522847498307933_dp
         x = [cx + r, cx + r, cx + k, cx, cx - k, cx - r, cx - r, cx - r, &
              cx - k, cx, cx + k, cx + r, cx + r]
@@ -351,11 +344,6 @@ contains
         type(paint_t), intent(in) :: paint
         integer :: i
 
-        call check_open(self)
-        if (size(x) /= size(y)) call contract_error("markers: inconsistent coordinate counts")
-        call check_finite(x)
-        call check_finite(y)
-        call check_path(mx, my, mverbs, n_mverb, paint)
         do i = 1, size(x)
             call pdf_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
         end do
@@ -377,11 +365,6 @@ contains
         logical :: open
         character(len=1) :: eol
 
-        call check_open(self)
-        call check_finite([x, y, angle])
-        call check_paint(paint)
-        call check_glyphs(run)
-        if (run%n == 0) return
         eol = new_line("a")
         pp = paint
         pp%stroked = .false.
@@ -460,12 +443,9 @@ contains
         integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         integer, allocatable :: rgb(:), a(:)
+        type(pdf_image_t), allocatable :: grown(:)
         integer :: i, j, k, id
         logical :: opaque
-
-        call check_open(self)
-        call check_image(x, y, w, h, rgba, nx, ny, paint)
-        if (nx < 1 .or. ny < 1 .or. self%n_img >= MAX_IMG) return
 
         allocate (rgb(3*nx*ny), a(nx*ny))
         k = 0
@@ -479,6 +459,15 @@ contains
             end do
         end do
 
+        if (.not. allocated(self%img)) then
+            allocate (self%img(4))
+        else if (self%n_img == size(self%img)) then
+            allocate (grown(2*self%n_img))
+            do i = 1, self%n_img
+                grown(i) = self%img(i)
+            end do
+            call move_alloc(grown, self%img)
+        end if
         self%n_img = self%n_img + 1
         id = self%n_img
         self%img(id)%w = nx
@@ -509,12 +498,10 @@ contains
         class(pdf_renderer_t), intent(inout) :: self
         type(svg_builder) :: f
         character(len=:), allocatable :: content, res, gs, xo, ft
-        integer, allocatable :: off(:), font_obj(:)
+        integer, allocatable :: off(:), font_obj(:), img_obj(:), mask_obj(:)
         integer :: nobj, i, pos, xref_pos
-        integer :: img_obj(MAX_IMG), mask_obj(MAX_IMG)
         character(len=1) :: eol
 
-        call check_open(self)
         eol = new_line("a")
         content = builder_get(self%c)
 
@@ -538,6 +525,7 @@ contains
             ft = ft//"/T"//int_str(i)//" "//int_str(font_obj(i))//" 0 R "
         end do
         xo = ""
+        allocate (img_obj(self%n_img), mask_obj(self%n_img))
         do i = 1, self%n_img
             nobj = nobj + 1
             img_obj(i) = nobj
@@ -628,8 +616,6 @@ contains
         call emit(f, pos, "startxref"//eol//int_str(xref_pos)//eol//"%%EOF"//eol)
 
         self%out = builder_get(f)
-        self%is_open = .false.
-        self%has_output = .true.
     end subroutine pdf_close_canvas
 
     ! One Type 3 font: the dictionary at object obj, its ToUnicode map at
@@ -754,14 +740,7 @@ contains
         class(pdf_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
 
-        if (.not. self%has_output .or. self%is_open) then
-            call contract_error("renderer: no finished encoded output")
-        end if
-        if (allocated(self%out)) then
-            s = self%out
-        else
-            s = ""
-        end if
+        s = self%out
     end function pdf_bytes
 
 end module fplotlib_backend_pdf

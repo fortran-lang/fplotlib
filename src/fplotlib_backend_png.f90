@@ -16,7 +16,8 @@
 ! paths, so all four formats show the same text.
 
 module fplotlib_backend_png
-    use fplotlib_render_checks
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use fplotlib_status, only: contract_error
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_raster
@@ -44,15 +45,15 @@ module fplotlib_backend_png
         integer :: pw = 0, ph = 0
         character(len=:), allocatable :: rgb
     contains
-        procedure :: open_canvas => png_open_canvas
-        procedure :: close_canvas => png_close_canvas
-        procedure :: bytes => png_bytes
-        procedure :: draw_path => png_draw_path
-        procedure :: draw_rect => png_draw_rect
-        procedure :: draw_circle => png_draw_circle
-        procedure :: draw_markers => png_draw_markers
-        procedure :: draw_glyphs => png_draw_glyphs
-        procedure :: draw_image => png_draw_image
+        procedure :: open_canvas_impl => png_open_canvas
+        procedure :: close_canvas_impl => png_close_canvas
+        procedure :: bytes_impl => png_bytes
+        procedure :: draw_path_impl => png_draw_path
+        procedure :: draw_rect_impl => png_draw_rect
+        procedure :: draw_circle_impl => png_draw_circle
+        procedure :: draw_markers_impl => png_draw_markers
+        procedure :: draw_glyphs_impl => png_draw_glyphs
+        procedure :: draw_image_impl => png_draw_image
         procedure :: set_dpi => png_set_dpi
     end type png_renderer_t
 
@@ -64,8 +65,7 @@ contains
         class(png_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: dpi
 
-        call check_finite([dpi])
-        if (dpi <= 0.0_dp) call contract_error("png: dpi must be positive")
+        if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) call contract_error("png: dpi must be finite and positive")
         if (self%is_open) call contract_error("png: set dpi before opening the canvas")
         self%dpi = dpi
     end subroutine png_set_dpi
@@ -79,9 +79,6 @@ contains
         integer :: rgb(3), wpx, hpx
         real(dp) :: alpha, s
 
-        call check_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
-        call check_finite([self%dpi])
-        if (self%dpi <= 0.0_dp) call contract_error("png: dpi must be positive")
         s = self%dpi/72.0_dp
         ! The encoder counts in default integers, and the RGBA bytes, the
         ! scanline filters and the worst-case deflate output have to fit.
@@ -89,7 +86,6 @@ contains
             call contract_error("png: canvas has too many pixels at this dpi")
         wpx = max(1, nint(width*s))
         hpx = max(1, nint(height*s))
-        self%has_output = .false.
         ! No background colour means no figure patch at all, which is how
         ! transparent=True reaches the backend. The vector formats express
         ! that by drawing nothing; a raster has to say it, as alpha zero.
@@ -105,26 +101,21 @@ contains
         if (present(x0)) self%ox = x0
         if (present(y0)) self%oy = y0
 
-        self%width = width
-        self%height = height
         call canvas_init(self%cv, wpx, hpx, s, rgb, alpha)
-        self%is_open = .true.
     end subroutine png_open_canvas
 
     subroutine png_close_canvas(self)
         class(png_renderer_t), intent(inout) :: self
         integer, allocatable :: rgba(:, :, :)
 
-        call check_open(self)
         rgba = canvas_rgba(self%cv)
+        if (allocated(self%out)) deallocate (self%out)
         if (self%keep_pixels) then
             call pack_rgb(self, rgba)
         else
             self%out = png_encode(self%cv%w, self%cv%h, rgba)
         end if
         call canvas_free(self%cv)
-        self%is_open = .false.
-        self%has_output = .not. self%keep_pixels
     end subroutine png_close_canvas
 
     ! GIF has no alpha to speak of, so the frame is flattened onto white
@@ -154,14 +145,10 @@ contains
         class(png_renderer_t), intent(in) :: self
         character(len=:), allocatable :: b
 
-        if (.not. self%has_output .or. self%is_open) then
-            call contract_error("renderer: no finished encoded output")
+        if (.not. allocated(self%out)) then
+            call contract_error("png: a canvas kept as pixels has no encoded bytes")
         end if
-        if (allocated(self%out)) then
-            b = self%out
-        else
-            b = ""
-        end if
+        b = self%out
     end function png_bytes
 
     ! ------------------------------------------------------------------
@@ -263,8 +250,6 @@ contains
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
-        call check_open(self)
-        call check_path(x, y, verbs, n_verb, paint)
         call build_path(self, x, y, verbs, n_verb)
         call maybe_snap(self, paint)
         call paint_buf(self, paint)
@@ -277,8 +262,6 @@ contains
         real(dp), intent(in), optional :: radius
         real(dp) :: r, k, x0, y0, x1, y1
 
-        call check_open(self)
-        call check_rect(x, y, w, h, paint, radius)
         r = 0.0_dp
         if (present(radius)) r = min(radius, 0.5_dp*min(w, h))
         x0 = tx(self, x); y0 = ty(self, y)
@@ -319,8 +302,6 @@ contains
         real(dp) :: rp, a
         integer :: i, n
 
-        call check_open(self)
-        call check_rect(cx, cy, r, r, paint)
         rp = r*self%cv%scale
         n = max(12, min(256, ceiling(rp*3.0_dp)))
         call pb_reset(self%pb)
@@ -349,11 +330,6 @@ contains
         integer :: i, j, p
         real(dp), allocatable :: sx(:), sy(:)
 
-        call check_open(self)
-        if (size(x) /= size(y)) call contract_error("markers: inconsistent coordinate counts")
-        call check_finite(x)
-        call check_finite(y)
-        call check_path(mx, my, mverbs, n_mverb, paint)
         allocate (sx(size(mx)), sy(size(my)))
         do i = 1, size(x)
             call pb_reset(self%pb)
@@ -398,11 +374,6 @@ contains
         integer :: i, j, p, nv, np
         type(paint_t) :: pp
 
-        call check_open(self)
-        call check_finite([x, y, angle])
-        call check_paint(paint)
-        call check_glyphs(run)
-        if (run%n == 0) return
         ca = cos(angle*3.141592653589793_dp/180.0_dp)
         sa = sin(angle*3.141592653589793_dp/180.0_dp)
         ax = tx(self, x)
@@ -471,8 +442,6 @@ contains
         integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
 
-        call check_open(self)
-        call check_image(x, y, w, h, rgba, nx, ny, paint)
         call blit_image(self%cv, x - self%ox, y - self%oy, w, h, rgba, nx, ny, &
                         paint%fill_alpha, shifted_clip(self, paint%clip))
     end subroutine png_draw_image

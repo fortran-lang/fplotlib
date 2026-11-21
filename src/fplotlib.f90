@@ -21,9 +21,10 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_status, only: status_t
+    use fplotlib_status, only: status_t, contract_error
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
@@ -348,7 +349,7 @@ contains
             call stash_fig(cur_fig)
         end if
         if (present(num)) then
-            if (num < 1) error stop "fplotlib: figure num must be positive"
+            if (num < 1) call contract_error("figure num must be positive")
             k = num
         else
             k = next_free_fig()
@@ -368,12 +369,12 @@ contains
         fig_dpi = DPI_DEFAULT
         if (present(figsize)) then
             if (figsize(1) <= 0.0_dp .or. figsize(2) <= 0.0_dp) &
-                error stop "fplotlib: figure figsize must be positive"
+                call contract_error("figure figsize must be positive")
             fig_w_in = figsize(1)
             fig_h_in = figsize(2)
         end if
         if (present(dpi)) then
-            if (dpi <= 0.0_dp) error stop "fplotlib: figure dpi must be positive"
+            if (dpi <= 0.0_dp) call contract_error("figure dpi must be positive")
             fig_dpi = dpi
         end if
     end subroutine figure
@@ -460,7 +461,7 @@ contains
             call set_cycle(["#000000", "#545454", "#7f7f7f", "#b0b0b0", &
                             "#d4d4d4"])
         case default
-            error stop "fplotlib: unknown style"
+            call contract_error("unknown style")
         end select
     end subroutine style_use
 
@@ -552,7 +553,7 @@ contains
         if (present(wspace)) fig_wspace = wspace
         if (present(hspace)) fig_hspace = hspace
         if (fig_right <= fig_left .or. fig_top <= fig_bottom) &
-            error stop "fplotlib: subplots_adjust left<right and bottom<top required"
+            call contract_error("subplots_adjust left<right and bottom<top required")
         call layout_grid()
     end subroutine subplots_adjust
 
@@ -586,8 +587,8 @@ contains
         integer, intent(in) :: m, n, i
 
         if (m < 1 .or. n < 1 .or. i < 1 .or. i > m * n) then
-            print *, "fplotlib: invalid subplot indices: m=", m, " n=", n, " i=", i
-            error stop
+            call contract_error("subplot: expected m, n >= 1 and 1 <= i <= m*n, got m=" &
+                                //int_to_str(m)//", n="//int_to_str(n)//", i="//int_to_str(i))
         end if
 
         if (.not. fig_initialized) call clf()
@@ -752,8 +753,8 @@ contains
         if (present(rowspan)) rs = max(1, rowspan)
         if (present(colspan)) cs = max(1, colspan)
         if (shape(1) < 1 .or. shape(2) < 1) then
-            print *, "fplotlib: invalid subplot2grid shape:", shape
-            error stop
+            call contract_error("subplot2grid: shape must be positive, got (" &
+                                //int_to_str(shape(1))//", "//int_to_str(shape(2))//")")
         end if
 
         call ensure_fig()
@@ -2301,8 +2302,8 @@ contains
 
         call ensure_fig()
         if (ax(cur_i)%n_series < 1) &
-            error stop "fplotlib: set_zorder needs something drawn first"
-        if (z < 0.0_dp) error stop "fplotlib: zorder must not be negative"
+            call contract_error("set_zorder needs something drawn first")
+        if (z < 0.0_dp) call contract_error("zorder must not be negative")
         ax(cur_i)%series(ax(cur_i)%n_series)%zorder = z
     end subroutine set_zorder
 
@@ -2471,14 +2472,14 @@ contains
         case ("symlog")
             s%kind = SCALE_SYMLOG
         case default
-            error stop "fplotlib: unknown scale, expected linear, log or symlog"
+            call contract_error("unknown scale, expected linear, log or symlog")
         end select
         if (present(linthresh)) then
-            if (linthresh <= 0.0_dp) error stop "fplotlib: linthresh must be positive"
+            if (linthresh <= 0.0_dp) call contract_error("linthresh must be positive")
             s%linthresh = linthresh
         end if
         if (present(linscale)) then
-            if (linscale <= 0.0_dp) error stop "fplotlib: linscale must be positive"
+            if (linscale <= 0.0_dp) call contract_error("linscale must be positive")
             s%linscale = linscale
         end if
     end function make_scale
@@ -2754,7 +2755,7 @@ contains
         real(dp) :: ms
         character(len=:), allocatable :: mk
 
-        if (size(ij, 1) /= 2) error stop "fplotlib: spy needs a (2, nnz) index array"
+        if (size(ij, 1) /= 2) call contract_error("spy needs a (2, nnz) index array")
         nr = 0
         nc = 0
         if (size(ij, 2) > 0) then
@@ -4411,14 +4412,12 @@ contains
             case ("Z", "z")
                 v(j) = VERB_CLOSE
             case default
-                print *, "fplotlib: add_path: unknown code ", codes(j:j)
-                error stop
+                call contract_error("add_path: unknown code '"//codes(j:j)//"'")
             end select
         end do
         if (np < 2 .or. np > min(size(x), size(y))) then
-            print *, "fplotlib: add_path: codes need", np, "points, given", &
-                min(size(x), size(y))
-            error stop
+            call contract_error("add_path: codes need "//int_to_str(np)//" points, given " &
+                                //int_to_str(min(size(x), size(y))))
         end if
 
         call add_polygon(x(1:np), y(1:np), facecolor, edgecolor, lw, alpha, fill)
@@ -4474,7 +4473,7 @@ contains
         do is = ax(cur_i)%n_series, 1, -1
             if (ax(cur_i)%series(is)%kind == SERIES_QUIVER) exit
         end do
-        if (is < 1) error stop "fplotlib: quiverkey needs a quiver in the current axes"
+        if (is < 1) call contract_error("quiverkey needs a quiver in the current axes")
         associate (s => ax(cur_i)%series(is))
             s%qk_on = .true.
             s%qk_x = x
@@ -4488,7 +4487,7 @@ contains
                 select case (coordinates)
                 case ("axes", "data", "figure", "inches"); s%qk_coord = coordinates
                 case default
-                    error stop "fplotlib: quiverkey coordinates must be axes, data, figure or inches"
+                    call contract_error("quiverkey coordinates must be axes, data, figure or inches")
                 end select
             end if
             if (present(color)) s%qk_color = resolve_color(color)
@@ -4496,7 +4495,7 @@ contains
             if (present(labelpos)) then
                 select case (labelpos)
                 case ("N", "S", "E", "W"); s%qk_pos = labelpos
-                case default; error stop "fplotlib: quiverkey labelpos must be N, S, E or W"
+                case default; call contract_error("quiverkey labelpos must be N, S, E or W")
                 end select
             end if
         end associate
@@ -4686,7 +4685,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                error stop "fplotlib: tick_params axis must be x, y or both"
+                call contract_error("tick_params axis must be x, y or both")
             end select
         end if
 
@@ -4699,7 +4698,7 @@ contains
             case ("inout")
                 d = 0.0_dp
             case default
-                error stop "fplotlib: tick direction must be in, out or inout"
+                call contract_error("tick direction must be in, out or inout")
             end select
             if (dox) ax(cur_i)%xtick_dir = d
             if (doy) ax(cur_i)%ytick_dir = d
@@ -4750,7 +4749,7 @@ contains
             ax(cur_i)%xmargin = 0.05_dp
             ax(cur_i)%ymargin = 0.05_dp
         case default
-            error stop "fplotlib: unknown axis mode"
+            call contract_error("unknown axis mode")
         end select
     end subroutine axis
 
@@ -4788,7 +4787,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                error stop "fplotlib: autoscale axis must be x, y or both"
+                call contract_error("autoscale axis must be x, y or both")
             end select
         end if
 
@@ -4827,7 +4826,7 @@ contains
         real(dp), intent(in) :: ratio
         character(len=*), intent(in), optional :: adjustable
         call ensure_fig()
-        if (ratio <= 0.0_dp) error stop "fplotlib: aspect ratio must be positive"
+        if (ratio <= 0.0_dp) call contract_error("aspect ratio must be positive")
         ax(cur_i)%aspect = ratio
         ax(cur_i)%aspect_datalim = .false.
         if (present(adjustable)) then
@@ -4837,7 +4836,7 @@ contains
             case ("datalim")
                 ax(cur_i)%aspect_datalim = .true.
             case default
-                error stop "fplotlib: adjustable must be box or datalim"
+                call contract_error("adjustable must be box or datalim")
             end select
         end if
     end subroutine set_aspect
@@ -5013,7 +5012,7 @@ contains
                 ! because its tick labels sit under it too.
                 ax(cur_i)%cbar_pad = 0.15_dp
             case default
-                error stop "fplotlib: colorbar orientation must be vertical or horizontal"
+                call contract_error("colorbar orientation must be vertical or horizontal")
             end select
         end if
         if (present(fraction)) ax(cur_i)%cbar_frac = fraction
@@ -6105,60 +6104,66 @@ contains
     ! another come out wrong.
     ! ------------------------------------------------------------------
 
-    ! Writing SVG bytes into a .png would produce a file no viewer can open,
-    ! so an unsupported extension is a hard error rather than a silent default.
-    subroutine reject_ext(filename)
-        character(len=*), intent(in) :: filename
-        print *, "fplotlib: cannot write ", trim(filename)
-        print *, "fplotlib: supported formats are .svg, .pdf, .eps and .png, not ." &
-            //file_ext(filename)
-        error stop "fplotlib: unsupported savefig format"
-    end subroutine reject_ext
-
     ! dpi sizes the raster in the PNG backend. The vector formats ignore it,
     ! as matplotlib does: they emit the same inches*72 canvas at any dpi.
-    subroutine savefig(filename, transparent, facecolor, dpi, bbox_inches, pad_inches)
+    !
+    ! The extension picks the format. Writing SVG bytes into a .png would
+    ! produce a file no viewer can open, so an unsupported extension stops
+    ! rather than falling back to a default. A file that cannot be written
+    ! is returned in status when it is present, and otherwise ends the
+    ! script, as the exception does in matplotlib.
+    subroutine savefig(filename, transparent, facecolor, dpi, bbox_inches, pad_inches, status)
         character(len=*), intent(in) :: filename
         logical, intent(in), optional :: transparent
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         real(dp), intent(in), optional :: dpi, pad_inches
-        character(len=:), allocatable :: svg
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: data
         real(dp) :: saved_dpi
 
+        select case (file_ext(filename))
+        case ("svg", "pdf", "png", "eps")
+        case default
+            call contract_error("savefig: supported formats are .svg, .pdf, .eps and .png, not ." &
+                                //file_ext(filename))
+        end select
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
+                call contract_error("savefig: dpi must be finite and positive")
+            end if
+        end if
         ! dpi given here applies to this file only, as it does in matplotlib;
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
         saved_dpi = fig_dpi
-        if (present(dpi)) then
-            if (dpi <= 0.0_dp) error stop "fplotlib: savefig dpi must be positive"
-            fig_dpi = dpi
-        end if
+        if (present(dpi)) fig_dpi = dpi
         select case (file_ext(filename))
         case ("svg")
-            svg = render_svg(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_svg(facecolor, transparent, bbox_inches, pad_inches)
         case ("pdf")
-            svg = render_pdf(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches)
         case ("png")
-            svg = render_png(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_png(facecolor, transparent, bbox_inches, pad_inches)
         case ("eps")
-            svg = render_eps(facecolor, transparent, bbox_inches, pad_inches)
-        case default
-            call reject_ext(filename)
-            return
+            data = render_eps(facecolor, transparent, bbox_inches, pad_inches)
         end select
         fig_dpi = saved_dpi
-        call save_bytes(filename, svg)
+        call save_bytes(filename, data, status)
     end subroutine savefig
 
-    ! A file that cannot be written ends the script, as the exception does in
-    ! matplotlib. Code that wants to recover calls fplotlib_io's write_bytes,
-    ! which returns the failure in a status_t.
-    subroutine save_bytes(filename, data)
+    ! Writes data to filename. A failure goes to status when the caller
+    ! passed one, and otherwise stops the program with its message.
+    subroutine save_bytes(filename, data, status)
         character(len=*), intent(in) :: filename, data
-        type(status_t) :: status
+        type(status_t), intent(out), optional :: status
+        type(status_t) :: local
 
-        call write_bytes(filename, data, status)
-        if (status%ok()) return
-        write (error_unit, "(a)") "fplotlib: "//status%message
+        if (present(status)) then
+            call write_bytes(filename, data, status)
+            return
+        end if
+        call write_bytes(filename, data, local)
+        if (local%ok()) return
+        write (error_unit, "(a)") "fplotlib: "//local%message
         error stop 1
     end subroutine save_bytes
 
@@ -6183,8 +6188,7 @@ contains
 
         if (anim_n > 0) then
             if (r%pw /= anim_w .or. r%ph /= anim_h) then
-                print *, "fplotlib: add_frame ignored, frame size changed"
-                return
+                call contract_error("add_frame: every frame must have the size of the first")
             end if
         end if
         anim_w = r%pw
@@ -6214,28 +6218,27 @@ contains
     ! Writes the frames collected so far as a GIF, or as an animated PNG for
     ! .png and .apng (full colour), and starts a new reel, so that a
     ! program can make several animations without a reset call.
-    subroutine save_animation(filename, fps, loop)
+    subroutine save_animation(filename, fps, loop, status)
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: fps
         logical, intent(in), optional :: loop
+        type(status_t), intent(out), optional :: status
         real(dp) :: rate
         logical :: rep
         integer :: delay
 
-        if (anim_n == 0) then
-            print *, "fplotlib: no frames; call add_frame before save_animation"
-            return
-        end if
+        if (anim_n == 0) call contract_error("save_animation: no frames; call add_frame first")
         select case (file_ext(filename))
         case ("gif", "png", "apng")
         case default
-            print *, "fplotlib: save_animation writes .gif, .png or .apng, not .", &
-                file_ext(filename)
-            return
+            call contract_error("save_animation: supported formats are .gif, .png and .apng, not ." &
+                                //file_ext(filename))
         end select
         rate = 5.0_dp
         if (present(fps)) then
-            if (fps <= 0.0_dp) error stop "fplotlib: save_animation fps must be positive"
+            if (.not. ieee_is_finite(fps) .or. fps <= 0.0_dp) then
+                call contract_error("save_animation: fps must be finite and positive")
+            end if
             rate = fps
         end if
         rep = .true.
@@ -6246,13 +6249,18 @@ contains
         delay = max(1, nint(100.0_dp/rate))
         if (file_ext(filename) == "gif") then
             call save_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
-                                                 anim_pix(1:anim_len), delay, rep))
+                                                 anim_pix(1:anim_len), delay, rep), status)
         else
             ! APNG delays are a fraction, so the frame rate is not rounded
             ! to hundredths of a second.
             call save_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
-                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep))
+                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep), status)
+        end if
+        ! Frames that could not be written are kept, so that the caller can
+        ! try another file name.
+        if (present(status)) then
+            if (.not. status%ok()) return
         end if
         anim_n = 0
         anim_w = 0
