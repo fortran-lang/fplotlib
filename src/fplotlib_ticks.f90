@@ -657,6 +657,8 @@ contains
         do while (k <= k1 .and. n < MAX_TICKS)
             n = n + 1
             t(n) = k*base
+            ! Past 2**53 the next multiple is the same number.
+            if (k + 1.0_dp == k) exit
             k = k + 1.0_dp
         end do
     end subroutine multiple_ticks
@@ -674,7 +676,8 @@ contains
 
         if (dec <= 0 .and. abs(v/whole*100.0_dp) < 1.0e18_dp) then
             write (tmp, "(I0)") nint(v/whole*100.0_dp, int64)
-        else if (dec <= 0) then
+        else if (dec <= 0 .or. log10(max(abs(v/whole*100.0_dp), 1.0_dp)) + dec + 3.0_dp > 24.0_dp) then
+            ! Past what the fixed field holds.
             write (tmp, "(ES12.5)") v/whole*100.0_dp
         else
             write (fmt, "(A,I0,A)") "(F24.", dec, ")"
@@ -696,7 +699,7 @@ contains
         integer :: i, k, dot, first, d
 
         d = max(0, dec)
-        if (abs(v) >= 1.0e18_dp) then
+        if (abs(v) >= 1.0e18_dp .or. log10(max(abs(v), 1.0_dp)) + d + 3.0_dp > 32.0_dp) then
             ! Past what grouping can show in a 64-bit integer.
             write (s, "(ES12.5)") v
             s = adjustl(s)

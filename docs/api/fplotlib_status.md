@@ -14,7 +14,8 @@ A failure that a correct program can still meet at run time, such as an
 output file that cannot be written, is returned instead, through a
 `status_t` argument. `status%ok()` reports success, `status%code` says what
 failed (`ERROR_IO`, or `ERROR_SIZE` for a cropped PNG too large to
-encode), and `status%message` is allocated on failure. Use the
+encode), and `status%message` says what failed, blank when nothing did
+(read it with `trim`). Use the
 call's other outputs only when `status%ok()` is true. There is no global
 last-error state.
 
@@ -32,8 +33,8 @@ result), or stop with exit code 2 without a `status`. `render_svg`,
 `render_pdf` and `render_eps` take the same optional `status`, which is
 always ok.
 `fplotlib` re-exports `status_t`, `STATUS_OK`, `ERROR_IO` and `ERROR_SIZE`,
-and the limits below that a plotting call can reach: `MAX_DASH`,
-`MAX_PNG_PIXELS` and `MAX_REEL_BYTES`. The renderer's own, `MAX_COORD` and
+the limits below that a plotting call can reach, `MAX_DASH` and
+`MAX_PNG_PIXELS`, and defines `MAX_REEL_BYTES`. The renderer's own, `MAX_COORD` and
 `MAX_PEN_PER_DASH`, are in `fplotlib_render`. A whole figure too large for a PNG, which its size and
 dpi tell beforehand, is a broken precondition; only a crop is returned.
 `status%set` is for fplotlib's own use.
@@ -59,7 +60,7 @@ no longer be written. Going past one is a broken precondition, and stops:
 | Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
 | A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
-| The frames of one animation, three bytes a pixel | at most `MAX_REEL_BYTES` (1e9) bytes |
+| The frames of one animation, three bytes a pixel | at most `MAX_REEL_BYTES` (8e8) bytes |
 
 Data is never limited: a value of any size, or a missing one, is drawn or
 left out as the view shows it. Line widths and dash lengths beyond 1e12

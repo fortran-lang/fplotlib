@@ -18,6 +18,7 @@ module test_missing
     use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
     use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS
+    use fplotlib_dates, only: num_date
     implicit none
     private
 
@@ -66,7 +67,7 @@ contains
     subroutine far_ticks_check(nfail)
         integer, intent(inout) :: nfail
         real(dp) :: t(MAX_TICKS)
-        integer :: n
+        integer :: n, y, mo, dd, hh, mi, sec
         character(len=64) :: s
 
         call multiple_ticks(1.7e9_dp, 1.7e9_dp + 5.0_dp, 0.5_dp, t, n)
@@ -82,6 +83,24 @@ contains
         call format_percent(3.0e7_dp, 1.0_dp, 0, s, n)
         if (s(1:n) /= "3000000000%") then
             print "(a)", "far ticks: format_percent wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        ! Fixed decimals that would not fit go to exponent form, not stars.
+        call format_grouped(1.0e15_dp, 17, s, n)
+        if (index(s(1:n), "*") > 0) then
+            print "(a)", "far ticks: format_grouped wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        ! Two billion days out, a date still has its time of day; further
+        ! out, the calendar stops at its edge rather than overflowing.
+        call num_date(2.0e9_dp + 0.5_dp, y, mo, dd, hh, mi, sec)
+        if (hh /= 12 .or. mi /= 0) then
+            print "(a, i0)", "far ticks: a date two billion days out has hour ", hh
+            nfail = nfail + 1
+        end if
+        call num_date(1.0e15_dp + 0.25_dp, y, mo, dd, hh, mi, sec)
+        if (hh /= 6) then
+            print "(a, i0)", "far ticks: a date past the calendar has hour ", hh
             nfail = nfail + 1
         end if
     end subroutine far_ticks_check
@@ -170,7 +189,7 @@ contains
                         big = crop(stroke_rgb(path, 500, -200.0_dp, caps(k), joins(j), 7.0_dp*c, 400.0_dp, &
                                               [20.0_dp, 30.0_dp], -10.0_dp), 500, 200, 100)
                         worst = max_diff(small, big)
-                        if (worst > 2) then
+                        if (worst > 0) then
                             print "(a, 4(i0, a), i0)", "dash shortcut: path ", path, ", cap ", caps(k), &
                                 ", join ", joins(j), ", offset ", 7*c, ": differs from the full walk by ", worst
                             nfail = nfail + 1
@@ -191,7 +210,7 @@ contains
                     big = crop(stroke_rgb(path, 500, -200.0_dp, caps(k), JOIN_MITER, 0.0_dp, 400.0_dp, &
                                           [20.0_dp, 30.0_dp], ends(c)), 500, 200, 100)
                     worst = max_diff(small, big)
-                    if (worst > 2) then
+                    if (worst > 0) then
                         print "(a, 2(i0, a), f7.1, a, i0)", "dash shortcut: path ", path, ", cap ", caps(k), &
                             ", end at x = ", ends(c), ": differs from the full walk by ", worst
                         nfail = nfail + 1
@@ -205,7 +224,7 @@ contains
         small = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [1.0e14_dp, 10.0_dp], 0.0_dp)
         big = stroke_rgb(3, 100, 0.0_dp, CAP_BUTT, JOIN_MITER, 0.0_dp, 1.0e12_dp, [0.0_dp], 0.0_dp)
         worst = max_diff(small, big)
-        if (worst > 2) then
+        if (worst > 0) then
             print "(a, i0)", "dash shortcut: a far corner of a huge pen differs from the solid pen by ", worst
             nfail = nfail + 1
         end if
@@ -257,7 +276,7 @@ contains
         full_walk = .true.
         full = one_stroke([30.0_dp, 200.0_dp], [30.5_dp, 30.5_dp], [VERB_MOVE, VERB_LINE], q)
         full_walk = .false.
-        if (max_diff(quick, full) > 2) then
+        if (max_diff(quick, full) > 0) then
             print "(a)", "dash shortcut: a dot of no length went missing"
             bad = bad + 1
         end if
@@ -274,7 +293,7 @@ contains
         full_walk = .true.
         full = one_stroke([10.0_dp, 90.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], q)
         full_walk = .false.
-        if (max_diff(quick, full) > 2) then
+        if (max_diff(quick, full) > 0) then
             print "(a)", "dash shortcut: a single-length pattern was taken for half its length"
             bad = bad + 1
         end if

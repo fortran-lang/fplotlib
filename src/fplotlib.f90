@@ -34,7 +34,9 @@ module fplotlib
     public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE
 
     ! The most bytes of frames an animation reel holds.
-    real(dp), parameter :: MAX_REEL_BYTES = 1.0e9_dp
+    ! Eight hundred million: the APNG encoder's output, up to 9/8 of it
+    ! with fixed Huffman codes, has to stay within its 2**30 byte buffer.
+    real(dp), parameter :: MAX_REEL_BYTES = 8.0e8_dp
     ! The limits a plotting call can reach, for callers to check against.
     ! The renderer's own (MAX_COORD, MAX_PEN_PER_DASH) are in
     ! fplotlib_render.
@@ -7374,7 +7376,7 @@ contains
         end select
         fig_dpi = saved_dpi
         if (.not. local%ok()) then
-            call fail_run("savefig", local%code, local%message, status)
+            call fail_run("savefig", local%code, trim(local%message), status)
             return
         end if
         call save_bytes("savefig", filename, data, status)
@@ -7411,7 +7413,7 @@ contains
         if (local%ok()) return
         ! Exit code 2, so that a script's caller can tell a file that could
         ! not be written from a broken precondition, which exits with 1.
-        write (error_unit, "(a)") "fplotlib: "//proc//": "//local%message
+        write (error_unit, "(a)") "fplotlib: "//proc//": "//trim(local%message)
         error stop 2
     end subroutine save_bytes
 
@@ -7460,7 +7462,7 @@ contains
         ! The reel, and the GIF and APNG encoders after it, count bytes in
         ! default integers: a billion bytes of frames is the most it holds.
         if (real(anim_len, dp) + real(len(frame), dp) > MAX_REEL_BYTES) &
-            call contract_error("add_frame: an animation holds at most 1e9 bytes of frames, "// &
+            call contract_error("add_frame: an animation holds at most 8e8 bytes of frames, "// &
                                 "three per pixel")
         need = anim_len + len(frame)
         cap = 0
@@ -7542,7 +7544,7 @@ contains
         call savefig("fplotlib_show.svg", status=local)
         if (present(status)) status = local
         if (.not. local%ok()) then
-            if (.not. present(status)) write (error_unit, "(a)") "fplotlib: show: "//local%message
+            if (.not. present(status)) write (error_unit, "(a)") "fplotlib: show: "//trim(local%message)
             return
         end if
         print *, "fplotlib: wrote fplotlib_show.svg"

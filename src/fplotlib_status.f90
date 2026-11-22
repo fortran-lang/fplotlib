@@ -23,9 +23,14 @@ module fplotlib_status
     ! cropped to it with too many pixels.
     integer, parameter :: STATUS_OK = 0, ERROR_IO = 1, ERROR_SIZE = 2
 
+    ! message is blank when the status is ok, and otherwise says what
+    ! failed; as in stdlib's state_type it has a fixed length, so that it
+    ! is always defined, and is read with trim.
+    integer, parameter, public :: MESSAGE_LEN = 512
+
     type :: status_t
         integer :: code = STATUS_OK
-        character(len=:), allocatable :: message
+        character(len=MESSAGE_LEN) :: message = ""
     contains
         procedure :: ok => status_okay
         procedure :: set => status_set

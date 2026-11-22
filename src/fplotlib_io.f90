@@ -39,7 +39,7 @@ contains
             if (ios /= 0) then
                 call status%set(ERROR_IO, io_message("cannot write", filename, message))
                 close (u, iostat=close_ios, iomsg=close_message)
-                if (close_ios /= 0) status%message = status%message//"; close failed: "//trim(close_message)
+                if (close_ios /= 0) status%message = trim(status%message)//"; close failed: "//trim(close_message)
                 return
             end if
         end if

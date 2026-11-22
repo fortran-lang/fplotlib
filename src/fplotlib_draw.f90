@@ -4748,8 +4748,6 @@ contains
         pdf = r%bytes()
     end function render_pdf
 
-    ! Unlike the vector formats, dpi is not decorative here: it is what
-    ! decides how many pixels the figure is rasterized into.
     function render_eps(facecolor, transparent, bbox_inches, pad_inches, status) result(eps)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
@@ -4761,6 +4759,9 @@ contains
         eps = r%bytes()
     end function render_eps
 
+    ! Unlike the vector formats, dpi is not decorative here: it is what
+    ! decides how many pixels the figure is rasterized into.
+    !
     ! A PNG cropped with bbox_inches="tight" to more than MAX_PNG_PIXELS is a
     ! failure the caller could not foresee: returned in status as
     ! ERROR_SIZE, with an empty result, or without status the end of the
@@ -4788,7 +4789,7 @@ contains
         if (.not. st%ok()) then
             png = ""
             if (present(status)) return
-            write (error_unit, "(a)") "fplotlib: render_png: "//st%message
+            write (error_unit, "(a)") "fplotlib: render_png: "//trim(st%message)
             error stop 2
         end if
         png = r%bytes()

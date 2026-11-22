@@ -45,13 +45,17 @@ contains
         real(dp), intent(in) :: v
         integer, intent(out) :: y, mo, d, h, mi, s
         integer :: z, rem
+        real(dp) :: fl
 
-        ! Kept within a billion days, some three million years, either way,
-        ! where the calendar's integer arithmetic holds.
-        z = floor(max(-1.0e9_dp, min(1.0e9_dp, v)))
+        ! The day, kept within 2.1 billion days, some six million years,
+        ! either way, where the calendar's integer arithmetic holds; the
+        ! time of day from the fraction of v itself, which lies in [0, 1).
+        fl = aint(v)
+        if (fl > v) fl = fl - 1.0_dp
+        z = int(max(-2.1e9_dp, min(2.1e9_dp, fl)))
         ! Rounded to the second, so that a value that is a hair under
         ! midnight does not come back as 23:59:59 of the day before.
-        rem = nint((v - real(z, dp))*86400.0_dp)
+        rem = nint((v - fl)*86400.0_dp)
         if (rem >= 86400) then
             rem = rem - 86400
             z = z + 1

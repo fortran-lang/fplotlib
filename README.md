@@ -284,7 +284,7 @@ output file that cannot be written, or a PNG cropped with
 use fplotlib
 type(status_t) :: st
 call savefig("results/plot.png", status=st)
-if (.not. st%ok()) print *, st%message
+if (.not. st%ok()) print *, trim(st%message)
 ```
 
 ## Build
