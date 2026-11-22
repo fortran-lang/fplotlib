@@ -18,7 +18,7 @@ module fplotlib_artist
     public
     ! put_path's own bookkeeping.
     private :: finite_point, path_move, path_put
-    private :: emit_path, far_path, grow_put, push_point, view_box, tame
+    private :: emit_path, far_path, grow_put, push_point, view_box, tame, turn_angle
     private :: flatten_cubic, image_groups, set_along
 
 contains
@@ -732,15 +732,37 @@ contains
         end if
     end subroutine put_markers
 
+    ! An angle of more than a turn as one of less, in [0, 360). Whole turns
+    ! are taken off a few at a time rather than through modulo, which not
+    ! every compiler gets right for a real past 2**53; where the spacing of
+    ! doubles is past a turn the angle has no meaning left, and any angle
+    ! of the turn will do.
+    pure function turn_angle(angle) result(a)
+        real(dp), intent(in) :: angle
+        real(dp) :: a
+        integer :: i
+        a = angle
+        do i = 1, 64
+            if (abs(a) < 360.0_dp) exit
+            a = a - 360.0_dp*aint(a/360.0_dp)
+        end do
+        if (abs(a) >= 360.0_dp) a = 0.0_dp
+        if (a < 0.0_dp) a = a + 360.0_dp
+    end function turn_angle
+
     subroutine put_glyphs(b, x, y, run, paint, angle)
         class(renderer_t), intent(inout) :: b
         real(dp), intent(in) :: x, y
         type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
-        real(dp) :: bx0, bx1, by0, by1
+        real(dp) :: bx0, bx1, by0, by1, a
 
         if (.not. all(ieee_is_finite([x, y, angle]))) return
+        ! An angle of many turns is the same as its last one, and the
+        ! renderer takes no number past MAX_COORD.
+        a = angle
+        if (abs(a) > 360.0_dp) a = turn_angle(a)
         ! Text anchored outside the box is out of sight, and so, for all
         ! practical purposes, is text a trillion points tall.
         call view_box(b, bx0, bx1, by0, by1)
@@ -749,7 +771,7 @@ contains
             if (maxval(abs(run%x(1:run%n))) > 1.0e12_dp .or. maxval(abs(run%y(1:run%n))) > 1.0e12_dp &
                 .or. maxval(run%size(1:run%n)) > 1.0e12_dp) return
         end if
-        call b%draw_glyphs(x, y, run, paint, angle)
+        call b%draw_glyphs(x, y, run, paint, a)
     end subroutine put_glyphs
 
     subroutine put_image(b, x, y, w, h, rgba, nx, ny, paint)

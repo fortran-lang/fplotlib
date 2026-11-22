@@ -1089,6 +1089,11 @@ contains
         if (abs(d) < 1.0e-30_dp) d = 1.0_dp
         if (.not. sticky_lo) lo = scale_inv(sc, u0 - margin * d)
         if (.not. sticky_hi) hi = scale_inv(sc, u1 + margin * d)
+        ! A margin past the largest double, as on a log axis of data up to
+        ! 1e300, stops at it; on a log axis the low end stays positive.
+        if (.not. ieee_is_finite(hi) .and. ieee_is_finite(u1)) hi = huge(1.0_dp)
+        if (.not. ieee_is_finite(lo) .and. ieee_is_finite(u0)) lo = -huge(1.0_dp)
+        if (sc%kind == SCALE_LOG .and. lo <= 0.0_dp) lo = tiny(1.0_dp)
     end subroutine expand_limits
 
     pure function map_x(x, xmin, xmax, ax_l, ax_w, sc) result(px)
@@ -1104,6 +1109,18 @@ contains
         real(dp) :: py
         py = ax_b - axis_frac(y, ymin, ymax, sc) * ax_h
     end function map_y
+
+    ! Where v sits from lo to hi, as a fraction of the way, from half values
+    ! where hi - lo is past the largest double.
+    pure elemental function lin_frac(v, lo, hi) result(t)
+        real(dp), intent(in) :: v, lo, hi
+        real(dp) :: t
+        if (ieee_is_finite(hi - lo)) then
+            t = (v - lo)/(hi - lo)
+        else
+            t = (0.5_dp*v - 0.5_dp*lo)/(0.5_dp*hi - 0.5_dp*lo)
+        end if
+    end function lin_frac
 
     ! Where v sits along the axis, as a fraction from the low end. Every
     ! scale is linear once the values have gone through its transform.
@@ -1863,6 +1880,10 @@ contains
         ! decade falls inside the view, which a short axis need not.
         if (sc%kind == SCALE_LOG) then
             if (vmin <= 0.0_dp .or. vmax <= vmin) return
+            if (.not. ieee_is_finite(vmax)) return
+            ! Where the majors skip decades, as log_ticks thins them past
+            ! MAX_TICKS decades, matplotlib draws no minors.
+            if (floor(log10(vmax)) - floor(log10(vmin)) + 1 > MAX_TICKS) return
             do i = floor(log10(vmin)), floor(log10(vmax))
                 do k = 2, 9
                     call push_minor(m, nm, real(k, dp)*10.0_dp**i, vmin, vmax)
@@ -2739,8 +2760,8 @@ contains
             lo = a%img_bounds(1)
             hi = a%img_bounds(size(a%img_bounds))
             do i = 1, size(a%img_bounds) - 1
-                y0 = (a%img_bounds(i) - lo) / (hi - lo)
-                y1 = (a%img_bounds(i + 1) - lo) / (hi - lo)
+                y0 = lin_frac(a%img_bounds(i), lo, hi)
+                y1 = lin_frac(a%img_bounds(i + 1), lo, hi)
                 v = 0.5_dp * (a%img_bounds(i) + a%img_bounds(i + 1))
                 call cbar_band(b, a%cbar_horiz, bx, bt, bw, bh, y0, y1, &
                                img_color(a, v))
@@ -2779,7 +2800,7 @@ contains
         do i = 1, nt
             v = cb_ticks(i)
             if (v < lo .or. v > hi) cycle
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
             ! Bands place their ticks at the edges they stand for; every
             ! other norm puts a tick where the norm puts the value.
             if (.not. allocated(a%img_bounds)) t = cmap_t(a, v)
@@ -2959,14 +2980,14 @@ contains
             if (v < a%img_vcenter) then
                 t = 0.0_dp
                 if (a%img_vcenter > lo) &
-                    t = 0.5_dp*(v - lo)/(a%img_vcenter - lo)
+                    t = 0.5_dp*lin_frac(v, lo, a%img_vcenter)
             else
                 t = 1.0_dp
                 if (hi > a%img_vcenter) &
-                    t = 0.5_dp + 0.5_dp*(v - a%img_vcenter)/(hi - a%img_vcenter)
+                    t = 0.5_dp + 0.5_dp*lin_frac(v, a%img_vcenter, hi)
             end if
         case (NORM_POWER)
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
             t = max(0.0_dp, min(1.0_dp, t))**a%img_gamma
         case (NORM_SYMLOG)
             t = symlog_fwd(hi, a%img_linthresh) - symlog_fwd(lo, a%img_linthresh)
@@ -2977,7 +2998,7 @@ contains
                      - symlog_fwd(lo, a%img_linthresh))/t
             end if
         case default
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
         end select
     end function cmap_t
 

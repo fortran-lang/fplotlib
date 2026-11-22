@@ -3233,7 +3233,7 @@ contains
             allocate (ax(cur_i)%series(is)%pcolor(n))
             do k = 1, n
                 ax(cur_i)%series(is)%pcolor(k) = &
-                    cmap_color(id, (cvals(min(k, size(cvals))) - lo) / (hi - lo))
+                    cmap_color(id, lin_frac(cvals(min(k, size(cvals))), lo, hi))
             end do
             ax(cur_i)%has_cmap_src = .true.
             ax(cur_i)%img_cmap = id
@@ -5010,7 +5010,7 @@ contains
             ty = y(tri(:, i))
             v = fv(i)
             call add_polygon(tx, ty, &
-                             facecolor=cmap_color(cm, (v - lo)/(hi - lo)), &
+                             facecolor=cmap_color(cm, lin_frac(v, lo, hi)), &
                              edgecolor=edgecolor, alpha=alpha)
             ! Unlike a lone patch, a mesh cell is data and sets the limits,
             ! and its seam with the next cell must not show.

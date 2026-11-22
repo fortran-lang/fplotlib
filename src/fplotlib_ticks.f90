@@ -174,6 +174,38 @@ contains
         scal = 10.0_dp**floor(log10_span(vmin, vmax) - log10(real(n, dp)))
     end subroutine scale_range
 
+    ! v in exponent form, as 1.2e308 or -3e20: at most five significant
+    ! digits, trailing zeros dropped. For labels whose value is past a
+    ! fixed field; Fortran's own ES form drops the E of a three-digit
+    ! exponent.
+    pure function sci_str(v) result(s)
+        real(dp), intent(in) :: v
+        character(len=32) :: s
+        character(len=24) :: m
+        integer :: e, k
+        real(dp) :: f
+
+        if (v == 0.0_dp .or. .not. ieee_is_finite(v)) then
+            s = "0"
+            return
+        end if
+        e = floor(log10(abs(v)))
+        f = v/10.0_dp**e
+        if (.not. ieee_is_finite(f)) f = (v/10.0_dp)/10.0_dp**(e - 1)
+        ! Rounding to four decimals can carry into the next decade.
+        if (abs(anint(f*1.0e4_dp)/1.0e4_dp) >= 10.0_dp) then
+            e = e + 1
+            f = f/10.0_dp
+        end if
+        write (m, "(F0.4)") f
+        k = len_trim(m)
+        do while (k > 1 .and. m(k:k) == "0")
+            k = k - 1
+        end do
+        if (m(k:k) == ".") k = k - 1
+        write (s, "(A,'e',I0)") m(1:k), e
+    end function sci_str
+
     ! log10 of the distance between a and b, worked out from half of each
     ! where the distance itself is past the largest double, as it is for
     ! limits that span the whole range of a double.
@@ -265,7 +297,7 @@ contains
         real(dp), intent(out) :: ticks(MAX_TICKS)
         integer, intent(out) :: n_ticks
         real(dp) :: lo, hi, t
-        integer :: i0, i1, i, n
+        integer :: i0, i1, i, n, stride
 
         n_ticks = 0
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
@@ -276,9 +308,17 @@ contains
 
         i0 = int(floor(log10(lo)))
         i1 = int(ceiling(log10(hi)))
+        ! More decades than there are ticks: every stride-th one, about
+        ! nine in all, on multiples of the stride, as matplotlib's
+        ! LogLocator thins them. Fewer are all ticked.
+        stride = 1
+        if (i1 - i0 + 1 > MAX_TICKS) then
+            stride = (i1 - i0 + 1)/9 + 1
+            i0 = stride*floor(real(i0, dp)/real(stride, dp))
+        end if
 
         n = 0
-        do i = i0, i1
+        do i = i0, i1, stride
             t = 10.0_dp ** real(i, dp)
             if (t >= lo * (1.0_dp - 1.0e-12_dp) .and. t <= hi * (1.0_dp + 1.0e-12_dp)) then
                 if (n < MAX_TICKS) then
@@ -370,6 +410,8 @@ contains
         end if
 
         write (tmp, "(F20.4)") v
+        ! Past what the fixed field holds, exponent form.
+        if (index(tmp, "*") > 0) tmp = sci_str(v)
         j = 1
         do while (j < 20 .and. tmp(j:j) == " ")
             j = j + 1
@@ -710,7 +752,7 @@ contains
             write (tmp, "(I0)") nint(v/whole*100.0_dp, int64)
         else if (dec <= 0 .or. log10(max(abs(v/whole*100.0_dp), 1.0_dp)) + dec + 3.0_dp > 24.0_dp) then
             ! Past what the fixed field holds.
-            write (tmp, "(ES12.5)") v/whole*100.0_dp
+            tmp = sci_str(v/whole*100.0_dp)
         else
             write (fmt, "(A,I0,A)") "(F24.", dec, ")"
             write (tmp, fmt) v/whole*100.0_dp
@@ -733,7 +775,7 @@ contains
         d = max(0, dec)
         if (abs(v) >= 1.0e18_dp .or. log10(max(abs(v), 1.0_dp)) + d + 3.0_dp > 32.0_dp) then
             ! Past what grouping can show in a 64-bit integer.
-            write (s, "(ES12.5)") v
+            s = sci_str(v)
             s = adjustl(s)
             n = len_trim(s)
             return

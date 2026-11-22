@@ -17,7 +17,8 @@ module test_missing
     use fplotlib_draw, only: render_figure
     use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
-    use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS
+    use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS, log_ticks, &
+                              format_tick_to
     use fplotlib_dates, only: num_date
     use fplotlib_contour, only: contour_levels
     implicit none
@@ -42,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 82
+    integer, parameter :: NCASE = 87
 
 contains
 
@@ -85,6 +86,19 @@ contains
         call format_percent(3.0e7_dp, 1.0_dp, 0, s, n)
         if (s(1:n) /= "3000000000%") then
             print "(a)", "far ticks: format_percent wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        ! A log axis of three hundred decades is ticked from end to end, not
+        ! for its first thirty-two decades only.
+        call log_ticks(1.0_dp, 1.0e300_dp, t, n)
+        if (n < 5 .or. n > 12 .or. t(n) < 1.0e250_dp) then
+            print "(a, i0, a, es10.3)", "far ticks: log_ticks of 300 decades gave ", n, " up to ", t(n)
+            nfail = nfail + 1
+        end if
+        ! A tick past a fixed field is written in exponent form, E and all.
+        call format_tick_to(1.2e308_dp, .false., s, n)
+        if (s(1:n) /= "1.2e308") then
+            print "(a)", "far ticks: format_tick_to wrote "//s(1:n)
             nfail = nfail + 1
         end if
         ! Contour levels of data far from zero in small steps cover it.
@@ -598,6 +612,16 @@ contains
         case (80); call hexbin([-huge(1.0_dp)], [-huge(1.0_dp)])
         case (81); call imshow(z, extent=[-huge(1.0_dp), huge(1.0_dp), -huge(1.0_dp), huge(1.0_dp)])
         case (82); call contourf(1.0e9_dp + z); call colorbar()
+        ! A log axis whose margin is past the largest double, contours over
+        ! the whole range of a double and near its lowest end, text turned
+        ! many times over, and a colorbar of values too long for a fixed
+        ! field.
+        case (83); call semilogy(t(1:3), [1.0_dp, 1.0e100_dp, 1.0e300_dp])
+        case (84); call contourf(reshape([-huge(1.0_dp), 0.0_dp, huge(1.0_dp), 0.0_dp], [2, 2])); call colorbar()
+        case (85); call contourf(reshape([-huge(1.0_dp), -0.9_dp*huge(1.0_dp), -0.95_dp*huge(1.0_dp), &
+                                          -huge(1.0_dp)], [2, 2])); call colorbar()
+        case (86); call plot(x, x); call text(1.0_dp, 1.0_dp, "turned", rotation=1.0e16_dp)
+        case (87); call scatter(t(1:3), t(1:3), cvals=[0.0_dp, 3.0e20_dp, 1.0e20_dp]); call colorbar()
         end select
     end subroutine draw_case
 

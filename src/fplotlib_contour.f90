@@ -26,7 +26,7 @@ contains
         integer, intent(in) :: nbins
         real(dp), intent(out) :: lev(:)
         integer, intent(out) :: nlev
-        real(dp) :: step, lo
+        real(dp) :: step, lo, k0
         integer :: i
 
         if (ieee_is_finite(zmax - zmin)) then
@@ -39,14 +39,21 @@ contains
         if (step <= 0.0_dp) step = 1.0_dp
         ! floor kept in reals: data far from zero in small steps is past any
         ! integer.
-        lo = aint(zmin / step)
-        if (lo > zmin / step) lo = lo - 1.0_dp
-        lo = lo * step
+        k0 = aint(zmin / step)
+        if (k0 > zmin / step) k0 = k0 - 1.0_dp
+        lo = k0 * step
 
         nlev = 0
         do i = 0, size(lev) - 1
             nlev = nlev + 1
-            lev(nlev) = max(-huge(1.0_dp), min(huge(1.0_dp), lo + real(i, dp) * step))
+            if (ieee_is_finite(lo)) then
+                lev(nlev) = lo + real(i, dp) * step
+            else
+                ! The lowest round level is past the largest double: each
+                ! level from its own count of steps instead.
+                lev(nlev) = (k0 + real(i, dp)) * step
+            end if
+            lev(nlev) = max(-huge(1.0_dp), min(huge(1.0_dp), lev(nlev)))
             if (lev(nlev) >= zmax) exit
         end do
     end subroutine contour_levels
