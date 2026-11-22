@@ -1881,9 +1881,8 @@ contains
         if (sc%kind == SCALE_LOG) then
             if (vmin <= 0.0_dp .or. vmax <= vmin) return
             if (.not. ieee_is_finite(vmax)) return
-            ! Where the majors skip decades, as log_ticks thins them past
-            ! MAX_TICKS decades, matplotlib draws no minors.
-            if (floor(log10(vmax)) - floor(log10(vmin)) + 1 > MAX_TICKS) return
+            ! Where the majors skip decades, matplotlib draws no minors.
+            if (log_stride(vmin, vmax) > 1) return
             do i = floor(log10(vmin)), floor(log10(vmax))
                 do k = 2, 9
                     call push_minor(m, nm, real(k, dp)*10.0_dp**i, vmin, vmax)

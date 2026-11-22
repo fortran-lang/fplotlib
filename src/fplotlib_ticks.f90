@@ -8,7 +8,7 @@ module fplotlib_ticks
 
     integer, parameter, public :: MAX_TICKS = 32
 
-    public :: linear_ticks
+    public :: linear_ticks, log_stride
     public :: nice_number
     public :: log_ticks
     public :: symlog_ticks
@@ -292,6 +292,19 @@ contains
         n_ticks = n
     end subroutine symlog_ticks
 
+    ! How many decades apart the major ticks of a log axis from lo to hi
+    ! are: one, unless there are more decades than MAX_TICKS, when about
+    ! nine are ticked, as matplotlib's LogLocator thins them. Minor ticks
+    ! are drawn only where it is one.
+    pure function log_stride(lo, hi) result(stride)
+        real(dp), intent(in) :: lo, hi
+        integer :: stride, nd
+        stride = 1
+        if (lo <= 0.0_dp .or. hi <= lo .or. .not. ieee_is_finite(hi)) return
+        nd = int(ceiling(log10(hi))) - int(floor(log10(lo))) + 1
+        if (nd > MAX_TICKS) stride = nd/9 + 1
+    end function log_stride
+
     subroutine log_ticks(vmin, vmax, ticks, n_ticks)
         real(dp), intent(in) :: vmin, vmax
         real(dp), intent(out) :: ticks(MAX_TICKS)
@@ -308,18 +321,14 @@ contains
 
         i0 = int(floor(log10(lo)))
         i1 = int(ceiling(log10(hi)))
-        ! More decades than there are ticks: every stride-th one, about
-        ! nine in all, on multiples of the stride, as matplotlib's
-        ! LogLocator thins them. Fewer are all ticked.
-        stride = 1
-        if (i1 - i0 + 1 > MAX_TICKS) then
-            stride = (i1 - i0 + 1)/9 + 1
-            i0 = stride*floor(real(i0, dp)/real(stride, dp))
-        end if
+        stride = log_stride(lo, hi)
+        if (stride > 1) i0 = stride*floor(real(i0, dp)/real(stride, dp))
 
         n = 0
         do i = i0, i1, stride
             t = 10.0_dp ** real(i, dp)
+            ! A decade past the largest double is no tick.
+            if (.not. ieee_is_finite(t)) exit
             if (t >= lo * (1.0_dp - 1.0e-12_dp) .and. t <= hi * (1.0_dp + 1.0e-12_dp)) then
                 if (n < MAX_TICKS) then
                     n = n + 1
@@ -410,8 +419,15 @@ contains
         end if
 
         write (tmp, "(F20.4)") v
-        ! Past what the fixed field holds, exponent form.
-        if (index(tmp, "*") > 0) tmp = sci_str(v)
+        if (index(tmp, "*") > 0) then
+            ! Past what the fixed field holds, exponent form, which is
+            ! already trimmed: the trimming below would take the zeros off
+            ! its exponent.
+            tmp = sci_str(v)
+            n = len_trim(tmp)
+            s(1:n) = tmp(1:n)
+            return
+        end if
         j = 1
         do while (j < 20 .and. tmp(j:j) == " ")
             j = j + 1

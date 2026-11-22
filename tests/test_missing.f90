@@ -69,9 +69,11 @@ contains
     subroutine far_ticks_check(nfail)
         integer, intent(inout) :: nfail
         real(dp) :: t(MAX_TICKS)
-        integer :: n, y, mo, dd, hh, mi, sec
+        integer :: n, y, mo, dd, hh, mi, sec, i, ios
         character(len=64) :: s
-        real(dp) :: lv(64)
+        real(dp) :: lv(64), back
+        real(dp), parameter :: far(6) = [2.5e20_dp, -4.5e100_dp, 1.2e300_dp, 1.2e308_dp, &
+                                         3.0e20_dp, -1.7976e308_dp]
 
         call multiple_ticks(1.7e9_dp, 1.7e9_dp + 5.0_dp, 0.5_dp, t, n)
         if (n /= 11 .or. abs(t(1) - 1.7e9_dp) > 0.0_dp) then
@@ -95,12 +97,16 @@ contains
             print "(a, i0, a, es10.3)", "far ticks: log_ticks of 300 decades gave ", n, " up to ", t(n)
             nfail = nfail + 1
         end if
-        ! A tick past a fixed field is written in exponent form, E and all.
-        call format_tick_to(1.2e308_dp, .false., s, n)
-        if (s(1:n) /= "1.2e308") then
-            print "(a)", "far ticks: format_tick_to wrote "//s(1:n)
-            nfail = nfail + 1
-        end if
+        ! A tick past a fixed field is written in exponent form, and reads
+        ! back as the value it labels, exponents ending in zero included.
+        do i = 1, size(far)
+            call format_tick_to(far(i), .false., s, n)
+            read (s(1:n), *, iostat=ios) back
+            if (ios /= 0 .or. abs(back - far(i)) > 1.0e-4_dp*abs(far(i))) then
+                print "(a, es10.3, a)", "far ticks: format_tick_to wrote ", far(i), " as "//s(1:n)
+                nfail = nfail + 1
+            end if
+        end do
         ! Contour levels of data far from zero in small steps cover it.
         call contour_levels(1.0e9_dp, 1.0e9_dp + 0.5_dp, 7, lv, n)
         if (n < 2 .or. lv(1) > 1.0e9_dp .or. lv(n) < 1.0e9_dp + 0.5_dp .or. lv(1) < 1.0e9_dp - 1.0_dp) then
