@@ -173,6 +173,39 @@ contains
         call close()
         ! A constant series on a symlog axis, whatever its threshold, gets
         ! limits about it, not a margin of the whole range of a double.
+        ! Data the axis can tell apart is not widened, however small its
+        ! threshold: a step of 1e-7 at 1e300, at linthresh 1e-300.
+        call figure()
+        call plot([1.0_dp, 2.0_dp, 3.0_dp, 4.0_dp], 1.0e300_dp*(1.0_dp + 1.0e-7_dp*[0.0_dp, 1.0_dp, 3.0_dp, 2.0_dp]))
+        call set_yscale("symlog", linthresh=1.0e-300_dp)
+        call get_ylim(lo, hi)
+        if (lo < 0.99999e300_dp .or. hi > 1.00001e300_dp) then
+            print "(a, 2es24.16)", "far ticks: data 1e-7 apart at 1e300 on symlog 1e-300 widened to ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
+        ! Hand-set limits on a symlog axis that it cannot tell apart are
+        ! widened as autoscaled ones are, and so are limits with no margin.
+        call figure()
+        call plot([1.0_dp, 2.0_dp], [1.0_dp, 2.0_dp])
+        call set_yscale("symlog", linthresh=1.0e-3_dp)
+        call ylim(1.0e300_dp, 1.0e300_dp*(1.0_dp + 5.0e-14_dp))
+        call get_ylim(lo, hi)
+        if (hi - lo < 1.0e297_dp) then
+            print "(a, 2es24.16)", "far ticks: hand-set symlog limits it cannot part stayed ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
+        call figure()
+        call plot([1.0_dp, 2.0_dp], [5.0_dp, 5.0_dp])
+        call set_yscale("symlog", linthresh=1.0e-10_dp)
+        call margins(0.0_dp)
+        call get_ylim(lo, hi)
+        if (.not. (lo < 5.0_dp .and. hi > 5.0_dp .and. lo > 1.0_dp .and. hi < 25.0_dp)) then
+            print "(a, 2es24.16)", "far ticks: a constant on symlog with no margin has limits ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
         ! So does a series a few roundings apart, which the transform cannot
         ! tell apart either, and one far out, where it rounds more coarsely.
         do i = 1, size(thr)

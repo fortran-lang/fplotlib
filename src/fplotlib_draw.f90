@@ -1061,8 +1061,10 @@ contains
     ! Limits set by hand that are too close together to draw between, as
     ! matplotlib's locators widen them by their nonsingular: on a linear
     ! axis, limits near zero become -0.05 to 0.05 and equal ones grow by 5%
-    ! of their size; on a log axis, equal ones grow a decade each way. The
-    ! result stops at the ends of the scale; descending limits stay so.
+    ! of their size; on a log axis, equal ones grow a decade each way; on a
+    ! symlog axis, ones it cannot tell apart grow by 5% of their size, as
+    ! autoscaling widens them. The result stops at the ends of the scale;
+    ! descending limits stay so.
     pure subroutine nonsingular_limits(lo, hi, sc)
         real(dp), intent(inout) :: lo, hi
         type(scale_t), intent(in) :: sc
@@ -1072,7 +1074,9 @@ contains
         flip = lo > hi
         a = min(lo, hi)
         b = max(lo, hi)
-        if (sc%kind == SCALE_LOG) then
+        if (sc%kind == SCALE_SYMLOG) then
+            if (unresolved(a, b, sc)) call widen_apart(a, b, .false., .false.)
+        else if (sc%kind == SCALE_LOG) then
             if (a > 0.0_dp .and. b <= a*(1.0_dp + 1.0e-12_dp)) then
                 a = max(tiny(1.0_dp), 0.1_dp*a)
                 ! A decade above both ends, which keeps it above the low one
@@ -1097,6 +1101,20 @@ contains
             hi = b
         end if
     end subroutine nonsingular_limits
+
+    ! Whether a symlog axis cannot tell lo and hi apart: their places on it
+    ! are within eight roundings of each other, measured relative to the
+    ! places themselves. (Relative through epsilon, not spacing(), which
+    ! for a value below about 2e-292 is tiny itself and far too wide, and
+    ! differs between compilers there.)
+    pure logical function unresolved(lo, hi, sc)
+        real(dp), intent(in) :: lo, hi
+        type(scale_t), intent(in) :: sc
+        real(dp) :: u0, u1
+        u0 = scale_fwd(sc, lo)
+        u1 = scale_fwd(sc, hi)
+        unresolved = abs(u1 - u0) <= 8.0_dp*epsilon(1.0_dp)*max(abs(u0), abs(u1))
+    end function unresolved
 
     ! Moves lo and hi apart by 5% of their size each way, or to -0.05 and
     ! 0.05 near zero, as matplotlib's nonsingular does with limits it cannot
@@ -1138,11 +1156,16 @@ contains
             end if
         end if
 
-        ! A symlog axis widens data too close together to draw between in
-        ! data space before its margin, as matplotlib's locators do: its own
-        ! units shrink with linthresh, so no fixed amount of them will do.
-        if (sc%kind == SCALE_SYMLOG .and. .not. (sticky_lo .or. sticky_hi)) &
-            call nonsingular_limits(lo, hi, sc)
+        ! A symlog axis widens data it cannot tell apart in data space,
+        ! before any margin and with none, as matplotlib's locators do: its
+        ! own units shrink with linthresh, so no fixed amount of them will do.
+        if (sc%kind == SCALE_SYMLOG) then
+            if (unresolved(lo, hi, sc)) then
+                call widen_apart(lo, hi, sticky_lo, sticky_hi)
+                ! Past what even that can part, the limits are as widened.
+                if (unresolved(lo, hi, sc)) return
+            end if
+        end if
 
         if (margin <= 0.0_dp) return
         ! The margin is a fraction of the drawn length, so it has to be
@@ -1160,21 +1183,8 @@ contains
             if (.not. sticky_hi) hi = scale_inv(sc, min(huge(1.0_dp), u1 + 2.0_dp*margin*d))
             return
         end if
-        if (sc%kind == SCALE_SYMLOG) then
-            ! A symlog axis measures in units that shrink with linthresh and
-            ! round more coarsely the further out the data is, so a span is
-            ! nothing when it is within a few roundings of its own ends. Data
-            ! that close is widened in data space, by 5% of its size, and the
-            ! margin is taken on that, as matplotlib's locators do.
-            if (abs(d) <= 8.0_dp*spacing(max(abs(u0), abs(u1), tiny(1.0_dp)))) then
-                call widen_apart(lo, hi, sticky_lo, sticky_hi)
-                u0 = scale_fwd(sc, lo)
-                u1 = scale_fwd(sc, hi)
-                d = u1 - u0
-                ! Past what even that can part, the limits are as widened.
-                if (abs(d) <= 8.0_dp*spacing(max(abs(u0), abs(u1), tiny(1.0_dp)))) return
-            end if
-        else
+        ! (A symlog span was parted above.)
+        if (sc%kind /= SCALE_SYMLOG) then
             thr = 1.0e-30_dp
             if (abs(d) < thr) d = 1.0_dp
         end if
