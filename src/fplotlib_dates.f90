@@ -46,7 +46,9 @@ contains
         integer, intent(out) :: y, mo, d, h, mi, s
         integer :: z, rem
 
-        z = floor(v)
+        ! Kept within a billion days, some three million years, either way,
+        ! where the calendar's integer arithmetic holds.
+        z = floor(max(-1.0e9_dp, min(1.0e9_dp, v)))
         ! Rounded to the second, so that a value that is a hair under
         ! midnight does not come back as 23:59:59 of the day before.
         rem = nint((v - real(z, dp))*86400.0_dp)
@@ -207,7 +209,9 @@ contains
         case default
             dt = unit_days(unit)*real(step, dp)
             ! Start from the round value at or before the low end.
-            v = floor(lo/dt + 1.0e-9_dp)*dt
+            v = aint(lo/dt + 1.0e-9_dp)
+            if (v > lo/dt + 1.0e-9_dp) v = v - 1.0_dp
+            v = v*dt
             do k = 0, 100000
                 if (v > hi + 1.0e-9_dp) exit
                 if (v >= lo - 1.0e-9_dp) call push(t, nt, v)

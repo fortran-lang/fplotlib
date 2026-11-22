@@ -17,6 +17,7 @@ module test_missing
     use fplotlib_draw, only: render_figure
     use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
+    use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS
     implicit none
     private
 
@@ -56,8 +57,34 @@ contains
         end do
         call dash_shortcut_check(nfail)
         call size_status_check(nfail)
+        call far_ticks_check(nfail)
         print "(a, i0, a, i0)", "missing data: ", NCASE, " plots, failures = ", nfail
     end subroutine missing_data_check
+
+    ! Ticks and labels for values past a default integer: Unix times in
+    ! steps of half a second, and counts in the billions.
+    subroutine far_ticks_check(nfail)
+        integer, intent(inout) :: nfail
+        real(dp) :: t(MAX_TICKS)
+        integer :: n
+        character(len=64) :: s
+
+        call multiple_ticks(1.7e9_dp, 1.7e9_dp + 5.0_dp, 0.5_dp, t, n)
+        if (n /= 11 .or. abs(t(1) - 1.7e9_dp) > 0.0_dp) then
+            print "(a, i0)", "far ticks: multiple_ticks gave ", n
+            nfail = nfail + 1
+        end if
+        call format_grouped(2.5e9_dp, 0, s, n)
+        if (s(1:n) /= "2,500,000,000") then
+            print "(a)", "far ticks: format_grouped wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        call format_percent(3.0e7_dp, 1.0_dp, 0, s, n)
+        if (s(1:n) /= "3000000000%") then
+            print "(a)", "far ticks: format_percent wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+    end subroutine far_ticks_check
 
     ! A label placed a million points off makes a tight crop too large for
     ! a PNG: a failure at run time, which savefig returns in its status.
@@ -85,6 +112,18 @@ contains
             end if
             deallocate (r%rgb)
         end do
+
+        ! A figure too large for a PNG whole, cropped tight to the little
+        ! that is drawn in it, saves.
+        call figure(figsize=[150.0_dp, 150.0_dp], dpi=100.0_dp)
+        call subplots_adjust(left=0.45_dp, right=0.55_dp, bottom=0.45_dp, top=0.55_dp)
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call savefig("tests/out/missing_size.png", bbox_inches="tight", status=st)
+        if (.not. st%ok()) then
+            print "(a, i0)", "size status: a tight crop that fits did not save, code ", st%code
+            nfail = nfail + 1
+        end if
+        call close()
 
         call figure()
         call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])

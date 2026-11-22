@@ -32,8 +32,13 @@ module fplotlib
     ! savefig, save_animation and show return a file that cannot be
     ! written in a status_t; see fplotlib_status.
     public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE
-    ! The limits the documentation lists, for callers to check against.
-    public :: MAX_COORD, MAX_DASH, MAX_PEN_PER_DASH, MAX_PNG_PIXELS
+
+    ! The most bytes of frames an animation reel holds.
+    real(dp), parameter :: MAX_REEL_BYTES = 1.0e9_dp
+    ! The limits a plotting call can reach, for callers to check against.
+    ! The renderer's own (MAX_COORD, MAX_PEN_PER_DASH) are in
+    ! fplotlib_render.
+    public :: MAX_DASH, MAX_PNG_PIXELS, MAX_REEL_BYTES
     public :: plot, scatter, semilogx, semilogy, loglog
     public :: set_xscale, set_yscale
     public :: bar, barh, hist, fill_between, fill_betweenx, stackplot
@@ -7340,9 +7345,15 @@ contains
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
                 call contract_error("savefig: dpi must be finite and positive")
             end if
-            if (file_ext(filename) == "png") call check_pixels("savefig", dpi)
-        else if (file_ext(filename) == "png") then
-            call check_pixels("savefig", fig_dpi)
+        end if
+        ! A whole figure too large for a PNG is known beforehand; a tight
+        ! crop takes its size from the drawing, and render_png decides.
+        if (file_ext(filename) == "png" .and. .not. tight_crop(bbox_inches)) then
+            if (present(dpi)) then
+                call check_pixels("savefig", dpi)
+            else
+                call check_pixels("savefig", fig_dpi)
+            end if
         end if
         ! dpi given here applies to this file only, as it does in matplotlib;
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
@@ -7353,13 +7364,13 @@ contains
         ! failure at run time, returned like a file that cannot be written.
         select case (file_ext(filename))
         case ("svg")
-            data = render_svg(facecolor, transparent, bbox_inches, pad_inches, local)
+            data = render_svg(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("pdf")
-            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches, local)
+            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("png")
-            data = render_png(facecolor, transparent, bbox_inches, pad_inches, local)
+            data = render_png(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("eps")
-            data = render_eps(facecolor, transparent, bbox_inches, pad_inches, local)
+            data = render_eps(facecolor, transparent, bbox_inches, pad_inches, status=local)
         end select
         fig_dpi = saved_dpi
         if (.not. local%ok()) then
@@ -7446,6 +7457,11 @@ contains
         character(len=:), allocatable :: bigger
         integer :: cap, need
 
+        ! The reel, and the GIF and APNG encoders after it, count bytes in
+        ! default integers: a billion bytes of frames is the most it holds.
+        if (real(anim_len, dp) + real(len(frame), dp) > MAX_REEL_BYTES) &
+            call contract_error("add_frame: an animation holds at most 1e9 bytes of frames, "// &
+                                "three per pixel")
         need = anim_len + len(frame)
         cap = 0
         if (allocated(anim_pix)) cap = len(anim_pix)

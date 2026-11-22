@@ -32,8 +32,9 @@ result), or stop with exit code 2 without a `status`. `render_svg`,
 `render_pdf` and `render_eps` take the same optional `status`, which is
 always ok.
 `fplotlib` re-exports `status_t`, `STATUS_OK`, `ERROR_IO` and `ERROR_SIZE`,
-and the limits below: `MAX_COORD`, `MAX_DASH`, `MAX_PEN_PER_DASH` and
-`MAX_PNG_PIXELS`. A whole figure too large for a PNG, which its size and
+and the limits below that a plotting call can reach: `MAX_DASH`,
+`MAX_PNG_PIXELS` and `MAX_REEL_BYTES`. The renderer's own, `MAX_COORD` and
+`MAX_PEN_PER_DASH`, are in `fplotlib_render`. A whole figure too large for a PNG, which its size and
 dpi tell beforehand, is a broken precondition; only a crop is returned.
 `status%set` is for fplotlib's own use.
 
@@ -58,6 +59,7 @@ no longer be written. Going past one is a broken precondition, and stops:
 | Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
 | A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
+| The frames of one animation, three bytes a pixel | at most `MAX_REEL_BYTES` (1e9) bytes |
 
 Data is never limited: a value of any size, or a missing one, is drawn or
 left out as the view shows it. Line widths and dash lengths beyond 1e12
@@ -68,8 +70,10 @@ The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid
 line at the share of the line the pattern would cover (more where round
 or square ends close the gaps). Walking such a pattern dash by dash could
-take without end. Everything else it draws exactly as the full walk of
-every dash would.
+take without end. Everything else it draws as the full walk of every dash
+would, up to the rounding of where along a very long segment the pattern
+stands, which the walk works out by adding dash after dash and the
+shortcuts by division.
 
 ```{f:module} fplotlib_status
 ```

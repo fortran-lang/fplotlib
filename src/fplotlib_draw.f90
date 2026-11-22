@@ -4768,7 +4768,7 @@ contains
     ! their status is always ok.
     !
     ! dpi is the figure's own unless given here.
-    function render_png(facecolor, transparent, bbox_inches, pad_inches, status, dpi) result(png)
+    function render_png(facecolor, transparent, bbox_inches, pad_inches, dpi, status) result(png)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches, dpi

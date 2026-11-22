@@ -644,17 +644,20 @@ contains
         real(dp), intent(in) :: vmin, vmax, base
         real(dp), intent(out) :: t(MAX_TICKS)
         integer, intent(out) :: n
-        integer :: k, k0, k1
+        real(dp) :: k, k0, k1
 
         n = 0
         if (base <= 0.0_dp) return
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
-        k0 = ceiling(min(vmin, vmax)/base - 1.0e-9_dp)
-        k1 = floor(max(vmin, vmax)/base + 1.0e-9_dp)
-        do k = k0, k1
-            if (n >= MAX_TICKS) exit
+        ! Counted in reals: the multiples of a small base near a large
+        ! value, a Unix time say, are past any integer.
+        k0 = -real_floor(-(min(vmin, vmax)/base - 1.0e-9_dp))
+        k1 = real_floor(max(vmin, vmax)/base + 1.0e-9_dp)
+        k = k0
+        do while (k <= k1 .and. n < MAX_TICKS)
             n = n + 1
-            t(n) = real(k, dp)*base
+            t(n) = k*base
+            k = k + 1.0_dp
         end do
     end subroutine multiple_ticks
 
@@ -669,8 +672,10 @@ contains
         character(len=32) :: tmp
         character(len=16) :: fmt
 
-        if (dec <= 0) then
-            write (tmp, "(I0)") nint(v/whole*100.0_dp)
+        if (dec <= 0 .and. abs(v/whole*100.0_dp) < 1.0e18_dp) then
+            write (tmp, "(I0)") nint(v/whole*100.0_dp, int64)
+        else if (dec <= 0) then
+            write (tmp, "(ES12.5)") v/whole*100.0_dp
         else
             write (fmt, "(A,I0,A)") "(F24.", dec, ")"
             write (tmp, fmt) v/whole*100.0_dp
@@ -691,8 +696,14 @@ contains
         integer :: i, k, dot, first, d
 
         d = max(0, dec)
-        if (d == 0) then
-            write (tmp, "(I0)") nint(abs(v))
+        if (abs(v) >= 1.0e18_dp) then
+            ! Past what grouping can show in a 64-bit integer.
+            write (s, "(ES12.5)") v
+            s = adjustl(s)
+            n = len_trim(s)
+            return
+        else if (d == 0) then
+            write (tmp, "(I0)") nint(abs(v), int64)
         else
             write (fmt, "(A,I0,A)") "(F32.", d, ")"
             write (tmp, fmt) abs(v)
