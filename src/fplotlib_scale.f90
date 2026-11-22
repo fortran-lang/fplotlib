@@ -58,7 +58,7 @@ contains
     pure function scale_inv(s, u) result(v)
         type(scale_t), intent(in) :: s
         real(dp), intent(in) :: u
-        real(dp) :: v, edge
+        real(dp) :: v, edge, e, p
 
         select case (s%kind)
         case (SCALE_LOG)
@@ -68,7 +68,15 @@ contains
             if (abs(u) <= edge) then
                 v = u / linscale_adj(s)
             else
-                v = sign(s%linthresh * 10.0_dp ** (abs(u) / s%linthresh - linscale_adj(s)), u)
+                e = abs(u) / s%linthresh - linscale_adj(s)
+                p = 10.0_dp ** e
+                if (ieee_is_finite(p)) then
+                    v = sign(s%linthresh * p, u)
+                else
+                    ! Past the largest double before linthresh scales it
+                    ! down: the product taken in logs.
+                    v = sign(10.0_dp ** (e + log10(s%linthresh)), u)
+                end if
             end if
         case default
             v = u

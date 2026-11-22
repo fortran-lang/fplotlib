@@ -22,7 +22,7 @@ Each real argument is one of:
   margin    finite, > -0.5                    (margins)
   pad       finite, at most 1e9 either way    (pad_inches; checked whether cropped or not)
   thresh    1e-300 to 1e300                   (symlog linthresh: its linear part must be normal)
-  linscale  finite, > 0, at most 1e6          (symlog linscale)
+  linscale  1e-6 to 1e6                       (symlog linscale)
   layout    finite, at most 1000 either way    (fractions of the figure or axes)
   ratio     1e-3 to 1e3                        (a shape's width to height)
   errors    not negative, NaN allowed         (error bar lengths, arrays only)

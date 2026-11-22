@@ -74,6 +74,7 @@ contains
         real(dp) :: lv(64), back, lo, hi
         character(len=8) :: lab
         real(dp), parameter :: near(4) = [3.0e-308_dp, 5.0e-309_dp, 2.0e-310_dp, 8.0e-310_dp]
+        real(dp), parameter :: thr(4) = [1.0e-300_dp, 1.0e-200_dp, 1.0e-3_dp, 1.0_dp]
         real(dp), parameter :: far(6) = [2.5e20_dp, -4.5e100_dp, 1.2e300_dp, 1.2e308_dp, &
                                          3.0e20_dp, -1.7976e308_dp]
 
@@ -163,11 +164,25 @@ contains
         call plot([1.0_dp, 2.0_dp, 3.0_dp], [-1.0_dp, 0.5_dp, 1.0e200_dp])
         call set_yscale("symlog", linthresh=1.0e-200_dp)
         call get_ylim(lo, hi)
-        if (lo < -1.0e40_dp .or. lo > -1.0_dp) then
-            print "(a, es12.4)", "far ticks: symlog with linthresh 1e-200 autoscaled down to ", lo
+        if (lo < -1.0e40_dp .or. lo > -1.0_dp .or. hi < 1.0e200_dp .or. hi > 1.0e240_dp) then
+            print "(a, 2es12.4)", "far ticks: symlog with linthresh 1e-200 autoscaled to ", lo, hi
             nfail = nfail + 1
         end if
         call close()
+        ! A constant series on a symlog axis, whatever its threshold, gets
+        ! limits about it, not a margin of the whole range of a double.
+        do i = 1, size(thr)
+            call figure()
+            call plot([1.0_dp, 2.0_dp], [5.0_dp, 5.0_dp])
+            call set_yscale("symlog", linthresh=thr(i))
+            call get_ylim(lo, hi)
+            if (.not. (lo > 1.0_dp .and. lo < 5.0_dp .and. hi > 5.0_dp .and. hi < 25.0_dp)) then
+                print "(a, es9.2, a, 2es12.4)", "far ticks: a constant 5 on symlog, linthresh ", thr(i), &
+                    ", has limits ", lo, hi
+                nfail = nfail + 1
+            end if
+            call close()
+        end do
         ! A constant series near the largest double has finite log limits.
         call figure()
         call semilogy([0.0_dp, 1.0_dp], [1.0e308_dp, 1.0e308_dp])

@@ -2836,9 +2836,9 @@ contains
         if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) then
             call contract_error(what//": limits must be finite")
         end if
-        ! Taken as given: limits too close together to draw between are
-        ! widened when the figure is drawn, by the rule of the axis scale,
-        ! which may be set after them.
+        ! Taken as given here: limits too close together to draw between
+        ! are widened when the figure is drawn, by nonsingular_limits under
+        ! the scale the axis has then, which may be set after them.
         lo = a
         hi = b
     end subroutine user_limits
@@ -2884,14 +2884,14 @@ contains
         end if
     end subroutine check_thresh_arg
 
-    ! A symlog linscale, which with linthresh at most 1e300 keeps the
-    ! transformed axis finite.
+    ! A symlog linscale, which with linthresh from 1e-300 to 1e300 keeps
+    ! the linear part of the transformed axis among normal doubles.
     subroutine check_linscale_arg(proc, name, v)
         character(len=*), intent(in) :: proc, name
         real(dp), intent(in), optional :: v
         if (.not. present(v)) return
-        if (.not. ieee_is_finite(v) .or. v <= 0.0_dp .or. v > 1.0e6_dp) then
-            call contract_error(proc//": "//name//" must be positive and at most 1e6, got "//arg_str(v))
+        if (.not. ieee_is_finite(v) .or. v < 1.0e-6_dp .or. v > 1.0e6_dp) then
+            call contract_error(proc//": "//name//" must be from 1e-6 to 1e6, got "//arg_str(v))
         end if
     end subroutine check_linscale_arg
 
@@ -3300,14 +3300,9 @@ contains
         case default
             call contract_error("set_xscale/set_yscale: unknown scale, expected linear, log or symlog")
         end select
-        if (present(linthresh)) then
-            if (linthresh <= 0.0_dp) call contract_error("set_xscale/set_yscale: linthresh must be positive")
-            s%linthresh = linthresh
-        end if
-        if (present(linscale)) then
-            if (linscale <= 0.0_dp) call contract_error("set_xscale/set_yscale: linscale must be positive")
-            s%linscale = linscale
-        end if
+        ! Both checked by the caller's generated checks.
+        if (present(linthresh)) s%linthresh = linthresh
+        if (present(linscale)) s%linscale = linscale
     end function make_scale
 
     subroutine semilogx(x, y, fmt, label, lw, color)

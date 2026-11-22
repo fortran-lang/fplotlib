@@ -1075,7 +1075,9 @@ contains
         if (sc%kind == SCALE_LOG) then
             if (a > 0.0_dp .and. b <= a*(1.0_dp + 1.0e-12_dp)) then
                 a = max(tiny(1.0_dp), 0.1_dp*a)
-                b = min(huge(1.0_dp), 10.0_dp*b)
+                ! A decade above both ends, which keeps it above the low one
+                ! where that was raised to the least normal double.
+                b = min(huge(1.0_dp), max(10.0_dp*b, 10.0_dp*a))
             end if
         else
             big = max(abs(a), abs(b))
@@ -1117,6 +1119,12 @@ contains
                 end if
             end if
         end if
+
+        ! A symlog axis widens data too close together to draw between in
+        ! data space before its margin, as matplotlib's locators do: its own
+        ! units shrink with linthresh, so no fixed amount of them will do.
+        if (sc%kind == SCALE_SYMLOG .and. .not. (sticky_lo .or. sticky_hi)) &
+            call nonsingular_limits(lo, hi, sc)
 
         if (margin <= 0.0_dp) return
         ! The margin is a fraction of the drawn length, so it has to be
