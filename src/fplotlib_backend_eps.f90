@@ -25,6 +25,7 @@
 ! prolog once the page knows which glyphs it used.
 module fplotlib_backend_eps
     use fplotlib_style, only: dp
+    use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib_render
     use fplotlib_glyphs, only: glyph_inked
     use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
@@ -84,6 +85,14 @@ contains
         call fmt_num(x, s, n)
         t = s(1:n)
     end function num_str
+
+    pure function long_str(i) result(t)
+        integer(int64), intent(in) :: i
+        character(len=:), allocatable :: t
+        character(len=24) :: s
+        write (s, "(I0)") i
+        t = trim(s)
+    end function long_str
 
     pure function int_str(i) result(t)
         integer, intent(in) :: i
@@ -425,8 +434,10 @@ contains
         call builder_init(f)
         call builder_append(f, "%!PS-Adobe-3.0 EPSF-3.0"//eol)
         call builder_append(f, "%%Creator: fplotlib"//eol)
-        call builder_append(f, "%%BoundingBox: 0 0 "//int_str(ceiling(self%w)) &
-                            //" "//int_str(ceiling(self%h))//eol)
+        ! In 64-bit integers: a figure may be a billion inches wide, past
+        ! what a default integer holds.
+        call builder_append(f, "%%BoundingBox: 0 0 "//long_str(ceiling(self%w, int64)) &
+                            //" "//long_str(ceiling(self%h, int64))//eol)
         call builder_append(f, "%%HiResBoundingBox: 0 0 "//num_str(self%w) &
                             //" "//num_str(self%h)//eol)
         call builder_append(f, "%%EndComments"//eol)

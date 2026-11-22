@@ -1036,6 +1036,14 @@ contains
         real(dp) :: c, h
         c = 0.5_dp * (lo + hi)
         h = 0.5_dp * (hi - lo) * f
+        if (.not. ieee_is_finite(c) .or. .not. ieee_is_finite(h)) then
+            ! Limits near the largest double, which they stop at.
+            c = 0.5_dp*lo + 0.5_dp*hi
+            h = (0.5_dp*hi - 0.5_dp*lo) * f
+            lo = max(-huge(1.0_dp), c - h)
+            hi = min(huge(1.0_dp), c + h)
+            return
+        end if
         lo = c - h
         hi = c + h
     end subroutine grow_about_centre
@@ -2587,8 +2595,13 @@ contains
         integer, intent(in) :: n
         integer :: f
         integer, parameter :: MAX_SAMPLES = 2048
+        real(dp) :: x
 
-        f = max(1, ceiling(extent/real(max(n, 1), dp)))
+        ! Bounded before ceiling, which an extent past any integer, or a
+        ! missing one, would overflow.
+        x = extent/real(max(n, 1), dp)
+        f = 1
+        if (x > 1.0_dp) f = ceiling(min(x, real(MAX_SAMPLES, dp)))
         f = min(f, max(1, MAX_SAMPLES/max(n, 1)))
     end function fill_factor
 
@@ -4013,6 +4026,12 @@ contains
         if (a%aspect > 0.0_dp) then
             span_x = abs(xmax - xmin)
             span_y = abs(ymax - ymin)
+            ! Only the ratio of the spans and the box matter, so a span past
+            ! the largest double is taken, with the other, at half.
+            if (.not. ieee_is_finite(span_x) .or. .not. ieee_is_finite(span_y)) then
+                span_x = abs(0.5_dp*xmax - 0.5_dp*xmin)
+                span_y = abs(0.5_dp*ymax - 0.5_dp*ymin)
+            end if
             if (span_x > 0.0_dp .and. span_y > 0.0_dp) then
                 if (a%aspect_datalim) then
                     ! Stretch whichever range is drawn too short, about its
@@ -4660,9 +4679,6 @@ contains
         call b%close_canvas()
     end subroutine render_figure
 
-    ! The window of the drawing a figure is written through, in points:
-    ! the whole figure, or with bbox_inches="tight" what is drawn and
-    ! pad_inches about it.
     ! pad_inches, for savefig and the render_* functions, whether the
     ! figure is cropped or not: finite, and at most a billion inches either
     ! way, so that the cropped window stays finite.
@@ -4674,6 +4690,9 @@ contains
             call contract_error(proc//": "//name//" must be finite and at most 1e9 inches")
     end subroutine check_pad_arg
 
+    ! The window of the drawing a figure is written through, in points:
+    ! the whole figure, or with bbox_inches="tight" what is drawn and
+    ! pad_inches about it.
     subroutine figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
         character(len=*), intent(in), optional :: bbox_inches
         real(dp), intent(in), optional :: pad_inches

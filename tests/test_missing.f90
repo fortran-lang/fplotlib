@@ -19,6 +19,7 @@ module test_missing
     use fplotlib_raster, only: full_walk
     use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS
     use fplotlib_dates, only: num_date
+    use fplotlib_contour, only: contour_levels
     implicit none
     private
 
@@ -41,7 +42,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 79
+    integer, parameter :: NCASE = 82
 
 contains
 
@@ -69,6 +70,7 @@ contains
         real(dp) :: t(MAX_TICKS)
         integer :: n, y, mo, dd, hh, mi, sec
         character(len=64) :: s
+        real(dp) :: lv(64)
 
         call multiple_ticks(1.7e9_dp, 1.7e9_dp + 5.0_dp, 0.5_dp, t, n)
         if (n /= 11 .or. abs(t(1) - 1.7e9_dp) > 0.0_dp) then
@@ -83,6 +85,12 @@ contains
         call format_percent(3.0e7_dp, 1.0_dp, 0, s, n)
         if (s(1:n) /= "3000000000%") then
             print "(a)", "far ticks: format_percent wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        ! Contour levels of data far from zero in small steps cover it.
+        call contour_levels(1.0e9_dp, 1.0e9_dp + 0.5_dp, 7, lv, n)
+        if (n < 2 .or. lv(1) > 1.0e9_dp .or. lv(n) < 1.0e9_dp + 0.5_dp .or. lv(1) < 1.0e9_dp - 1.0_dp) then
+            print "(a, i0)", "far ticks: contour levels of offset data, count ", n
             nfail = nfail + 1
         end if
         ! Fixed decimals that would not fit go to exponent form, not stars.
@@ -585,6 +593,11 @@ contains
                                    reshape([(real(i, dp), i=1, 9)], [3, 3]))
         case (78); call plot([-huge(1.0_dp), 0.0_dp, huge(1.0_dp)], t(1:3))
         case (79); call plot(x, x); call add_circle([0.5_dp, 0.5_dp], 1.0e308_dp)
+        ! hexbin with every point at the lowest double, an image over the
+        ! whole range of a double, and contours of data far from zero.
+        case (80); call hexbin([-huge(1.0_dp)], [-huge(1.0_dp)])
+        case (81); call imshow(z, extent=[-huge(1.0_dp), huge(1.0_dp), -huge(1.0_dp), huge(1.0_dp)])
+        case (82); call contourf(1.0e9_dp + z); call colorbar()
         end select
     end subroutine draw_case
 
@@ -628,7 +641,28 @@ contains
             print "(a, i0, a)", "missing data case ", k, ": a number overflowed its field in the output"
             nfail = nfail + 1
         end if
+        ! An integer that overflowed shows as a negative size.
+        if (.not. eps_box_ok(eps)) then
+            print "(a, i0, a)", "missing data case ", k, ": the EPS BoundingBox is not a box"
+            nfail = nfail + 1
+        end if
     end subroutine check_case
+
+    ! Whether the EPS %%BoundingBox line has four integers, the last two
+    ! no smaller than the first two.
+    logical function eps_box_ok(eps) result(good)
+        character(len=*), intent(in) :: eps
+        integer :: i, j, ios
+        integer(int64) :: b(4)
+        good = .false.
+        i = index(eps, "%%BoundingBox:")
+        if (i == 0) return
+        j = index(eps(i:), new_line("a"))
+        if (j == 0) return
+        read (eps(i + 14:i + j - 2), *, iostat=ios) b
+        if (ios /= 0) return
+        good = b(3) >= b(1) .and. b(4) >= b(2)
+    end function eps_box_ok
 
     ! Whether s spells a NaN or an infinity as a word of its own, the way
     ! a number formatter writes one.

@@ -65,7 +65,7 @@ contains
     ! ten; of those it takes the smallest that covers the range in nbins
     ! intervals, and then backs off to a larger one only if the smaller
     ! leaves fewer than two ticks inside the view.
-    subroutine linear_ticks(vmin, vmax, nbins, ticks, n_ticks)
+    recursive subroutine linear_ticks(vmin, vmax, nbins, ticks, n_ticks)
         real(dp), intent(in) :: vmin, vmax
         integer, intent(in) :: nbins
         real(dp), intent(out) :: ticks(MAX_TICKS)
@@ -82,6 +82,13 @@ contains
         ! A range made of missing data has no ticks.
         n_ticks = 0
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
+        if (.not. ieee_is_finite(vmax - vmin)) then
+            ! A range wider than the largest double: the ticks of half of
+            ! it, doubled, which are as round and all finite.
+            call linear_ticks(0.5_dp*vmin, 0.5_dp*vmax, nbins, ticks, n_ticks)
+            ticks(1:n_ticks) = 2.0_dp*ticks(1:n_ticks)
+            return
+        end if
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
         if (abs(hi - lo) < 1.0e-30_dp*max(1.0_dp, abs(lo), abs(hi))) then
@@ -158,13 +165,27 @@ contains
             return
         end if
         meanv = 0.5_dp*(vmax + vmin)
+        if (.not. ieee_is_finite(meanv)) meanv = 0.5_dp*vmax + 0.5_dp*vmin
         if (abs(meanv)/dv < 100.0_dp) then
             off = 0.0_dp
         else
             off = sign(10.0_dp**floor(log10(abs(meanv))), meanv)
         end if
-        scal = 10.0_dp**floor(log10(dv/real(n, dp)))
+        scal = 10.0_dp**floor(log10_span(vmin, vmax) - log10(real(n, dp)))
     end subroutine scale_range
+
+    ! log10 of the distance between a and b, worked out from half of each
+    ! where the distance itself is past the largest double, as it is for
+    ! limits that span the whole range of a double.
+    pure function log10_span(a, b) result(r)
+        real(dp), intent(in) :: a, b
+        real(dp) :: r
+        if (ieee_is_finite(b - a)) then
+            r = log10(abs(b - a))
+        else
+            r = log10(2.0_dp) + log10(abs(0.5_dp*b - 0.5_dp*a))
+        end if
+    end function log10_span
 
     ! floor and ceiling in step units, snapping to the integer when the
     ! value is within rounding distance of it.
@@ -398,7 +419,14 @@ contains
         if (rng <= 0.0_dp) rng = maxval(abs(locs(1:n)))
         if (rng <= 0.0_dp) return
 
-        oom = floor(log10(rng))
+        if (ieee_is_finite(rng)) then
+            oom = floor(log10(rng))
+        else if (ieee_is_finite(log10_span(lo, hi))) then
+            oom = floor(log10_span(lo, hi))
+        else
+            ! Ticks that are themselves missing need no decimals.
+            return
+        end if
         thresh = 1.0e-3_dp*10.0_dp**oom
         d = max(0, 3 - oom)
         do while (d >= 0)
@@ -557,7 +585,11 @@ contains
         ! taken away, which is the span of the axis rather than its values.
         if (off /= 0.0_dp) then
             span = abs(vmax - vmin)
-            if (span > 0.0_dp) oom = floor(log10(span))
+            if (.not. ieee_is_finite(span)) then
+                if (ieee_is_finite(log10_span(vmin, vmax))) oom = floor(log10_span(vmin, vmax))
+            else if (span > 0.0_dp) then
+                oom = floor(log10(span))
+            end if
         else
             amax = maxval(abs(locs(1:n)))
             if (amax > 0.0_dp) oom = floor(log10(amax))

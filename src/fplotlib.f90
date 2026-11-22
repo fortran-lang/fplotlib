@@ -4296,10 +4296,12 @@ contains
             pad = 2.0e-9_dp*(0.5_dp*x1 - 0.5_dp*x0)
         end if
         x0 = max(-H, x0 - pad); x1 = min(H, x1 + pad)
+        ! Where adding one is lost in rounding, the ends step apart by the
+        ! least they can, inward from the largest double.
         if (x1 <= x0) x1 = x0 + 1.0_dp
-        if (x1 <= x0) x0 = nearest(x0, -1.0_dp)
+        if (x1 <= x0) call step_apart(x0, x1)
         if (y1 <= y0) y1 = y0 + 1.0_dp
-        if (y1 <= y0) y0 = nearest(y0, -1.0_dp)
+        if (y1 <= y0) call step_apart(y0, y1)
         wide_x = .not. ieee_is_finite(x1 - x0)
         wide_y = .not. ieee_is_finite(y1 - y0)
         ! A wide span keeps half a cell in sx and sy; ix and iy below and
@@ -4390,6 +4392,31 @@ contains
         call xlim(max(-H, x0 - (0.05_dp*x1 - 0.05_dp*x0)), min(H, x1 + (0.05_dp*x1 - 0.05_dp*x0)))
         call ylim(max(-H, y0 - (0.05_dp*y1 - 0.05_dp*y0)), min(H, y1 + (0.05_dp*y1 - 0.05_dp*y0)))
     end subroutine hexbin
+
+    ! The levels matplotlib would pick for data from lo to hi, the least
+    ! and greatest of its finite values: missing values have no level. With
+    ! none at all, the levels of 0 to 1, which contour nothing.
+    pure subroutine data_levels(lo, hi, lev, nlev)
+        real(dp), intent(in) :: lo, hi
+        real(dp), intent(out) :: lev(:)
+        integer, intent(out) :: nlev
+        if (lo <= hi) then
+            call contour_levels(lo, hi, 8, lev, nlev)
+        else
+            call contour_levels(0.0_dp, 1.0_dp, 8, lev, nlev)
+        end if
+    end subroutine data_levels
+
+    ! Moves lo and hi, which are equal, apart by one representable step,
+    ! the one that stays finite.
+    pure subroutine step_apart(lo, hi)
+        real(dp), intent(inout) :: lo, hi
+        if (lo < 0.0_dp) then
+            hi = nearest(hi, 1.0_dp)
+        else
+            lo = nearest(lo, -1.0_dp)
+        end if
+    end subroutine step_apart
 
     ! The k-th line of a hexbin grid of n cells from lo to hi, a cell being
     ! s wide, or, for a span wider than the largest double, s half a cell.
@@ -4826,7 +4853,7 @@ contains
             allocate (lev(size(levels)))
             lev = levels
         else
-            call contour_levels(minval(z), maxval(z), 8, t, nlev)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nlev)
             allocate (lev(nlev))
             lev = t(1:nlev)
         end if
@@ -5045,7 +5072,7 @@ contains
             allocate (lev(size(levels)))
             lev = levels
         else
-            call contour_levels(minval(z), maxval(z), 8, t, nlev)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nlev)
             allocate (lev(nlev))
             lev = t(1:nlev)
         end if
@@ -5169,7 +5196,7 @@ contains
             ax(cur_i)%clev = levels
         else
             ! matplotlib picks round levels spanning the data.
-            call contour_levels(minval(z), maxval(z), 8, t, nt)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nt)
             allocate (ax(cur_i)%clev(nt))
             ax(cur_i)%clev = t(1:nt)
         end if

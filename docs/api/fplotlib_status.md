@@ -50,7 +50,7 @@ no longer be written. Going past one is a broken precondition, and stops:
 | What | Limit |
 |---|---|
 | A coordinate, size or width handed to a renderer | finite, at most `MAX_COORD` (1e15 points) |
-| `figure`/`rc` `figsize`, `savefig` `pad_inches` | at most 1e9 inches |
+| `figure`/`rc` `figsize`, `pad_inches` of `savefig` and `render_*` | at most 1e9 inches |
 | `figure` `num` | 1 to 100000 |
 | Axes in one `subplot`/`subplots` grid | at most 10000 |
 | A count: `bins`, `ncol`, `nbins`, `markevery`, `nrows`, ... | 1 to 1000000 |
