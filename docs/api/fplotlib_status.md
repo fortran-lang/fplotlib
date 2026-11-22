@@ -75,7 +75,12 @@ so far past the view that its own place on the canvas is past the largest
 double, such as a circle of radius 1e308 about a point in a unit view,
 cannot be placed, and is left out as missing data is. A log axis reaches
 down to the least normal double, about 2.2e-308: a value below it,
-subnormal, zero or negative, is drawn there.
+subnormal, zero or negative, is drawn there. A log or symlog axis tells
+values apart only as finely as doubles tell apart their places on it,
+about `epsilon` times the transformed value rather than times the value
+itself: data spread over a few such roundings is widened as a constant
+is, and data spread over a few dozen is drawn as finely as those
+roundings allow, as in matplotlib.
 
 The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid
