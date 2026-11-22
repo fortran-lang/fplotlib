@@ -36,12 +36,17 @@ each must end inside whatever began after it, and none may be open at
 `end_frame_impl`. A custom target that does not accepts only the identity
 transform without a clip, and stops on any other rather than ignoring it.
 
-The PNG backend draws a frame's content transformed and clipped exactly.
-What its rasterizer may skip of a dashed stroke it decides on the canvas,
-not in the frame's coordinates, so a frame that shrinks, shears or
-stretches unevenly changes nothing it draws; a dash pattern finer than half
-a pixel on the canvas along a segment is drawn solid there, as without a
-frame (see [`fplotlib_status`](fplotlib_status.md)).
+The PNG backend draws a frame's content transformed and clipped exactly; a
+paint clip inside a clipped frame is cut as geometry, so its edges are
+antialiased rather than whole pixels. A dashed stroke is built in the
+frame's coordinates, but what the rasterizer may skip of it is decided by
+the canvas: a segment is walked only where the matrix maps it into the
+canvas, widened on each side by the pen as the matrix stretches that axis,
+so the walk is as short as without a frame however the frame shrinks,
+shears or stretches. A segment whose pattern is finer than half a pixel on
+the canvas is drawn solid at the pattern's cover, the approximation
+[`fplotlib_status`](fplotlib_status.md) describes; everywhere else the
+dashes are what walking every one of them draws.
 
 ```{f:module} fplotlib_render
 ```

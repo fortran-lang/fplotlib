@@ -303,8 +303,8 @@ local coordinates. A `paged_document_t` holds pages of frames, which may have
 different sizes; `fplotlib_document` exports it to bytes in memory
 (`export_document`) or to files (`save_document`), one PDF or an SVG, PNG or
 EPS per page. Glyph runs keep their logical UTF-8 text and the source byte
-range of every glyph, and PDF text carries it as `ActualText`; a formula keeps
-its TeX source, which is not used as `ActualText`.
+range of every glyph; PDF text carries a run's text as `ActualText`, and a
+formula keeps its TeX source, which is not used as `ActualText`.
 
 ## Build
 

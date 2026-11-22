@@ -40,6 +40,9 @@ module fplotlib_backend_svg
         ! Whether each open frame, the innermost last, opened a clip group
         ! of its own that end_frame has to close.
         logical, allocatable :: frame_clipped(:)
+        ! The group names used so far, each followed by a new line: a frame
+        ! placed twice repeats its groups, whose ids must stay unique.
+        character(len=:), allocatable :: group_names
     contains
         procedure :: open_canvas_impl => svg_open_canvas
         procedure :: close_canvas_impl => svg_close_canvas
@@ -234,6 +237,7 @@ contains
 
         self%n_marker = 0
         self%n_clip = 0
+        self%group_names = new_line("a")
         self%cur_clip_id = 0
         self%cur_clip = clip_t()
         self%in_clip = .false.
@@ -611,10 +615,26 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
+        integer :: seen, at, k
+        character(len=12) :: suffix
 
         call sync_clip(self, none)
+        ! The k-th use of a name is name-k from the second on.
+        seen = 0
+        at = 1
+        do
+            k = index(self%group_names(at:), new_line("a")//name//new_line("a"))
+            if (k == 0) exit
+            seen = seen + 1
+            at = at + k
+        end do
+        self%group_names = self%group_names//name//new_line("a")
         call put(self, '<g id="')
         call put(self, name)
+        if (seen > 0) then
+            write (suffix, "(i0)") seen + 1
+            call put(self, "-"//trim(suffix))
+        end if
         call put(self, '">')
         call put_eol(self)
     end subroutine svg_begin_group

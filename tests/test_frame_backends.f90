@@ -298,11 +298,11 @@ contains
                         if (paint%cap /= CAP_BUTT .and. paint%line_width > 100.0_dp*sum(paint%dash(1:paint%n_dash))) cycle
                         full_walk = .false.
                         quick = dashed_frame(mats(:, m), paint)
-                        ! A pattern finer than half a pixel on the canvas in
-                        ! some direction is drawn solid there, the one
-                        ! documented approximation, which the full walk is
-                        ! not; it is only drawn, which has to finish.
-                        if (sum(paint%dash(1:paint%n_dash))*min_stretch(mats(:, m)) < 0.5_dp) cycle
+                        ! A segment whose pattern is finer than half a pixel
+                        ! on the canvas is drawn solid, the one documented
+                        ! approximation, which the full walk is not; such a
+                        ! path is only drawn, which has to finish.
+                        if (any_solid(mats(:, m), 2.0_dp*sum(paint%dash(1:paint%n_dash)))) cycle
                         full_walk = .true.
                         full = dashed_frame(mats(:, m), paint)
                         full_walk = .false.
@@ -320,15 +320,62 @@ contains
             end do
         end do
         call expect(same, "PNG dashes in transformed frames match the full walk", nfail)
+        call expect(.true., "PNG dashes in degenerate frames finish", nfail)
+        call degenerate_frames()
     contains
-        pure function min_stretch(a) result(smin)
-            real(dp), intent(in) :: a(6)
-            real(dp) :: smin, u, v, dot
-            u = a(1)**2 + a(2)**2
-            v = a(3)**2 + a(4)**2
-            dot = a(1)*a(3) + a(2)*a(4)
-            smin = abs(a(1)*a(4) - a(2)*a(3))/sqrt(0.5_dp*(u + v + hypot(u - v, 2.0_dp*dot)))
-        end function min_stretch
+        ! Whether some segment of the path is too fine to walk in a frame
+        ! of matrix a: its pattern, period long (doubled, as an odd count
+        ! of lengths needs), under half a pixel on the canvas.
+        pure logical function any_solid(a, period) result(r)
+            real(dp), intent(in) :: a(6), period
+            integer :: i
+            real(dp) :: dx, dy
+            r = .false.
+            do i = 1, size(px) - 1
+                dx = px(i + 1) - px(i)
+                dy = py(i + 1) - py(i)
+                if (period*hypot(a(1)*dx + a(3)*dy, a(2)*dx + a(4)*dy)/hypot(dx, dy) < 0.5_dp) r = .true.
+            end do
+        end function any_solid
+
+        ! Frames that once made a dash walk run for minutes: a stretch of
+        ! 1e9 along x and 1e-3 along y, with a line along y a canvas pixel
+        ! a dash; a shear all but singular, with a pen of 1e6; and 25 frames
+        ! of 1e15 nested, together past the largest double, holding an
+        ! image. Each has to finish, drawing what can be seen.
+        subroutine degenerate_frames()
+            type(png_renderer_t) :: png
+            type(clip_t) :: none
+            type(paint_t) :: q
+            integer :: i, rgba(4, 2, 2)
+            character(len=:), allocatable :: b
+
+            q%stroked = .true.
+            q%stroke_rgb = [0, 0, 0]
+            q%cap = CAP_BUTT
+            call png%open_canvas(200.0_dp, 150.0_dp)
+            q%line_width = 1.0_dp
+            q%n_dash = 2
+            q%dash(1:2) = [500.0_dp, 500.0_dp]
+            call png%begin_frame([1.0e9_dp, 0.0_dp, 0.0_dp, 1.0e-3_dp, 100.0_dp, 75.0_dp], none)
+            call png%draw_path([0.0_dp, 0.0_dp], [-1.0e15_dp, 1.0e15_dp], [VERB_MOVE, VERB_LINE], 2, q)
+            call png%end_frame()
+            q%line_width = 1.0e6_dp
+            q%dash(1:2) = [3.0_dp, 2.0_dp]
+            call png%begin_frame([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp + 1.0e-15_dp, 10.0_dp, 10.0_dp], none)
+            call png%draw_path([-1.0e15_dp, 1.0e15_dp], [-1.0e14_dp, 3.0e14_dp], [VERB_MOVE, VERB_LINE], 2, q)
+            call png%end_frame()
+            rgba = 255
+            do i = 1, 25
+                call png%begin_frame([1.0e15_dp, 0.0_dp, 0.0_dp, 1.0e15_dp, 0.0_dp, 0.0_dp], none)
+            end do
+            call png%draw_image(0.0_dp, 0.0_dp, 1.0_dp, 1.0_dp, rgba, 2, 2, q)
+            do i = 1, 25
+                call png%end_frame()
+            end do
+            call png%close_canvas()
+            b = png%bytes()
+        end subroutine degenerate_frames
 
         function dashed_frame(matrix, paint) result(bytes)
             real(dp), intent(in) :: matrix(6)

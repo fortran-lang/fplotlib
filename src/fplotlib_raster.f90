@@ -25,6 +25,7 @@
 
 module fplotlib_raster
     use fplotlib_style, only: dp
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_status, only: contract_error
     use fplotlib_render, only: paint_t, clip_t, VERB_MOVE, VERB_LINE, VERB_CUBIC, &
                             VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
@@ -142,6 +143,10 @@ contains
         m(4) = p(2)*matrix(3) + p(4)*matrix(4)
         m(5) = p(1)*matrix(5) + p(3)*matrix(6) + p(5)
         m(6) = p(2)*matrix(5) + p(4)*matrix(6) + p(6)
+        ! Frames nested so deep that together they map past the largest
+        ! double place nothing they hold, as a shape whose place is past it
+        ! is left out: a matrix of zeros draws nothing.
+        if (.not. all(ieee_is_finite(m))) m = 0.0_dp
         call set_transform(cv, m)
         cv%n_frame = cv%n_frame + 1
         cv%frames(cv%n_frame)%matrix = m
@@ -1068,16 +1073,17 @@ contains
             stretch = 1.0_dp
         else
             ! The stroke is built in a frame's own coordinates, which the
-            ! frame's matrix maps onto the canvas. What is seen is decided
-            ! on the canvas: the box is the canvas there, widened by the pen
-            ! as the matrix stretches it at most; kx, ky are the canvas's
-            ! corners and margin two canvas pixels, in frame coordinates.
+            ! frame's matrix maps onto the canvas. The box is the canvas, two
+            ! pixels out, on the canvas; stroke_dashed widens each of its
+            ! sides by the pen as the matrix stretches that axis. kx, ky are
+            ! the canvas's corners and margin two canvas pixels, in frame
+            ! coordinates.
             if (.not. local_canvas(cv, kx, ky, margin)) return
             stretch = max_stretch(cv%matrix)
-            bx0 = -reach*stretch - 2.0_dp
-            bx1 = real(cv%w, dp) + reach*stretch + 2.0_dp
-            by0 = -reach*stretch - 2.0_dp
-            by1 = real(cv%h, dp) + reach*stretch + 2.0_dp
+            bx0 = -2.0_dp
+            bx1 = real(cv%w, dp) + 2.0_dp
+            by0 = -2.0_dp
+            by1 = real(cv%h, dp) + 2.0_dp
             call pb_reset(solid)
             solid%curve_scale = cv%curve_scale
         end if
@@ -1097,7 +1103,7 @@ contains
                                    kx, ky, margin)
             else if (walk) then
                 call stroke_dashed(out, dx, dy, nd, hw, paint, cv%scale, bx0, bx1, by0, by1, &
-                                   kx, ky, margin, cv%matrix, solid)
+                                   kx, ky, margin, cv%matrix, solid, reach)
             else
                 call stroke_run(out, dx, dy, nd, hw, paint, pb%sub_closed(s))
             end if
@@ -1196,13 +1202,16 @@ contains
     ! beyond): a dash anywhere else cannot touch the canvas, however wide.
     !
     ! In a frame, matrix maps the stroke's coordinates onto the canvas, and
-    ! [bx0, bx1] by [by0, by1] is a box on the canvas: whether a segment is
-    ! inside, and where it is cut, is decided there. A segment the matrix
+    ! [bx0, bx1] by [by0, by1] is a box on the canvas, which each side
+    ! widened by the pen's reach as the matrix stretches its axis. A segment
+    ! is cut where it leaves that box, found in the frame's own coordinates
+    ! from where along the segment each side is crossed, so nothing is
+    ! taken back through the inverse of the matrix. A segment the matrix
     ! shrinks so far that its pattern is finer than half a pixel on the
     ! canvas is not walked but added to solid, to be drawn at the cover
     ! the pattern gives, as a whole stroke that fine is.
     subroutine stroke_dashed(out, px, py, n, hw, paint, scale, bx0, bx1, by0, by1, kx, ky, margin, &
-                             matrix, solid)
+                             matrix, solid, reach)
         type(pathbuf_t), intent(inout) :: out
         real(dp), intent(in) :: px(:), py(:), hw, scale, bx0, bx1, by0, by1
         ! The canvas's corners in the stroke's coordinates, and two canvas
@@ -1212,7 +1221,9 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in), optional :: matrix(6)
         type(pathbuf_t), intent(inout), optional :: solid
-        real(dp) :: dsx, dsy, dqx, dqy, period_px
+        ! The pen's reach in the frame's coordinates.
+        real(dp), intent(in), optional :: reach
+        real(dp) :: period_px, ca, cb
         real(dp), allocatable :: zx(:), zy(:)
         integer :: nz
         logical :: framed
@@ -1284,27 +1295,29 @@ contains
             wide = hw > max(maxval(kx) - minval(kx), maxval(ky) - minval(ky)) .and. &
                    paint%cap == CAP_BUTT .and. .not. full_walk
             if (framed) then
-                dsx = matrix(1)*sx + matrix(3)*sy + matrix(5)
-                dsy = matrix(2)*sx + matrix(4)*sy + matrix(6)
-                dqx = matrix(1)*qx + matrix(3)*qy + matrix(5)
-                dqy = matrix(2)*qx + matrix(4)*qy + matrix(6)
+                call frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, reach, ca, cb)
+                inside = (ca <= 0.0_dp .and. cb >= 1.0_dp .and. .not. wide) .or. full_walk
             else
-                dsx = sx; dsy = sy
-                dqx = qx; dqy = qy
+                inside = (sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &
+                          qx >= bx0 .and. qx <= bx1 .and. qy >= by0 .and. qy <= by1 .and. .not. wide) &
+                         .or. full_walk
             end if
-            inside = (dsx >= bx0 .and. dsx <= bx1 .and. dsy >= by0 .and. dsy <= by1 .and. &
-                      dqx >= bx0 .and. dqx <= bx1 .and. dqy >= by0 .and. dqy <= by1 .and. .not. wide) &
-                     .or. full_walk
             if (.not. inside) then
                 ! What lies outside is skipped, ending any dash under way;
                 ! the walk then runs over the visible piece alone.
-                call clip_segment(dsx, dsy, dqx, dqy, bx0, bx1, by0, by1, &
-                                  ax, ay, fx, fy, visible, cut0, cut1)
-                ! In a frame the piece was found on the canvas; its ends go
-                ! back to the frame's coordinates.
-                if (framed .and. visible) then
-                    call to_frame(matrix, ax, ay)
-                    call to_frame(matrix, fx, fy)
+                if (framed) then
+                    ! Each end of the piece is found from the nearer end of
+                    ! the segment, where a fraction of it is still exact.
+                    ca = max(ca, 0.0_dp)
+                    cb = min(cb, 1.0_dp)
+                    visible = ca < cb
+                    cut0 = ca > 0.0_dp
+                    cut1 = cb < 1.0_dp
+                    call along(sx, sy, qx, qy, ca, ax, ay)
+                    call along(sx, sy, qx, qy, cb, fx, fy)
+                else
+                    call clip_segment(sx, sy, qx, qy, bx0, bx1, by0, by1, &
+                                      ax, ay, fx, fy, visible, cut0, cut1)
                 end if
                 if (visible .and. wide) then
                     ! Narrowed to the canvas's span along the line.
@@ -1438,18 +1451,60 @@ contains
         end if
     end subroutine stroke_dashed
 
-    ! The point (x, y) on the canvas taken back to the coordinates matrix
-    ! maps onto it; matrix is not singular.
-    subroutine to_frame(matrix, x, y)
-        real(dp), intent(in) :: matrix(6)
-        real(dp), intent(inout) :: x, y
-        real(dp) :: det, dx, dy
-        det = matrix(1)*matrix(4) - matrix(2)*matrix(3)
-        dx = x - matrix(5)
-        dy = y - matrix(6)
-        x = (matrix(4)*dx - matrix(3)*dy)/det
-        y = (matrix(1)*dy - matrix(2)*dx)/det
-    end subroutine to_frame
+    ! Where along the segment from (sx, sy) to (qx, qy), as a fraction
+    ! from ta to tb, matrix maps it into the box [bx0, bx1] by [by0, by1]
+    ! on the canvas, each side widened by r, the pen's reach in the frame,
+    ! as the matrix stretches that axis: the side x = bx0 is the line
+    ! matrix(1)*x + matrix(3)*y + matrix(5) = bx0 in the frame, and so on.
+    ! An empty piece has ta >= tb.
+    pure subroutine frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, r, ta, tb)
+        real(dp), intent(in) :: matrix(6), sx, sy, qx, qy, bx0, bx1, by0, by1, r
+        real(dp), intent(out) :: ta, tb
+        real(dp) :: g0, g1, d, lo, hi, w, t1, t2
+        integer :: k
+
+        ta = -huge(1.0_dp)
+        tb = huge(1.0_dp)
+        do k = 1, 2
+            w = r*hypot(matrix(k), matrix(k + 2))
+            if (k == 1) then
+                lo = bx0 - w
+                hi = bx1 + w
+            else
+                lo = by0 - w
+                hi = by1 + w
+            end if
+            g0 = matrix(k)*sx + matrix(k + 2)*sy + matrix(k + 4)
+            g1 = matrix(k)*qx + matrix(k + 2)*qy + matrix(k + 4)
+            d = g1 - g0
+            if (d == 0.0_dp) then
+                if (g0 < lo .or. g0 > hi) then
+                    ta = 1.0_dp
+                    tb = 0.0_dp
+                    return
+                end if
+            else
+                t1 = (lo - g0)/d
+                t2 = (hi - g0)/d
+                ta = max(ta, min(t1, t2))
+                tb = min(tb, max(t1, t2))
+            end if
+        end do
+    end subroutine frame_cut
+
+    ! The point a fraction t of the way from (sx, sy) to (qx, qy), measured
+    ! from whichever end is nearer.
+    pure subroutine along(sx, sy, qx, qy, t, x, y)
+        real(dp), intent(in) :: sx, sy, qx, qy, t
+        real(dp), intent(out) :: x, y
+        if (t <= 0.5_dp) then
+            x = sx + (qx - sx)*t
+            y = sy + (qy - sy)*t
+        else
+            x = qx + (sx - qx)*(1.0_dp - t)
+            y = qy + (sy - qy)*(1.0_dp - t)
+        end if
+    end subroutine along
 
     ! A step along a segment from (x, y) short enough to carry a join there
     ! without adding anything that can be seen, and long enough still to

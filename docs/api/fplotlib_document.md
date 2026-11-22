@@ -12,8 +12,8 @@ it, a file that cannot be written is returned (`ERROR_IO`, with a message
 naming the file); without it, the program stops with the message and exit
 code 2. A multi-file export is not a filesystem transaction: the pages
 before the file that failed have been written. An unknown format, a
-document without pages, or a `dpi` that is not finite and positive is a bug
-in the caller and stops the program.
+document without pages, or, exporting PNG, a `dpi` that is not finite and
+positive is a bug in the caller and stops the program.
 
 The exporters do not lay out text or math. Glyph source mappings
 are preserved in frames; ordinary PDF text carries `ActualText`, while
