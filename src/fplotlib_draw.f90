@@ -257,7 +257,11 @@ contains
         p = 1.08_dp * TICK_FONT
         ! constrained_layout pads by a flat 1/24 inch instead.
         if (fig_constrained) p = PT_PER_IN / 24.0_dp
-        if (present(pad)) p = pad * TICK_FONT
+        if (present(pad)) then
+            if (.not. ieee_is_finite(pad) .or. pad < 0.0_dp) &
+                call contract_error("tight_layout: pad must be finite and nonnegative")
+            p = pad * TICK_FONT
+        end if
         W = fig_w_in * PT_PER_IN
         H = fig_h_in * PT_PER_IN
         need_l = 0.0_dp

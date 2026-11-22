@@ -53,7 +53,15 @@ no longer be written. Going past one is a broken precondition, and stops:
 | `figure`/`rc` `figsize`, `pad_inches` of `savefig` and `render_*` | at most 1e9 inches |
 | `figure` `num` | 1 to 100000 |
 | Axes in one `subplot`/`subplots` grid | at most 10000 |
+| A count: `bins`, `ncol`, `nbins`, `markevery`, `nrows`, ... | 1 to 1000000 |
+| The side of a 2D grid: `hexbin` `gridsize`, `hist2d` `bins` | 1 to 1000 |
+| `tick_format` `decimals` | 0 to 17 |
 | `streamplot` `density` | at most 10 |
+| `subplots_adjust` fractions, `colorbar` `fraction`, `pad`, `shrink` | at most 1000 in size |
+| `colorbar` `aspect` | 0.001 to 1000 |
+| symlog `linthresh` (`set_xscale`, `set_yscale`, `imshow`, `pcolormesh`) | 1e-300 to 1e300 |
+| symlog `linscale` | 1e-6 to 1e6 |
+| Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
 | A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
 | The frames of one animation, each counted as it encodes at worst, `h(3w + 1)·9/8 + 1024` bytes for `w` by `h` pixels | at most `MAX_REEL_BYTES` (1e9) bytes |
