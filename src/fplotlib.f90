@@ -4259,7 +4259,8 @@ contains
         character(len=*), intent(in), optional :: cmap
         integer :: nx, ny, nx1, ny1, nx2, ny2, n, i, j, k, ix1, iy1, ix2, iy2, mc
         real(dp) :: x0, x1, y0, y1, sx, sy, ix, iy, d1, d2, pad, cmax, t, cxp, cyp
-        real(dp) :: hx(6), hy(6)
+        real(dp) :: hx(6), hy(6), H
+        logical :: wide_x, wide_y
         real(dp), allocatable :: c1(:, :), c2(:, :)
         logical, allocatable :: ok(:)
 
@@ -4282,14 +4283,37 @@ contains
         mc = 0
         if (present(mincnt)) mc = mincnt
 
+        ! Data near the largest double, or spanning more than it, is binned
+        ! as all other data is: what would overflow is worked out from half
+        ! the values, and the grid, which cannot be drawn past the largest
+        ! double, is cut off there.
+        H = huge(1.0_dp)
         x0 = minval(x(1:n), mask=ok); x1 = maxval(x(1:n), mask=ok)
         y0 = minval(y(1:n), mask=ok); y1 = maxval(y(1:n), mask=ok)
-        pad = 1.0e-9_dp*(x1 - x0)
-        x0 = x0 - pad; x1 = x1 + pad
+        if (ieee_is_finite(x1 - x0)) then
+            pad = 1.0e-9_dp*(x1 - x0)
+        else
+            pad = 2.0e-9_dp*(0.5_dp*x1 - 0.5_dp*x0)
+        end if
+        x0 = max(-H, x0 - pad); x1 = min(H, x1 + pad)
         if (x1 <= x0) x1 = x0 + 1.0_dp
+        if (x1 <= x0) x0 = nearest(x0, -1.0_dp)
         if (y1 <= y0) y1 = y0 + 1.0_dp
-        sx = (x1 - x0)/real(nx, dp)
-        sy = (y1 - y0)/real(ny, dp)
+        if (y1 <= y0) y0 = nearest(y0, -1.0_dp)
+        wide_x = .not. ieee_is_finite(x1 - x0)
+        wide_y = .not. ieee_is_finite(y1 - y0)
+        ! A wide span keeps half a cell in sx and sy; ix and iy below and
+        ! the hexagon are worked out to match.
+        if (wide_x) then
+            sx = (0.5_dp*x1 - 0.5_dp*x0)/real(nx, dp)
+        else
+            sx = (x1 - x0)/real(nx, dp)
+        end if
+        if (wide_y) then
+            sy = (0.5_dp*y1 - 0.5_dp*y0)/real(ny, dp)
+        else
+            sy = (y1 - y0)/real(ny, dp)
+        end if
 
         nx1 = nx + 1; ny1 = ny + 1
         nx2 = nx; ny2 = ny
@@ -4299,8 +4323,16 @@ contains
 
         do i = 1, n
             if (.not. ok(i)) cycle
-            ix = (x(i) - x0)/sx
-            iy = (y(i) - y0)/sy
+            if (wide_x) then
+                ix = (0.5_dp*x(i) - 0.5_dp*x0)/sx
+            else
+                ix = (x(i) - x0)/sx
+            end if
+            if (wide_y) then
+                iy = (0.5_dp*y(i) - 0.5_dp*y0)/sy
+            else
+                iy = (y(i) - y0)/sy
+            end if
             ix1 = nint(ix); iy1 = nint(iy)
             ix2 = floor(ix); iy2 = floor(iy)
             d1 = (ix - real(ix1, dp))**2 + 3.0_dp*(iy - real(iy1, dp))**2
@@ -4321,6 +4353,8 @@ contains
         ! points, which is what makes the two grids interlock.
         hx = 0.5_dp*sx*[1.0_dp, 1.0_dp, 0.0_dp, -1.0_dp, -1.0_dp, 0.0_dp]
         hy = (sy/3.0_dp)*[-0.5_dp, 0.5_dp, 1.0_dp, 0.5_dp, -0.5_dp, -1.0_dp]
+        if (wide_x) hx = 2.0_dp*hx
+        if (wide_y) hy = 2.0_dp*hy
 
         ax(cur_i)%img_cmap = CMAP_VIRIDIS
         if (present(cmap)) ax(cur_i)%img_cmap = cmap_from_str(cmap)
@@ -4334,15 +4368,16 @@ contains
                     if (k == 1) then
                         if (c1(i, j) < real(mc, dp)) cycle
                         t = (c1(i, j) - real(mc, dp))/max(cmax - real(mc, dp), 1.0_dp)
-                        cxp = x0 + real(i - 1, dp)*sx
-                        cyp = y0 + real(j - 1, dp)*sy
+                        cxp = grid_at(x0, x1, sx, wide_x, real(i - 1, dp), nx)
+                        cyp = grid_at(y0, y1, sy, wide_y, real(j - 1, dp), ny)
                     else
                         if (c2(i, j) < real(mc, dp)) cycle
                         t = (c2(i, j) - real(mc, dp))/max(cmax - real(mc, dp), 1.0_dp)
-                        cxp = x0 + (real(i - 1, dp) + 0.5_dp)*sx
-                        cyp = y0 + (real(j - 1, dp) + 0.5_dp)*sy
+                        cxp = grid_at(x0, x1, sx, wide_x, real(i - 1, dp) + 0.5_dp, nx)
+                        cyp = grid_at(y0, y1, sy, wide_y, real(j - 1, dp) + 0.5_dp, ny)
                     end if
-                    call add_polygon(cxp + hx, cyp + hy, &
+                    ! Vertices past the largest double are cut off at it.
+                    call add_polygon(max(-H, min(H, cxp + hx)), max(-H, min(H, cyp + hy)), &
                                      facecolor=cmap_color(ax(cur_i)%img_cmap, t))
                 end do
             end do
@@ -4350,10 +4385,25 @@ contains
 
         ! Patches never ask for room of their own, so the axes is told what
         ! the binning covered, margins and all.
-        ! Each end scaled before the difference, which cannot overflow.
-        call xlim(x0 - (0.05_dp*x1 - 0.05_dp*x0), x1 + (0.05_dp*x1 - 0.05_dp*x0))
-        call ylim(y0 - (0.05_dp*y1 - 0.05_dp*y0), y1 + (0.05_dp*y1 - 0.05_dp*y0))
+        ! Each end scaled before the difference, which cannot overflow; the
+        ! margins stop at the largest double.
+        call xlim(max(-H, x0 - (0.05_dp*x1 - 0.05_dp*x0)), min(H, x1 + (0.05_dp*x1 - 0.05_dp*x0)))
+        call ylim(max(-H, y0 - (0.05_dp*y1 - 0.05_dp*y0)), min(H, y1 + (0.05_dp*y1 - 0.05_dp*y0)))
     end subroutine hexbin
+
+    ! The k-th line of a hexbin grid of n cells from lo to hi, a cell being
+    ! s wide, or, for a span wider than the largest double, s half a cell.
+    pure function grid_at(lo, hi, s, wide, k, n) result(v)
+        real(dp), intent(in) :: lo, hi, s, k
+        logical, intent(in) :: wide
+        integer, intent(in) :: n
+        real(dp) :: v
+        if (wide) then
+            v = between(lo, hi, k/real(n, dp))
+        else
+            v = lo + k*s
+        end if
+    end function grid_at
 
     ! A grid of coloured cells with edges of the caller's choosing. x and
     ! y are the edges, one more than the samples along that direction; if
@@ -4445,8 +4495,11 @@ contains
             e = v(1:n + 1)
             return
         end if
+        ! Centres near the largest double are halved before they are added,
+        ! and the outer edges stop at it.
         do i = 2, n
             e(i) = 0.5_dp*(v(i - 1) + v(i))
+            if (.not. ieee_is_finite(e(i))) e(i) = 0.5_dp*v(i - 1) + 0.5_dp*v(i)
         end do
         if (n == 1) then
             e(1) = v(1) - 0.5_dp
@@ -4454,8 +4507,21 @@ contains
         else
             e(1) = v(1) - 0.5_dp*(v(2) - v(1))
             e(n + 1) = v(n) + 0.5_dp*(v(n) - v(n - 1))
+            if (.not. ieee_is_finite(e(1))) e(1) = edge_beyond(v(1), v(2))
+            if (.not. ieee_is_finite(e(n + 1))) e(n + 1) = edge_beyond(v(n), v(n - 1))
         end if
     end subroutine cell_edges
+
+    ! Half a cell beyond the centre a, away from its neighbour b, worked out
+    ! from half values and cut off at the largest double. Missing centres
+    ! give a missing edge, as they always have.
+    pure function edge_beyond(a, b) result(e)
+        real(dp), intent(in) :: a, b
+        real(dp) :: e
+        e = a + (0.5_dp*a - 0.5_dp*b)
+        if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) return
+        e = max(-huge(1.0_dp), min(huge(1.0_dp), e))
+    end function edge_beyond
 
     ! ------------------------------------------------------------------
     ! 3D axes. matplotlib picks the projection when the axes is created;
@@ -5333,8 +5399,7 @@ contains
         call check_size_arg("add_circle", "lw", lw)
         call check_unit_arg("add_circle", "alpha", alpha)
 
-        call add_ellipse(xy, 2.0_dp*radius, 2.0_dp*radius, 0.0_dp, &
-                         facecolor, edgecolor, lw, alpha, fill)
+        call ellipse_polygon(xy, radius, radius, 0.0_dp, facecolor, edgecolor, lw, alpha, fill)
     end subroutine add_circle
 
     subroutine add_ellipse(xy, width, height, angle, facecolor, edgecolor, lw, alpha, fill)
@@ -5342,9 +5407,7 @@ contains
         real(dp), intent(in), optional :: angle, lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
-        integer, parameter :: N = 72
-        real(dp) :: px(N), py(N), t, cx, cy, a, ca, sa
-        integer :: i
+        real(dp) :: a
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("add_ellipse", "width", width)
@@ -5355,17 +5418,32 @@ contains
 
         a = 0.0_dp
         if (present(angle)) a = angle
-        ca = cos(a*PI/180.0_dp)
-        sa = sin(a*PI/180.0_dp)
+        call ellipse_polygon(xy, 0.5_dp*width, 0.5_dp*height, a, facecolor, edgecolor, lw, alpha, fill)
+    end subroutine add_ellipse
+
+    ! The ellipse of semi-axes rx and ry about xy, turned by angle degrees,
+    ! as a polygon. Taking the semi-axes, rather than the width and height,
+    ! lets add_circle pass any finite radius.
+    subroutine ellipse_polygon(xy, rx, ry, angle, facecolor, edgecolor, lw, alpha, fill)
+        real(dp), intent(in) :: xy(2), rx, ry, angle
+        real(dp), intent(in), optional :: lw, alpha
+        character(len=*), intent(in), optional :: facecolor, edgecolor
+        logical, intent(in), optional :: fill
+        integer, parameter :: N = 72
+        real(dp) :: px(N), py(N), t, cx, cy, ca, sa
+        integer :: i
+
+        ca = cos(angle*PI/180.0_dp)
+        sa = sin(angle*PI/180.0_dp)
         do i = 1, N
             t = 2.0_dp*PI*real(i - 1, dp)/real(N, dp)
-            cx = 0.5_dp*width*cos(t)
-            cy = 0.5_dp*height*sin(t)
+            cx = rx*cos(t)
+            cy = ry*sin(t)
             px(i) = xy(1) + cx*ca - cy*sa
             py(i) = xy(2) + cx*sa + cy*ca
         end do
         call add_polygon(px, py, facecolor, edgecolor, lw, alpha, fill)
-    end subroutine add_ellipse
+    end subroutine ellipse_polygon
 
     subroutine add_polygon(x, y, facecolor, edgecolor, lw, alpha, fill, hatch)
         real(dp), intent(in) :: x(:), y(:)
@@ -7336,7 +7414,7 @@ contains
         type(status_t) :: local
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_finite_arg("savefig", "pad_inches", pad_inches)
+        call check_pad_arg("savefig", "pad_inches", pad_inches)
 
         select case (file_ext(filename))
         case ("svg", "pdf", "png", "eps")

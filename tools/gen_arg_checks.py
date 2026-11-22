@@ -20,6 +20,7 @@ Each real argument is one of:
   positive  finite, > 0                       (scales, thresholds)
   finite    any finite value                  (angles, offsets, limits)
   margin    finite, > -0.5                    (margins)
+  pad       finite, at most 1e9 either way    (pad_inches; checked whether cropped or not)
   layout    finite, at most 1000 either way    (fractions of the figure or axes)
   ratio     1e-3 to 1e3                        (a shape's width to height)
   errors    not negative, NaN allowed         (error bar lengths, arrays only)
@@ -55,7 +56,7 @@ BY_NAME = {
     'vmax': 'finite', 'vcenter': 'finite', 'lineoffset': 'finite', 'pad': 'finite',
     'bbox_pad': 'finite', 'whis': 'finite', 'whole': 'finite', 'left': 'finite',
     'right': 'finite', 'bottom': 'finite', 'top': 'finite', 'wspace': 'finite',
-    'hspace': 'finite', 'pad_inches': 'finite', 'pctdistance': 'finite',
+    'hspace': 'finite', 'pad_inches': 'pad', 'pctdistance': 'finite',
     'labeldistance': 'finite', 'padding': 'finite', 'u': 'finite',
     'm': 'margin',
     # where things go: missing data
@@ -119,7 +120,7 @@ IHELPER = {'count': 'check_count_arg', 'grid': 'check_grid_arg', 'nonneg': 'chec
            'digits': 'check_digits_arg'}
 IAHELPER = {'count': 'check_count_args', 'grid': 'check_grid_args'}
 HELPER = {'layout': 'check_layout_arg', 'ratio': 'check_ratio_arg', 'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
-          'finite': 'check_finite_arg', 'margin': 'check_margin_arg'}
+          'finite': 'check_finite_arg', 'margin': 'check_margin_arg', 'pad': 'check_pad_arg'}
 AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
 # Each block the script writes starts with this line; only such blocks are
 # ever removed, so a check written by hand is left alone.

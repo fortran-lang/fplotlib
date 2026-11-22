@@ -64,10 +64,14 @@ no longer be written. Going past one is a broken precondition, and stops:
 | A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
 | The frames of one animation, each counted as it encodes at worst, `h(3w + 1)·9/8 + 1024` bytes for `w` by `h` pixels | at most `MAX_REEL_BYTES` (1e9) bytes |
 
-Data is never limited: a value of any size, or a missing one, is drawn or
-left out as the view shows it. Line widths and dash lengths beyond 1e12
-points are drawn as 1e12, which covers anything that can be seen just as
-fully.
+Data is never limited: a value of any size, or a missing one, never
+stops a plot, and is drawn or left out as the view shows it. Line widths
+and dash lengths beyond 1e12 points are drawn as 1e12, which covers
+anything that can be seen just as fully. Axis limits, which may span the
+whole range of a double, stop at the largest double. A shape that reaches
+so far past the view that its own place on the canvas is past the largest
+double, such as a circle of radius 1e308 about a point in a unit view,
+cannot be placed, and is left out as missing data is.
 
 The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid

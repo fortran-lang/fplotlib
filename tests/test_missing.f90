@@ -41,7 +41,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 74
+    integer, parameter :: NCASE = 79
 
 contains
 
@@ -576,6 +576,15 @@ contains
         case (73); call close(); call figure(figsize=[1.0e8_dp, 1.0_dp])
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e30_dp]); call ylim(0.0_dp, 1.0_dp)
         case (74); call plot(t(1:3), [0.0_dp, 1.0e7_dp, 0.5_dp], linestyle="--"); call ylim(0.0_dp, 1.0_dp)
+        ! Data near the largest double, and spanning more than it: hexbin,
+        ! whose grid and margins reach past it, a mesh whose outer cells
+        ! do, a line across the whole range, and a circle too large to place.
+        case (75); call hexbin([0.0_dp, 1.0_dp, 1.75e308_dp], [0.0_dp, 0.5_dp, 1.0_dp], gridsize=5)
+        case (76); call hexbin([-huge(1.0_dp), 0.0_dp, huge(1.0_dp)], [-huge(1.0_dp), 0.0_dp, huge(1.0_dp)])
+        case (77); call pcolormesh([-huge(1.0_dp), 0.0_dp, huge(1.0_dp)], [-huge(1.0_dp), 0.0_dp, huge(1.0_dp)], &
+                                   reshape([(real(i, dp), i=1, 9)], [3, 3]))
+        case (78); call plot([-huge(1.0_dp), 0.0_dp, huge(1.0_dp)], t(1:3))
+        case (79); call plot(x, x); call add_circle([0.5_dp, 0.5_dp], 1.0e308_dp)
         end select
     end subroutine draw_case
 

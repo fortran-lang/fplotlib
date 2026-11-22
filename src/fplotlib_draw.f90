@@ -1069,6 +1069,15 @@ contains
         u0 = scale_fwd(sc, lo)
         u1 = scale_fwd(sc, hi)
         d = u1 - u0
+        if (.not. ieee_is_finite(d) .and. ieee_is_finite(u0) .and. ieee_is_finite(u1)) then
+            ! A range of finite ends wider than the largest double: the
+            ! margin is worked out from half of it, and the limits stop at
+            ! the largest double.
+            d = 0.5_dp*u1 - 0.5_dp*u0
+            if (.not. sticky_lo) lo = scale_inv(sc, max(-huge(1.0_dp), u0 - 2.0_dp*margin*d))
+            if (.not. sticky_hi) hi = scale_inv(sc, min(huge(1.0_dp), u1 + 2.0_dp*margin*d))
+            return
+        end if
         if (abs(d) < 1.0e-30_dp) d = 1.0_dp
         if (.not. sticky_lo) lo = scale_inv(sc, u0 - margin * d)
         if (.not. sticky_hi) hi = scale_inv(sc, u1 + margin * d)
@@ -1098,6 +1107,10 @@ contains
         u1 = scale_fwd(sc, vmax)
         if (u1 == u0) then
             t = 0.5_dp
+        else if (.not. ieee_is_finite(u1 - u0) .and. ieee_is_finite(u0) .and. ieee_is_finite(u1)) then
+            ! Limits further apart than the largest double: the same
+            ! fraction, from half of each value.
+            t = (0.5_dp*scale_fwd(sc, v) - 0.5_dp*u0) / (0.5_dp*u1 - 0.5_dp*u0)
         else
             t = (scale_fwd(sc, v) - u0) / (u1 - u0)
         end if
@@ -4650,6 +4663,17 @@ contains
     ! The window of the drawing a figure is written through, in points:
     ! the whole figure, or with bbox_inches="tight" what is drawn and
     ! pad_inches about it.
+    ! pad_inches, for savefig and the render_* functions, whether the
+    ! figure is cropped or not: finite, and at most a billion inches either
+    ! way, so that the cropped window stays finite.
+    subroutine check_pad_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. abs(v) > 1.0e9_dp) &
+            call contract_error(proc//": "//name//" must be finite and at most 1e9 inches")
+    end subroutine check_pad_arg
+
     subroutine figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
         character(len=*), intent(in), optional :: bbox_inches
         real(dp), intent(in), optional :: pad_inches
@@ -4669,11 +4693,8 @@ contains
         if (present(bbox_inches)) then
             if (lower(trim(bbox_inches)) == "tight") then
                 bpad = 0.1_dp
-                if (present(pad_inches)) then
-                    if (.not. ieee_is_finite(pad_inches) .or. abs(pad_inches) > 1.0e9_dp) &
-                        call contract_error("savefig: pad_inches must be finite and at most 1e9 inches")
-                    bpad = pad_inches
-                end if
+                ! Checked by the caller, through check_pad_arg.
+                if (present(pad_inches)) bpad = pad_inches
                 bpad = bpad*PT_PER_IN
                 ! Cropping moves the window onto the drawing, so the drawing
                 ! itself needs no translation.
@@ -4733,6 +4754,7 @@ contains
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: svg
         type(svg_renderer_t) :: r
+        call check_pad_arg("render_svg", "pad_inches", pad_inches)
         call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         svg = r%bytes()
     end function render_svg
@@ -4744,6 +4766,7 @@ contains
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: pdf
         type(pdf_renderer_t) :: r
+        call check_pad_arg("render_pdf", "pad_inches", pad_inches)
         call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         pdf = r%bytes()
     end function render_pdf
@@ -4755,6 +4778,7 @@ contains
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: eps
         type(eps_renderer_t) :: r
+        call check_pad_arg("render_eps", "pad_inches", pad_inches)
         call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         eps = r%bytes()
     end function render_eps
@@ -4777,6 +4801,7 @@ contains
         character(len=:), allocatable :: png
         type(png_renderer_t) :: r
         type(status_t) :: st
+        call check_pad_arg("render_png", "pad_inches", pad_inches)
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
                 call contract_error("render_png: dpi must be finite and positive")
