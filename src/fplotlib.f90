@@ -21,11 +21,27 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
+    use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
+    use fplotlib_io, only: file_ext, write_bytes
+    use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
     public :: dp
+    ! savefig, save_animation and show return a file that cannot be
+    ! written in a status_t; see fplotlib_status.
+    public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
+
+    ! The most bytes of frames an animation reel holds.
+    ! The most bytes an animation's frames may take, each counted as
+    ! encoded at worst: the encoders' buffers double up to 2**30 bytes,
+    ! beyond which a default integer cannot count.
+    real(dp), parameter :: MAX_REEL_BYTES = 1.0e9_dp
+    ! The limits a plotting call can reach, for callers to check against.
+    ! The renderer's own (MAX_COORD, MAX_PEN_PER_DASH) are in
+    ! fplotlib_render.
+    public :: MAX_DASH, MAX_PNG_PIXELS, MAX_REEL_BYTES
     public :: plot, scatter, semilogx, semilogy, loglog
     public :: set_xscale, set_yscale
     public :: bar, barh, hist, fill_between, fill_betweenx, stackplot
@@ -346,7 +362,8 @@ contains
             call stash_fig(cur_fig)
         end if
         if (present(num)) then
-            if (num < 1) error stop "fplotlib: figure num must be positive"
+            ! Every number up to num gets a slot in the store of figures.
+            if (num < 1 .or. num > 100000) call contract_error("figure: num must be from 1 to 100000")
             k = num
         else
             k = next_free_fig()
@@ -365,13 +382,16 @@ contains
         fig_h_in = FIG_H_DEFAULT
         fig_dpi = DPI_DEFAULT
         if (present(figsize)) then
-            if (figsize(1) <= 0.0_dp .or. figsize(2) <= 0.0_dp) &
-                error stop "fplotlib: figure figsize must be positive"
+            ! A billion inches is past any page and keeps every coordinate
+            ! well within what the renderer takes (MAX_COORD).
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp) .or. any(figsize > 1.0e9_dp)) &
+                call contract_error("figure: figsize must be positive and at most 1e9 inches")
             fig_w_in = figsize(1)
             fig_h_in = figsize(2)
         end if
         if (present(dpi)) then
-            if (dpi <= 0.0_dp) error stop "fplotlib: figure dpi must be positive"
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("figure: dpi must be finite and positive")
             fig_dpi = dpi
         end if
     end subroutine figure
@@ -458,7 +478,7 @@ contains
             call set_cycle(["#000000", "#545454", "#7f7f7f", "#b0b0b0", &
                             "#d4d4d4"])
         case default
-            error stop "fplotlib: unknown style"
+            call contract_error("style_use: unknown style")
         end select
     end subroutine style_use
 
@@ -471,6 +491,15 @@ contains
         character(len=*), intent(in), optional :: facecolor, axes_facecolor
         character(len=*), intent(in), optional :: grid_color, text_color
         character(len=7), intent(in), optional :: color_cycle(:)
+
+        if (present(figsize)) then
+            if (.not. all(ieee_is_finite(figsize)) .or. any(figsize <= 0.0_dp) .or. any(figsize > 1.0e9_dp)) &
+                call contract_error("rc: figsize must be positive and at most 1e9 inches")
+        end if
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("rc: dpi must be finite and positive")
+        end if
 
         if (present(figsize)) then
             fig_w_in = figsize(1)
@@ -550,7 +579,7 @@ contains
         if (present(wspace)) fig_wspace = wspace
         if (present(hspace)) fig_hspace = hspace
         if (fig_right <= fig_left .or. fig_top <= fig_bottom) &
-            error stop "fplotlib: subplots_adjust left<right and bottom<top required"
+            call contract_error("subplots_adjust: left < right and bottom < top required")
         call layout_grid()
     end subroutine subplots_adjust
 
@@ -583,10 +612,11 @@ contains
     subroutine subplot(m, n, i)
         integer, intent(in) :: m, n, i
 
-        if (m < 1 .or. n < 1 .or. i < 1 .or. i > m * n) then
-            print *, "fplotlib: invalid subplot indices: m=", m, " n=", n, " i=", i
-            error stop
+        if (m < 1 .or. n < 1 .or. i < 1 .or. real(i, dp) > real(m, dp)*real(n, dp)) then
+            call contract_error("subplot: expected m, n >= 1 and 1 <= i <= m*n, got m=" &
+                                //int_to_str(m)//", n="//int_to_str(n)//", i="//int_to_str(i))
         end if
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) call contract_error("subplot: a grid of more than 10000 axes")
 
         if (.not. fig_initialized) call clf()
         if (grid_m /= m .or. grid_n /= n) call new_axes_grid(m, n)
@@ -621,6 +651,8 @@ contains
         real(dp), intent(in) :: rect(4)
         type(axes) :: h
 
+        if (.not. all(ieee_is_finite(rect)) .or. rect(3) < 0.0_dp .or. rect(4) < 0.0_dp) &
+            call contract_error("add_axes: rect must be finite, with nonnegative width and height")
         call push_axes()
         ax(cur_i)%fixed_pos = .true.
         ax(cur_i)%left = rect(1)
@@ -755,8 +787,8 @@ contains
         if (present(rowspan)) rs = max(1, rowspan)
         if (present(colspan)) cs = max(1, colspan)
         if (shape(1) < 1 .or. shape(2) < 1) then
-            print *, "fplotlib: invalid subplot2grid shape:", shape
-            error stop
+            call contract_error("subplot2grid: shape must be positive, got (" &
+                                //int_to_str(shape(1))//", "//int_to_str(shape(2))//")")
         end if
 
         call ensure_fig()
@@ -897,6 +929,7 @@ contains
         if (present(sharex)) sx = sharex
         if (present(sharey)) sy = sharey
 
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) call contract_error("subplots: a grid of more than 10000 axes")
         call figure()
         if (m /= 1 .or. n /= 1) call new_axes_grid(m, n)
         cur_i = 1
@@ -2255,18 +2288,55 @@ contains
     subroutine xlim(xmin, xmax)
         real(dp), intent(in) :: xmin, xmax
         call ensure_fig()
-        ax(cur_i)%xmin_user = xmin
-        ax(cur_i)%xmax_user = xmax
+        call user_limits("xlim", xmin, xmax, ax(cur_i)%xmin_user, ax(cur_i)%xmax_user)
         ax(cur_i)%xlim_set = .true.
     end subroutine xlim
 
     subroutine ylim(ymin, ymax)
         real(dp), intent(in) :: ymin, ymax
         call ensure_fig()
-        ax(cur_i)%ymin_user = ymin
-        ax(cur_i)%ymax_user = ymax
+        call user_limits("ylim", ymin, ymax, ax(cur_i)%ymin_user, ax(cur_i)%ymax_user)
         ax(cur_i)%ylim_set = .true.
     end subroutine ylim
+
+    ! Limits set by hand, as matplotlib's set_xlim takes them: they must be
+    ! finite, and are stored as given. A range too narrow to tell its ends
+    ! apart is widened when the figure is drawn, by nonsingular_limits in
+    ! fplotlib_draw, under the scale the axis has then. An inverted range
+    ! stays inverted.
+    subroutine user_limits(what, a, b, lo, hi)
+        character(len=*), intent(in) :: what
+        real(dp), intent(in) :: a, b
+        real(dp), intent(out) :: lo, hi
+
+        if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) then
+            call contract_error(what//": limits must be finite")
+        end if
+        ! Taken as given here: limits too close together to draw between
+        ! are widened when the figure is drawn, by nonsingular_limits under
+        ! the scale the axis has then, which may be set after them.
+        lo = a
+        hi = b
+    end subroutine user_limits
+
+
+    ! A raster of the figure at dpi has at most MAX_PNG_PIXELS pixels, as
+    ! the backend checks.
+    subroutine check_pixels(proc, dpi)
+        character(len=*), intent(in) :: proc
+        real(dp), intent(in) :: dpi
+        if (png_pixels(fig_w_in*PT_PER_IN, fig_h_in*PT_PER_IN, dpi) > MAX_PNG_PIXELS) then
+            call contract_error(proc//": the figure has too many pixels at dpi "//arg_str(dpi))
+        end if
+    end subroutine check_pixels
+
+    function arg_str(v) result(s)
+        real(dp), intent(in) :: v
+        character(len=:), allocatable :: s
+        character(len=32) :: buf
+        write (buf, "(g0)") v
+        s = trim(adjustl(buf))
+    end function arg_str
 
     ! The limits actually in force, autoscaling included, so that a caller
     ! can place something relative to what the axes ended up showing.
@@ -2304,8 +2374,8 @@ contains
 
         call ensure_fig()
         if (ax(cur_i)%n_series < 1) &
-            error stop "fplotlib: set_zorder needs something drawn first"
-        if (z < 0.0_dp) error stop "fplotlib: zorder must not be negative"
+            call contract_error("set_zorder: needs something drawn first")
+        if (z < 0.0_dp) call contract_error("set_zorder: zorder must not be negative")
         ax(cur_i)%series(ax(cur_i)%n_series)%zorder = z
     end subroutine set_zorder
 
@@ -2474,7 +2544,7 @@ contains
         case ("symlog")
             s%kind = SCALE_SYMLOG
         case default
-            error stop "fplotlib: unknown scale, expected linear, log or symlog"
+            call contract_error("set_xscale/set_yscale: unknown scale, expected linear, log or symlog")
         end select
         if (present(linthresh)) then
             if (linthresh <= 0.0_dp) error stop "fplotlib: linthresh must be positive"
@@ -2757,7 +2827,7 @@ contains
         real(dp) :: ms
         character(len=:), allocatable :: mk
 
-        if (size(ij, 1) /= 2) error stop "fplotlib: spy needs a (2, nnz) index array"
+        if (size(ij, 1) /= 2) call contract_error("spy: needs a (2, nnz) index array")
         nr = 0
         nc = 0
         if (size(ij, 2) > 0) then
@@ -2907,6 +2977,11 @@ contains
         integer :: nx, ny, i, j, np, is, na, k, nseed, sx, sy, sd(5)
         character(len=32) :: col
 
+        ! Each unit of density is a 30 by 30 grid of cells to keep track of,
+        ! and as many lines to draw.
+        if (present(density)) then
+            if (density > 10.0_dp) call contract_error("streamplot: density must be at most 10")
+        end if
         call ensure_fig()
         nx = size(x)
         ny = size(y)
@@ -3668,9 +3743,8 @@ contains
         real(dp), intent(in) :: lo, hi
 
         call ensure_fig()
+        call user_limits("zlim", lo, hi, ax(cur_i)%zmin_user, ax(cur_i)%zmax_user)
         ax(cur_i)%zlim_set = .true.
-        ax(cur_i)%zmin_user = lo
-        ax(cur_i)%zmax_user = hi
     end subroutine zlim
 
     subroutine plot3d(x, y, z, fmt, label, lw, color, marker, linestyle, alpha)
@@ -4520,14 +4594,12 @@ contains
             case ("Z", "z")
                 v(j) = VERB_CLOSE
             case default
-                print *, "fplotlib: add_path: unknown code ", codes(j:j)
-                error stop
+                call contract_error("add_path: unknown code '"//codes(j:j)//"'")
             end select
         end do
         if (np < 2 .or. np > min(size(x), size(y))) then
-            print *, "fplotlib: add_path: codes need", np, "points, given", &
-                min(size(x), size(y))
-            error stop
+            call contract_error("add_path: codes need "//int_to_str(np)//" points, given " &
+                                //int_to_str(min(size(x), size(y))))
         end if
 
         call add_polygon(x(1:np), y(1:np), facecolor, edgecolor, lw, alpha, fill)
@@ -4583,7 +4655,7 @@ contains
         do is = ax(cur_i)%n_series, 1, -1
             if (ax(cur_i)%series(is)%kind == SERIES_QUIVER) exit
         end do
-        if (is < 1) error stop "fplotlib: quiverkey needs a quiver in the current axes"
+        if (is < 1) call contract_error("quiverkey: needs a quiver in the current axes")
         associate (s => ax(cur_i)%series(is))
             s%qk_on = .true.
             s%qk_x = x
@@ -4597,7 +4669,7 @@ contains
                 select case (coordinates)
                 case ("axes", "data", "figure", "inches"); s%qk_coord = coordinates
                 case default
-                    error stop "fplotlib: quiverkey coordinates must be axes, data, figure or inches"
+                    call contract_error("quiverkey: coordinates must be axes, data, figure or inches")
                 end select
             end if
             if (present(color)) s%qk_color = resolve_color(color)
@@ -4605,7 +4677,7 @@ contains
             if (present(labelpos)) then
                 select case (labelpos)
                 case ("N", "S", "E", "W"); s%qk_pos = labelpos
-                case default; error stop "fplotlib: quiverkey labelpos must be N, S, E or W"
+                case default; call contract_error("quiverkey: labelpos must be N, S, E or W")
                 end select
             end if
         end associate
@@ -4632,7 +4704,8 @@ contains
         ! A missing value is a wedge of nothing.
         allocate (v(n))
         v = merge(values, 0.0_dp, ieee_is_finite(values))
-        if (any(v < 0.0_dp) .or. sum(v) <= 0.0_dp) return
+        if (any(v < 0.0_dp)) call contract_error("pie: values must not be negative")
+        if (sum(v) <= 0.0_dp) return
 
         is = new_shape_series(SERIES_PIE, v, v)
         if (is < 1) return
@@ -4799,7 +4872,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                error stop "fplotlib: tick_params axis must be x, y or both"
+                call contract_error("tick_params: axis must be x, y or both")
             end select
         end if
 
@@ -4812,7 +4885,7 @@ contains
             case ("inout")
                 d = 0.0_dp
             case default
-                error stop "fplotlib: tick direction must be in, out or inout"
+                call contract_error("tick_params: direction must be in, out or inout")
             end select
             if (dox) ax(cur_i)%xtick_dir = d
             if (doy) ax(cur_i)%ytick_dir = d
@@ -4863,7 +4936,7 @@ contains
             ax(cur_i)%xmargin = 0.05_dp
             ax(cur_i)%ymargin = 0.05_dp
         case default
-            error stop "fplotlib: unknown axis mode"
+            call contract_error("axis: unknown mode")
         end select
     end subroutine axis
 
@@ -4901,7 +4974,7 @@ contains
                 dox = .false.
             case ("both")
             case default
-                error stop "fplotlib: autoscale axis must be x, y or both"
+                call contract_error("autoscale: axis must be x, y or both")
             end select
         end if
 
@@ -4940,7 +5013,8 @@ contains
         real(dp), intent(in) :: ratio
         character(len=*), intent(in), optional :: adjustable
         call ensure_fig()
-        if (ratio <= 0.0_dp) error stop "fplotlib: aspect ratio must be positive"
+        if (.not. ieee_is_finite(ratio) .or. ratio <= 0.0_dp) &
+            call contract_error("set_aspect: ratio must be finite and positive")
         ax(cur_i)%aspect = ratio
         ax(cur_i)%aspect_datalim = .false.
         if (present(adjustable)) then
@@ -4950,7 +5024,7 @@ contains
             case ("datalim")
                 ax(cur_i)%aspect_datalim = .true.
             case default
-                error stop "fplotlib: adjustable must be box or datalim"
+                call contract_error("set_aspect: adjustable must be box or datalim")
             end select
         end if
     end subroutine set_aspect
@@ -5126,7 +5200,7 @@ contains
                 ! because its tick labels sit under it too.
                 ax(cur_i)%cbar_pad = 0.15_dp
             case default
-                error stop "fplotlib: colorbar orientation must be vertical or horizontal"
+                call contract_error("colorbar: orientation must be vertical or horizontal")
             end select
         end if
         if (present(fraction)) ax(cur_i)%cbar_frac = fraction
@@ -5279,6 +5353,10 @@ contains
         real(dp), allocatable :: sx(:), sy(:), base(:), sb(:)
         logical :: norm, cum, stk, horiz
         character(len=16) :: ht
+
+        if (present(bin_edges)) then
+            if (.not. all(ieee_is_finite(bin_edges))) call contract_error("hist: bin_edges must be finite")
+        end if
 
         n = size(x)
         if (n <= 0) return
@@ -6226,88 +6304,103 @@ contains
     ! another come out wrong.
     ! ------------------------------------------------------------------
 
-    ! The extension picks the backend, as it does in matplotlib. A name with
-    ! no extension at all is taken as SVG.
-    function file_ext(filename) result(ext)
-        character(len=*), intent(in) :: filename
-        character(len=:), allocatable :: ext
-        integer :: d, sl
-
-        d = index(filename, ".", back=.true.)
-        sl = max(index(filename, "/", back=.true.), &
-                 index(filename, achar(92), back=.true.))
-        if (d <= sl + 1) then
-            ext = "svg"
-        else
-            ext = lower(filename(d + 1:len_trim(filename)))
-        end if
-    end function file_ext
-
-    ! Writing SVG bytes into a .png would produce a file no viewer can open,
-    ! so an unsupported extension is a hard error rather than a silent default.
-    subroutine reject_ext(filename)
-        character(len=*), intent(in) :: filename
-        print *, "fplotlib: cannot write ", trim(filename)
-        print *, "fplotlib: supported formats are .svg, .pdf, .eps and .png, not ." &
-            //file_ext(filename)
-        error stop "fplotlib: unsupported savefig format"
-    end subroutine reject_ext
-
     ! dpi sizes the raster in the PNG backend. The vector formats ignore it,
     ! as matplotlib does: they emit the same inches*72 canvas at any dpi.
-    subroutine savefig(filename, transparent, facecolor, dpi, bbox_inches, pad_inches)
+    !
+    ! The extension picks the format. Writing SVG bytes into a .png would
+    ! produce a file no viewer can open, so an unsupported extension stops
+    ! rather than falling back to a default. A file that cannot be written
+    ! is returned in status when it is present, and otherwise ends the
+    ! script, as the exception does in matplotlib.
+    subroutine savefig(filename, transparent, facecolor, dpi, bbox_inches, pad_inches, status)
         character(len=*), intent(in) :: filename
         logical, intent(in), optional :: transparent
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         real(dp), intent(in), optional :: dpi, pad_inches
-        character(len=:), allocatable :: svg
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: data
         real(dp) :: saved_dpi
+        type(status_t) :: local
 
+        select case (file_ext(filename))
+        case ("svg", "pdf", "png", "eps")
+        case default
+            call contract_error("savefig: supported formats are .svg, .pdf, .eps and .png, not ." &
+                                //file_ext(filename))
+        end select
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
+                call contract_error("savefig: dpi must be finite and positive")
+            end if
+        end if
+        ! A whole figure too large for a PNG is known beforehand; a tight
+        ! crop takes its size from the drawing, and render_png decides.
+        if (file_ext(filename) == "png" .and. .not. tight_crop(bbox_inches)) then
+            if (present(dpi)) then
+                call check_pixels("savefig", dpi)
+            else
+                call check_pixels("savefig", fig_dpi)
+            end if
+        end if
         ! dpi given here applies to this file only, as it does in matplotlib;
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
         saved_dpi = fig_dpi
-        if (present(dpi)) then
-            if (dpi <= 0.0_dp) error stop "fplotlib: savefig dpi must be positive"
-            fig_dpi = dpi
-        end if
+        if (present(dpi)) fig_dpi = dpi
+        ! Cropped to what is drawn, a PNG's size depends on the drawing,
+        ! which the caller cannot know beforehand: one too large is a
+        ! failure at run time, returned like a file that cannot be written.
         select case (file_ext(filename))
         case ("svg")
-            svg = render_svg(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_svg(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("pdf")
-            svg = render_pdf(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("png")
-            svg = render_png(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_png(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("eps")
-            svg = render_eps(facecolor, transparent, bbox_inches, pad_inches)
-        case default
-            call reject_ext(filename)
-            return
+            data = render_eps(facecolor, transparent, bbox_inches, pad_inches, status=local)
         end select
         fig_dpi = saved_dpi
-        call write_bytes(filename, svg)
-    end subroutine savefig
-
-    subroutine write_bytes(filename, data)
-        character(len=*), intent(in) :: filename, data
-        integer :: u, ios
-
-        open (newunit=u, file=trim(filename), status="replace", action="write", &
-              form="unformatted", access="stream", iostat=ios)
-        if (ios /= 0) then
-            ! fallback formatted
-            open (newunit=u, file=trim(filename), status="replace", action="write", &
-                  form="formatted", iostat=ios)
-            if (ios /= 0) then
-                print *, "fplotlib: failed to open ", trim(filename)
-                return
-            end if
-            write (u, "(A)") data
-            close (u)
+        if (.not. local%ok()) then
+            call fail_run("savefig", local%code, trim(local%message), status)
             return
         end if
-        if (len(data) > 0) write (u) data
-        close (u)
-    end subroutine write_bytes
+        call save_bytes("savefig", filename, data, status)
+    end subroutine savefig
+
+    ! A failure a correct program can meet at run time: returned in status
+    ! when the caller passed one, and otherwise the end of the program, with
+    ! its message and exit code 2.
+    subroutine fail_run(proc, code, message, status)
+        character(len=*), intent(in) :: proc, message
+        integer, intent(in) :: code
+        type(status_t), intent(out), optional :: status
+
+        if (present(status)) then
+            call set_status(status, code, message)
+            return
+        end if
+        write (error_unit, "(a)") "fplotlib: "//proc//": "//message
+        error stop 2
+    end subroutine fail_run
+
+    ! Writes data to filename. A failure goes to status when the caller
+    ! passed one, and otherwise stops the program with its message.
+    subroutine save_bytes(proc, filename, data, status)
+        character(len=*), intent(in) :: proc, filename, data
+        type(status_t), intent(out), optional :: status
+        type(status_t) :: local
+
+        if (present(status)) then
+            call write_bytes(filename, data, status)
+            return
+        end if
+        call write_bytes(filename, data, local)
+        if (local%ok()) return
+        ! Exit code 2, so that a script's caller can tell a file that could
+        ! not be written from a broken precondition, which exits with 1.
+        write (error_unit, "(a)") "fplotlib: "//proc//": "//trim(local%message)
+        error stop 2
+    end subroutine save_bytes
 
     ! ------------------------------------------------------------------
     ! Animation. matplotlib builds an Animation object around a callback;
@@ -6320,7 +6413,15 @@ contains
         real(dp), intent(in), optional :: dpi
         type(png_renderer_t) :: r
         real(dp) :: saved_dpi
+        character(len=16) :: most
 
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("add_frame: dpi must be finite and positive")
+            call check_pixels("add_frame", dpi)
+        else
+            call check_pixels("add_frame", fig_dpi)
+        end if
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
         r%keep_pixels = .true.
@@ -6330,15 +6431,34 @@ contains
 
         if (anim_n > 0) then
             if (r%pw /= anim_w .or. r%ph /= anim_h) then
-                print *, "fplotlib: add_frame ignored, frame size changed"
-                return
+                call contract_error("add_frame: every frame must have the size of the first")
             end if
+        end if
+        ! The reel and the GIF and APNG encoders count bytes in default
+        ! integers. A frame encodes, at worst, to reel_frame_bytes, and
+        ! the frames together must stay within MAX_REEL_BYTES.
+        if (real(anim_n + 1, dp)*reel_frame_bytes(r%pw, r%ph) > MAX_REEL_BYTES) then
+            write (most, "(I0)") int(MAX_REEL_BYTES/reel_frame_bytes(r%pw, r%ph))
+            call contract_error("add_frame: an animation holds at most "//trim(most)// &
+                                " frames of this size (MAX_REEL_BYTES)")
         end if
         anim_w = r%pw
         anim_h = r%ph
         call anim_append(r%rgb)
         anim_n = anim_n + 1
     end subroutine add_frame
+
+    ! The most bytes a frame of w by h pixels can take as encoded. In an
+    ! APNG it is a filter byte and three bytes of colour a row, deflated
+    ! with fixed Huffman codes into at most nine bits a byte; in a GIF, a
+    ! palette index a pixel, packed into LZW codes of at most twelve bits.
+    ! The 1024 covers each frame's own chunks, headers and GIF palette.
+    pure function reel_frame_bytes(w, h) result(n)
+        integer, intent(in) :: w, h
+        real(dp) :: n
+
+        n = real(h, dp)*(3.0_dp*real(w, dp) + 1.0_dp)*9.0_dp/8.0_dp + 1024.0_dp
+    end function reel_frame_bytes
 
     subroutine anim_append(frame)
         character(len=*), intent(in) :: frame
@@ -6361,28 +6481,27 @@ contains
     ! Writes the frames collected so far as a GIF, or as an animated PNG for
     ! .png and .apng (full colour), and starts a new reel, so that a
     ! program can make several animations without a reset call.
-    subroutine save_animation(filename, fps, loop)
+    subroutine save_animation(filename, fps, loop, status)
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: fps
         logical, intent(in), optional :: loop
+        type(status_t), intent(out), optional :: status
         real(dp) :: rate
         logical :: rep
         integer :: delay
 
-        if (anim_n == 0) then
-            print *, "fplotlib: no frames; call add_frame before save_animation"
-            return
-        end if
+        if (anim_n == 0) call contract_error("save_animation: no frames; call add_frame first")
         select case (file_ext(filename))
         case ("gif", "png", "apng")
         case default
-            print *, "fplotlib: save_animation writes .gif, .png or .apng, not .", &
-                file_ext(filename)
-            return
+            call contract_error("save_animation: supported formats are .gif, .png and .apng, not ." &
+                                //file_ext(filename))
         end select
         rate = 5.0_dp
         if (present(fps)) then
-            if (fps <= 0.0_dp) error stop "fplotlib: save_animation fps must be positive"
+            if (.not. ieee_is_finite(fps) .or. fps <= 0.0_dp) then
+                call contract_error("save_animation: fps must be finite and positive")
+            end if
             rate = fps
         end if
         rep = .true.
@@ -6390,16 +6509,21 @@ contains
 
         ! GIF counts delays in hundredths of a second and viewers treat 0 as
         ! "as fast as you like", so a frame never asks for less than one.
-        delay = max(1, nint(100.0_dp/rate))
+        delay = max(1, nint(min(100.0_dp/rate, 65535.0_dp)))
         if (file_ext(filename) == "gif") then
-            call write_bytes(filename, gif_encode(anim_w, anim_h, anim_n, &
-                                                  anim_pix(1:anim_len), delay, rep))
+            call save_bytes("save_animation", filename, gif_encode(anim_w, anim_h, anim_n, &
+                                                 anim_pix(1:anim_len), delay, rep), status)
         else
             ! APNG delays are a fraction, so the frame rate is not rounded
             ! to hundredths of a second.
-            call write_bytes(filename, apng_encode(anim_w, anim_h, anim_n, &
+            call save_bytes("save_animation", filename, apng_encode(anim_w, anim_h, anim_n, &
                              anim_pix(1:anim_len), &
-                             min(65535, max(1, nint(1000.0_dp/rate))), 1000, rep))
+                             max(1, nint(min(1000.0_dp/rate, 65535.0_dp))), 1000, rep), status)
+        end if
+        ! Frames that could not be written are kept, so that the caller can
+        ! try another file name.
+        if (present(status)) then
+            if (.not. status%ok()) return
         end if
         anim_n = 0
         anim_w = 0
@@ -6408,11 +6532,22 @@ contains
         deallocate (anim_pix)
     end subroutine save_animation
 
-    subroutine show()
-        ! File backend. In LFortran Jupyter notebooks, prefer:
-        !   use lfortran_display
-        !   call display_data("image/svg+xml", render_svg())
-        call savefig("fplotlib_show.svg")
+    ! There is no window to show the figure in, so it goes to a file. A file
+    ! that cannot be written is returned in status when it is present, and
+    ! otherwise only reported: show is a convenience, not a step a script
+    ! depends on. In LFortran Jupyter notebooks, prefer:
+    !   use lfortran_display
+    !   call display_data("image/svg+xml", render_svg())
+    subroutine show(status)
+        type(status_t), intent(out), optional :: status
+        type(status_t) :: local
+
+        call savefig("fplotlib_show.svg", status=local)
+        if (present(status)) status = local
+        if (.not. local%ok()) then
+            if (.not. present(status)) write (error_unit, "(a)") "fplotlib: show: "//trim(local%message)
+            return
+        end if
         print *, "fplotlib: wrote fplotlib_show.svg"
         print *, "fplotlib: for Jupyter use display_data('image/svg+xml', render_svg())"
     end subroutine show

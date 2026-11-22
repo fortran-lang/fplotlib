@@ -23,7 +23,7 @@ module fplotlib_backend_svg
 
     public :: svg_renderer_t
 
-    type, extends(renderer_t) :: svg_renderer_t
+    type, extends(encoded_renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
         ! Serial numbers for the ids that <use> and clip-path refer to.
         integer :: n_marker = 0
@@ -38,17 +38,17 @@ module fplotlib_backend_svg
         ! string that uses it refers back to.
         logical, allocatable :: glyph_defined(:)
     contains
-        procedure :: open_canvas => svg_open_canvas
-        procedure :: close_canvas => svg_close_canvas
-        procedure :: bytes => svg_bytes
-        procedure :: draw_path => svg_draw_path
-        procedure :: draw_rect => svg_draw_rect
-        procedure :: draw_circle => svg_draw_circle
-        procedure :: draw_markers => svg_draw_markers
-        procedure :: draw_glyphs => svg_draw_glyphs
-        procedure :: draw_image => svg_draw_image
-        procedure :: begin_group => svg_begin_group
-        procedure :: end_group => svg_end_group
+        procedure :: open_canvas_impl => svg_open_canvas
+        procedure :: close_canvas_impl => svg_close_canvas
+        procedure :: bytes_impl => svg_bytes
+        procedure :: draw_path_impl => svg_draw_path
+        procedure :: draw_rect_impl => svg_draw_rect
+        procedure :: draw_circle_impl => svg_draw_circle
+        procedure :: draw_markers_impl => svg_draw_markers
+        procedure :: draw_glyphs_impl => svg_draw_glyphs
+        procedure :: draw_image_impl => svg_draw_image
+        procedure :: begin_group_impl => svg_begin_group
+        procedure :: end_group_impl => svg_end_group
     end type svg_renderer_t
 
 contains
@@ -220,6 +220,11 @@ contains
         real(dp), intent(in), optional :: x0, y0
         real(dp) :: ox, oy
 
+        self%n_marker = 0
+        self%n_clip = 0
+        self%cur_clip_id = 0
+        self%cur_clip = clip_t()
+        self%in_clip = .false.
         ox = 0.0_dp
         oy = 0.0_dp
         if (present(x0)) ox = x0
@@ -274,6 +279,7 @@ contains
     subroutine svg_close_canvas(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
         call sync_clip(self, none)
         call put(self, "</svg>")
         call put_eol(self)
@@ -282,6 +288,7 @@ contains
     function svg_bytes(self) result(s)
         class(svg_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
+
         s = builder_get(self%b)
     end function svg_bytes
 
@@ -333,7 +340,6 @@ contains
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
 
-        if (n_verb <= 0) return
         call sync_clip(self, paint%clip)
         call put(self, '<path d="')
         call put_path_data(self, x, y, verbs, n_verb)
@@ -400,7 +406,6 @@ contains
         type(paint_t), intent(in) :: paint
         integer :: i
 
-        if (size(x) <= 0 .or. n_mverb <= 0) return
         call sync_clip(self, paint%clip)
 
         self%n_marker = self%n_marker + 1
@@ -443,7 +448,6 @@ contains
         logical :: opened
         real(dp) :: ca, sa, k
 
-        if (run%n == 0) return
         call sync_clip(self, paint%clip)
 
         ! The glyphs this string is the first to use.
@@ -532,10 +536,9 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
 
-        if (nx < 1 .or. ny < 1) return
         call sync_clip(self, paint%clip)
         call put(self, '<image x="')
         call put_num(self, x)
@@ -595,6 +598,9 @@ contains
     subroutine svg_begin_group(self, name)
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+        type(clip_t) :: none
+
+        call sync_clip(self, none)
         call put(self, '<g id="')
         call put(self, name)
         call put(self, '">')
@@ -604,6 +610,7 @@ contains
     subroutine svg_end_group(self)
         class(svg_renderer_t), intent(inout) :: self
         type(clip_t) :: none
+
         ! A clip must not outlive the group that contains it.
         call sync_clip(self, none)
         call put(self, "</g>")

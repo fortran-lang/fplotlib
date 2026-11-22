@@ -25,6 +25,7 @@
 ! prolog once the page knows which glyphs it used.
 module fplotlib_backend_eps
     use fplotlib_style, only: dp
+    use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib_render
     use fplotlib_glyphs, only: glyph_inked
     use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
@@ -36,7 +37,7 @@ module fplotlib_backend_eps
 
     public :: eps_renderer_t
 
-    type, extends(renderer_t) :: eps_renderer_t
+    type, extends(encoded_renderer_t) :: eps_renderer_t
         type(svg_builder) :: c
         character(len=:), allocatable :: out
         real(dp) :: w = 0.0_dp, h = 0.0_dp
@@ -46,15 +47,15 @@ module fplotlib_backend_eps
         ! The glyphs the page has drawn, and the fonts they went into.
         type(t3set_t) :: t3
     contains
-        procedure :: open_canvas => eps_open_canvas
-        procedure :: close_canvas => eps_close_canvas
-        procedure :: bytes => eps_bytes
-        procedure :: draw_path => eps_draw_path
-        procedure :: draw_rect => eps_draw_rect
-        procedure :: draw_circle => eps_draw_circle
-        procedure :: draw_markers => eps_draw_markers
-        procedure :: draw_glyphs => eps_draw_glyphs
-        procedure :: draw_image => eps_draw_image
+        procedure :: open_canvas_impl => eps_open_canvas
+        procedure :: close_canvas_impl => eps_close_canvas
+        procedure :: bytes_impl => eps_bytes
+        procedure :: draw_path_impl => eps_draw_path
+        procedure :: draw_rect_impl => eps_draw_rect
+        procedure :: draw_circle_impl => eps_draw_circle
+        procedure :: draw_markers_impl => eps_draw_markers
+        procedure :: draw_glyphs_impl => eps_draw_glyphs
+        procedure :: draw_image_impl => eps_draw_image
     end type eps_renderer_t
 
 
@@ -84,6 +85,14 @@ contains
         call fmt_num(x, s, n)
         t = s(1:n)
     end function num_str
+
+    pure function long_str(i) result(t)
+        integer(int64), intent(in) :: i
+        character(len=:), allocatable :: t
+        character(len=24) :: s
+        write (s, "(I0)") i
+        t = trim(s)
+    end function long_str
 
     pure function int_str(i) result(t)
         integer, intent(in) :: i
@@ -243,7 +252,7 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
-        if (n_verb <= 0) return
+
         call begin_paint(self, paint)
         call emit_path(self, x, y, verbs, n_verb)
         call end_paint(self, paint)
@@ -292,6 +301,7 @@ contains
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
         integer :: i
+
         do i = 1, size(x)
             call eps_draw_path(self, mx + x(i), my + y(i), mverbs, n_mverb, paint)
         end do
@@ -311,7 +321,6 @@ contains
         integer :: i, j, k, font, code, font_j, code_j
         character(len=1) :: eol
 
-        if (run%n == 0) return
         eol = new_line("a")
         call put(self, "gsave"//eol)
         if (paint%clip%on) then
@@ -372,13 +381,11 @@ contains
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         character(len=*), parameter :: HEX = "0123456789abcdef"
         integer :: i, j, k, c(3)
         character(len=1) :: buf(6)
-
-        if (nx < 1 .or. ny < 1) return
 
         call put(self, "gsave"//new_line("a"))
         call put_num(self, x)
@@ -427,8 +434,10 @@ contains
         call builder_init(f)
         call builder_append(f, "%!PS-Adobe-3.0 EPSF-3.0"//eol)
         call builder_append(f, "%%Creator: fplotlib"//eol)
-        call builder_append(f, "%%BoundingBox: 0 0 "//int_str(ceiling(self%w)) &
-                            //" "//int_str(ceiling(self%h))//eol)
+        ! In 64-bit integers: a figure may be a billion inches wide, past
+        ! what a default integer holds.
+        call builder_append(f, "%%BoundingBox: 0 0 "//long_str(ceiling(self%w, int64)) &
+                            //" "//long_str(ceiling(self%h, int64))//eol)
         call builder_append(f, "%%HiResBoundingBox: 0 0 "//num_str(self%w) &
                             //" "//num_str(self%h)//eol)
         call builder_append(f, "%%EndComments"//eol)
@@ -522,11 +531,8 @@ contains
     function eps_bytes(self) result(s)
         class(eps_renderer_t), intent(in) :: self
         character(len=:), allocatable :: s
-        if (allocated(self%out)) then
-            s = self%out
-        else
-            s = ""
-        end if
+
+        s = self%out
     end function eps_bytes
 
 end module fplotlib_backend_eps

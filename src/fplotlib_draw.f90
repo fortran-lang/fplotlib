@@ -15,6 +15,7 @@ module fplotlib_draw
     use fplotlib_ticks
     use fplotlib_svg
     use fplotlib_render
+    use fplotlib_status, only: contract_error, status_t, set_status, ERROR_SIZE
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: error_unit
     use fplotlib_backend_svg
@@ -105,6 +106,10 @@ contains
         integer :: i, r, c
         real(dp) :: w, h, dx, dy
 
+        ! The product of two counts can overflow an integer; ten thousand
+        ! axes is past any figure anyone looks at.
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) &
+            call contract_error("axes: a grid of more than 10000 axes")
         cur_i = 0
         if (allocated(ax)) deallocate (ax)
 
@@ -4558,49 +4563,49 @@ contains
     ! Draw the whole figure into any backend. Everything above this point is
     ! format independent; the only thing render_svg and its PDF and PNG
     ! counterparts add is the choice of renderer.
-    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches)
+    ! status, when present, is ERROR_SIZE for a PNG cropped to too many
+    ! pixels, and nothing is drawn; it is ok otherwise.
+    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches, status)
         class(renderer_t), intent(inout) :: b
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
-        real(dp) :: W, H, vx, vy, vw, vh, bpad
+        type(status_t), intent(out), optional :: status
+        real(dp) :: W, H, vx, vy, vw, vh
         character(len=512) :: esc
         character(len=7) :: face
         logical :: clear
         integer :: i, en, n_grp
 
-        call ensure_fig()
-        ! constrained_layout fits the decorations just before the drawing
-        ! goes out, when every label the figure will carry is known.
-        if (fig_constrained) call tight_layout()
+        ! The window first: it settles a constrained layout as well.
+        call figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
+        W = fig_w_in*PT_PER_IN
+        H = fig_h_in*PT_PER_IN
         clear = .false.
         if (present(transparent)) clear = transparent
         face = resolve_color(facecolor)
         if (len_trim(face) == 0) face = rc_fig_face
         call clear_clip()
 
-        W = fig_w_in*PT_PER_IN
-        H = fig_h_in*PT_PER_IN
-        vx = 0.0_dp
-        vy = 0.0_dp
-        vw = W
-        vh = H
-        if (present(bbox_inches)) then
-            if (lower(trim(bbox_inches)) == "tight") then
-                bpad = 0.1_dp
-                if (present(pad_inches)) bpad = pad_inches
-                bpad = bpad*PT_PER_IN
-                ! Cropping moves the window onto the drawing, so the drawing
-                ! itself needs no translation.
-                call drawn_bbox(W, H, vx, vy, vw, vh)
-                vx = vx - bpad
-                vy = vy - bpad
-                vw = vw - vx + bpad
-                vh = vh - vy + bpad
-            else if (len_trim(bbox_inches) > 0) then
-                error stop "fplotlib: bbox_inches must be 'tight'"
+        ! A PNG has to fit MAX_PNG_PIXELS. Cropped to what is drawn, its size
+        ! depends on the drawing, which the caller cannot know beforehand,
+        ! so a crop too large is returned; the whole figure's size the
+        ! caller can work out, so a figure too large is a broken
+        ! precondition.
+        select type (b)
+        type is (png_renderer_t)
+            if (.not. png_fits(vw, vh, b%dpi)) then
+                if (.not. tight_crop(bbox_inches)) then
+                    call contract_error("render_png: the figure has too many pixels at this dpi")
+                else if (present(status)) then
+                    call set_status(status, ERROR_SIZE, "the cropped figure has too many pixels at this dpi")
+                else
+                    write (error_unit, "(a)") "fplotlib: render_png: the cropped figure has too many pixels at this dpi"
+                    error stop 2
+                end if
+                return
             end if
-        end if
+        end select
 
         ! transparent drops the figure patch entirely
         if (clear) then
@@ -4638,61 +4643,164 @@ contains
         call b%close_canvas()
     end subroutine render_figure
 
-    function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(svg)
+    ! pad_inches, for savefig and the render_* functions, whether the
+    ! figure is cropped or not: finite, and at most a billion inches either
+    ! way, so that the cropped window stays finite.
+    subroutine check_pad_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. abs(v) > 1.0e9_dp) &
+            call contract_error(proc//": "//name//" must be finite and at most 1e9 inches")
+    end subroutine check_pad_arg
+
+    ! The window of the drawing a figure is written through, in points:
+    ! the whole figure, or with bbox_inches="tight" what is drawn and
+    ! pad_inches about it.
+    subroutine figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
+        character(len=*), intent(in), optional :: bbox_inches
+        real(dp), intent(in), optional :: pad_inches
+        real(dp), intent(out) :: vx, vy, vw, vh
+        real(dp) :: W, H, bpad, lim
+
+        call ensure_fig()
+        ! constrained_layout fits the decorations just before the drawing
+        ! goes out, when every label the figure will carry is known.
+        if (fig_constrained) call tight_layout()
+        W = fig_w_in*PT_PER_IN
+        H = fig_h_in*PT_PER_IN
+        vx = 0.0_dp
+        vy = 0.0_dp
+        vw = W
+        vh = H
+        if (present(bbox_inches)) then
+            if (lower(trim(bbox_inches)) == "tight") then
+                bpad = 0.1_dp
+                ! Checked by the caller, through check_pad_arg.
+                if (present(pad_inches)) bpad = pad_inches
+                bpad = bpad*PT_PER_IN
+                ! Cropping moves the window onto the drawing, so the drawing
+                ! itself needs no translation.
+                call drawn_bbox(W, H, vx, vy, vw, vh)
+                vx = vx - bpad
+                vy = vy - bpad
+                vw = vw - vx + bpad
+                vh = vh - vy + bpad
+                ! A negative pad, which matplotlib takes, crops into the
+                ! drawing; past its middle there is a point of it left.
+                if (vw < 1.0_dp) then
+                    vx = vx - 0.5_dp*(1.0_dp - vw)
+                    vw = 1.0_dp
+                end if
+                if (vh < 1.0_dp) then
+                    vy = vy - 0.5_dp*(1.0_dp - vh)
+                    vh = 1.0_dp
+                end if
+                ! Decorations placed absurdly far out (a labelpad of 1e20, say)
+                ! may not take the canvas past what a renderer takes: the
+                ! window keeps to a billion inches about the figure.
+                lim = 1.0e9_dp*PT_PER_IN
+                if (vx < -lim) then
+                    vw = vw - (-lim - vx)
+                    vx = -lim
+                end if
+                if (vy < -lim) then
+                    vh = vh - (-lim - vy)
+                    vy = -lim
+                end if
+                vw = max(1.0_dp, min(vw, lim + W - vx))
+                vh = max(1.0_dp, min(vh, lim + H - vy))
+            else if (len_trim(bbox_inches) > 0) then
+                call contract_error("savefig: bbox_inches must be 'tight'")
+            end if
+        end if
+
+    end subroutine figure_window
+
+    logical function tight_crop(bbox_inches)
+        character(len=*), intent(in), optional :: bbox_inches
+        tight_crop = .false.
+        if (present(bbox_inches)) tight_crop = lower(trim(bbox_inches)) == "tight"
+    end function tight_crop
+
+    ! Whether a canvas of vw by vh points has at most MAX_PNG_PIXELS pixels
+    ! at dpi.
+    logical function png_fits(vw, vh, dpi)
+        real(dp), intent(in) :: vw, vh, dpi
+        png_fits = png_pixels(vw, vh, dpi) <= MAX_PNG_PIXELS
+    end function png_fits
+
+    function render_svg(facecolor, transparent, bbox_inches, pad_inches, status) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: svg
         type(svg_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call check_pad_arg("render_svg", "pad_inches", pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         svg = r%bytes()
     end function render_svg
 
-    function render_pdf(facecolor, transparent, bbox_inches, pad_inches) result(pdf)
+    function render_pdf(facecolor, transparent, bbox_inches, pad_inches, status) result(pdf)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: pdf
         type(pdf_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call check_pad_arg("render_pdf", "pad_inches", pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         pdf = r%bytes()
     end function render_pdf
 
-    ! Unlike the vector formats, dpi is not decorative here: it is what
-    ! decides how many pixels the figure is rasterized into.
-    function render_eps(facecolor, transparent, bbox_inches, pad_inches) result(eps)
+    function render_eps(facecolor, transparent, bbox_inches, pad_inches, status) result(eps)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: eps
         type(eps_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call check_pad_arg("render_eps", "pad_inches", pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         eps = r%bytes()
     end function render_eps
 
-    function render_png(facecolor, transparent, bbox_inches, pad_inches) result(png)
+    ! Unlike the vector formats, dpi is not decorative here: it is what
+    ! decides how many pixels the figure is rasterized into.
+    !
+    ! A PNG cropped with bbox_inches="tight" to more than MAX_PNG_PIXELS is a
+    ! failure the caller could not foresee: returned in status as
+    ! ERROR_SIZE, with an empty result, or without status the end of the
+    ! program with exit code 2. The vector formats take any size, and
+    ! their status is always ok.
+    !
+    ! dpi is the figure's own unless given here.
+    function render_png(facecolor, transparent, bbox_inches, pad_inches, dpi, status) result(png)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
-        real(dp), intent(in), optional :: pad_inches
+        real(dp), intent(in), optional :: pad_inches, dpi
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: png
         type(png_renderer_t) :: r
-        call r%set_dpi(fig_dpi)
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        type(status_t) :: st
+        call check_pad_arg("render_png", "pad_inches", pad_inches)
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("render_png: dpi must be finite and positive")
+            call r%set_dpi(dpi)
+        else
+            call r%set_dpi(fig_dpi)
+        end if
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, st)
+        if (present(status)) status = st
+        if (.not. st%ok()) then
+            png = ""
+            if (present(status)) return
+            write (error_unit, "(a)") "fplotlib: render_png: "//trim(st%message)
+            error stop 2
+        end if
         png = r%bytes()
     end function render_png
-
-    pure function lower(s) result(t)
-        character(len=*), intent(in) :: s
-        character(len=len(s)) :: t
-        integer :: i, c
-        do i = 1, len(s)
-            c = iachar(s(i:i))
-            if (c >= iachar("A") .and. c <= iachar("Z")) then
-                t(i:i) = achar(c + 32)
-            else
-                t(i:i) = s(i:i)
-            end if
-        end do
-    end function lower
 
 end module fplotlib_draw

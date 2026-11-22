@@ -1,0 +1,76 @@
+# fplotlib_status module
+
+fplotlib tells two kinds of failure apart.
+
+A call that breaks a documented precondition is a bug in the calling code:
+drawing before `open_canvas`, a nonfinite coordinate, an alpha outside
+`[0,1]`, an unknown fill rule, `bytes` before `close_canvas`. Such a call
+stops the program through `contract_error`, which writes `fplotlib: `
+and a message naming the broken rule to standard error and exits with
+code 1. It does not return an error, because no caller could do anything
+with it but stop.
+
+A failure that a correct program can still meet at run time, such as an
+output file that cannot be written, is returned instead, through a
+`status_t` argument. `status%ok()` reports success, `status%code` says what
+failed (`ERROR_IO`, or `ERROR_SIZE` for a cropped PNG too large to
+encode), and `status%message`, a string of `MESSAGE_LEN` (512)
+characters, says what failed, blank when nothing did (read it with
+`trim`). Use the call's other outputs only when `status%ok()` is true. There is no global
+last-error state.
+
+`fplotlib_io:write_bytes` requires its `status`. `savefig` and
+`save_animation` take an optional one: when it is present a file that
+cannot be written is returned in it, and when it is absent the call stops
+with the message, as the exception does in matplotlib, and exit code 2, so
+that a script's caller can tell it from a broken precondition. `show` also
+takes an optional `status`, and without one only reports the failure.
+A PNG cropped with `bbox_inches="tight"` takes its size from what is
+drawn, which the caller cannot know beforehand. One with more than
+`MAX_PNG_PIXELS` pixels is a failure at run time: `savefig` and
+`render_png` return it as `ERROR_SIZE` (`render_png` with an empty
+result), or stop with exit code 2 without a `status`. `render_svg`,
+`render_pdf` and `render_eps` take the same optional `status`, which is
+always ok. A whole figure too large for a PNG, which its size and dpi
+tell beforehand, is a broken precondition; only a crop is returned.
+
+`fplotlib` re-exports `status_t`, `STATUS_OK`, `ERROR_IO`, `ERROR_SIZE`
+and `MESSAGE_LEN`, and the limits below that a plotting call can reach,
+`MAX_DASH` and `MAX_PNG_PIXELS`; it defines `MAX_REEL_BYTES`. The
+renderer's own limits, `MAX_COORD` and `MAX_PEN_PER_DASH`, are in
+`fplotlib_render`. `set_status`, which records a failure, is for
+fplotlib's own use, and `fplotlib` does not export it.
+
+## Limits
+
+Some arguments have upper bounds that matplotlib doesn't have. Past
+them, the arrays, the canvas or the work would not fit, or a value could
+no longer be written. Going past one is a broken precondition, and stops:
+
+| What | Limit |
+|---|---|
+| A coordinate, size or width handed to a renderer | finite, at most `MAX_COORD` (1e15 points) |
+| `figure`/`rc` `figsize`, `pad_inches` of `savefig` and `render_*` | at most 1e9 inches |
+| `figure` `num` | 1 to 100000 |
+| Axes in one `subplot`/`subplots` grid | at most 10000 |
+| `streamplot` `density` | at most 10 |
+| A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
+| A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
+| The frames of one animation, each counted as it encodes at worst, `h(3w + 1)·9/8 + 1024` bytes for `w` by `h` pixels | at most `MAX_REEL_BYTES` (1e9) bytes |
+
+Data is never limited: a value of any size, or a missing one, never
+stops a plot, and is drawn or left out as the view shows it. Line widths
+and dash lengths beyond 1e12 points are drawn as 1e12, which covers
+anything that can be seen just as fully.
+
+The PNG backend draws one thing approximately: a dash pattern shorter
+than half a pixel, whose dashes cannot be told apart, is drawn as a solid
+line at the share of the line the pattern would cover (more where round
+or square ends close the gaps). Walking such a pattern dash by dash could
+take without end. Everything else it draws as the full walk of every dash
+would, up to the rounding of where along a very long segment the pattern
+stands, which the walk works out by adding dash after dash and the
+shortcuts by division.
+
+```{f:module} fplotlib_status
+```

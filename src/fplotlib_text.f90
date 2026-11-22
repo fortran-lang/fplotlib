@@ -18,15 +18,17 @@
 ! The faces are Lato: regular, bold and italic; bold italic is set in
 ! bold.
 module fplotlib_text
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use fplotlib_status, only: contract_error
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC
+                               FACE_ITALIC, NGLYPH, NFACE
     implicit none
     private
 
-    public :: text_face, text_layout, text_width
+    public :: text_face, text_layout, text_width, check_font
     public :: run_add, run_shift, run_reset
 
 contains
@@ -47,6 +49,17 @@ contains
         end if
     end function text_face
 
+    ! A face of fplotlib_glyphs and a font size in points, finite and not
+    ! negative. Size zero is allowed and sets text with no extent.
+    subroutine check_font(face, size)
+        integer, intent(in) :: face
+        real(dp), intent(in) :: size
+        if (face < 1 .or. face > NFACE) call contract_error("text: unknown font face")
+        if (.not. ieee_is_finite(size) .or. size < 0.0_dp) then
+            call contract_error("text: font size must be finite and nonnegative")
+        end if
+    end subroutine check_font
+
     ! Append s, set in face at size, to run, starting with the pen at
     ! (x0, y0). xend is where the pen is left.
     subroutine text_layout(s, size, face, x0, y0, run, xend)
@@ -59,6 +72,10 @@ contains
         integer :: n, k, gid, prev
         real(dp) :: pen
 
+        call check_font(face, size)
+        if (.not. ieee_is_finite(x0) .or. .not. ieee_is_finite(y0)) then
+            call contract_error("text: nonfinite pen position")
+        end if
         call code_points(s, cps, n)
         pen = x0
         prev = 0
@@ -82,6 +99,7 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, gid, prev
 
+        call check_font(face, size)
         call code_points(s, cps, n)
         w = 0.0_dp
         prev = 0
@@ -143,10 +161,17 @@ contains
         real(dp), allocatable :: t(:)
         integer :: cap
 
+        if (gid < 0 .or. gid > NGLYPH) call contract_error("text: invalid glyph ID")
+        if (.not. ieee_is_finite(x) .or. .not. ieee_is_finite(y)) then
+            call contract_error("text: nonfinite glyph position")
+        end if
+        if (.not. ieee_is_finite(fs) .or. fs < 0.0_dp) then
+            call contract_error("text: font size must be finite and nonnegative")
+        end if
         if (.not. allocated(run%gid)) then
             allocate (run%gid(16), run%x(16), run%y(16), run%size(16))
         else if (run%n >= size(run%gid)) then
-            cap = 2*size(run%gid)
+            cap = max(16, 2*size(run%gid))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)

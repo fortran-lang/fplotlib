@@ -1,15 +1,16 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract renderer that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF and EPS each implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
 ! Four rules keep the API from leaking any one format's habits:
 !
-!   1. No state machine. Every drawing call carries the paint it should be
+!   1. No hidden paint state. Every drawing call carries the paint it should be
 !      drawn with, so nothing depends on what was called before it. A backend
 !      may cache the last paint internally to avoid re-emitting attributes,
 !      but that is its own business and cannot be observed through the API.
+!      The canvas lifecycle is explicit.
 !
 !   2. Purely additive, in painter's order. Calls are composited in the order
 !      they arrive; later drawings cover earlier ones. A raster backend can
@@ -30,8 +31,8 @@
 ! What counts as a primitive
 ! --------------------------
 ! A call earns a place in the backend contract only when a backend has a real
-! decision to make about it. Those are all deferred, so the compiler tells a
-! backend author exactly what has to be written:
+! decision to make about it. Each is deferred, as draw_path_impl and so on,
+! so the compiler tells a backend author exactly what has to be written:
 !
 !   draw_path     the universal fallback shape
 !   draw_rect     SVG <rect>, PDF "re", EPS rectfill, PNG an exact axis
@@ -54,31 +55,58 @@
 ! and has draw_path as its only geometry primitive; its SVG backend emits no
 ! <rect> or <circle> at all, trading file size for a smaller contract.
 !
-! By the same rule this module is interface and nothing else. Text metrics,
+! By the same rule this module is the interface, and the checks that enforce
+! it, and nothing else. Text metrics,
 ! arc flattening and circle-to-cubic conversion are all absent: either a
 ! backend has a real reason to do them its own way, in which case that is the
 ! backend's own code, or it does not, in which case it belongs to whoever
 ! calls the API rather than to the API.
 !
-! begin_group and end_group are different again: they are concrete and default
-! to doing nothing, because doing nothing is the correct implementation for a
+! begin_group_impl and end_group_impl are different again: they are concrete
+! and default to doing nothing, because doing nothing is the correct implementation for a
 ! format without a document tree, not a lazy one. See the note on groups.
+!
+! Errors
+! ------
+! Nothing in this contract returns an error. A call that breaks it, such as
+! drawing before open_canvas, a coordinate that is not finite or lies
+! beyond MAX_COORD (1e15 points), or an end_group without a begin_group,
+! is a bug in the caller and stops the program with a message naming the
+! rule (contract_error in fplotlib_status). A correct sequence of
+! calls always succeeds.
+!
+! The checks are made here, once, rather than in each backend. Every public
+! method of renderer_t is non_overridable: it checks the call, keeps the
+! canvas state (open, finished, group depth) and only then calls the
+! backend's *_impl method, which may therefore assume a valid call. A backend
+! cannot forget a check, and no two backends can disagree about one. A call
+! that draws nothing -- a path without verbs, markers at no points, an empty
+! glyph run -- returns before it reaches the backend.
+!
+! The *_impl bindings and the state components are public only because
+! Fortran cannot otherwise let a backend in another module implement or
+! read them. They are for backends: code that draws calls the methods
+! without the suffix, since calling an *_impl directly skips the checks.
+! open_canvas records width and height after open_canvas_impl returns, so
+! a backend sizes itself from its arguments, not from those components.
 
 module fplotlib_render
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_style, only: dp
+    use fplotlib_status, only: contract_error
+    use fplotlib_glyphs_data, only: NGLYPH
     implicit none
     private
 
-    public :: renderer_t, paint_t, font_t, clip_t, glyphrun_t
+    public :: renderer_t, encoded_renderer_t, paint_t, font_t, clip_t, glyphrun_t
     public :: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     public :: CAP_BUTT, CAP_ROUND, CAP_SQUARE
     public :: JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
     public :: FILL_NONZERO, FILL_EVENODD
     public :: ANCHOR_START, ANCHOR_MIDDLE, ANCHOR_END
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
-    public :: FAMILY_SANS, FAMILY_SERIF, FAMILY_MONO
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
-    public :: MAX_DASH
+    public :: MAX_DASH, MAX_COORD, MAX_PEN_PER_DASH
 
     ! Path verbs. A path is x/y vertex arrays plus one verb per vertex group:
     ! MOVE and LINE consume one vertex, CUBIC consumes three (two controls and
@@ -96,14 +124,20 @@ module fplotlib_render
     integer, parameter :: BASE_ALPHABETIC = 0, BASE_MIDDLE = 1
     integer, parameter :: BASE_TOP = 2, BASE_BOTTOM = 3
 
-    ! A closed set, not a font name string. Every backend draws from the
-    ! compiled-in outlines, which are one sans family, so the family is
-    ! carried for the caller's sake and draws the same whatever it says.
-    integer, parameter :: FAMILY_SANS = 0, FAMILY_SERIF = 1, FAMILY_MONO = 2
+    ! Styles of the built-in sans family. Font selection is carried by glyph
+    ! IDs in a finished run, not by an unsupported family preference.
     integer, parameter :: WEIGHT_NORMAL = 0, WEIGHT_BOLD = 1
     integer, parameter :: SLANT_ROMAN = 0, SLANT_ITALIC = 1
 
     integer, parameter :: MAX_DASH = 8
+
+    ! Every coordinate, size and width is finite and at most this far from
+    ! zero, in points. The plotting layer clips its geometry long before.
+    real(dp), parameter :: MAX_COORD = 1.0e15_dp
+
+    ! A dashed pen with round or square ends is at most this many times as
+    ! wide as its dash pattern is long.
+    real(dp), parameter :: MAX_PEN_PER_DASH = 100.0_dp
 
     ! Rectangular clip. fplotlib only ever clips series to the axes box, and a
     ! rectangle is the one clip shape all four formats support cheaply.
@@ -144,7 +178,6 @@ module fplotlib_render
 
     type :: font_t
         real(dp) :: size = 10.0_dp
-        integer :: family = FAMILY_SANS
         integer :: weight = WEIGHT_NORMAL
         integer :: slant = SLANT_ROMAN
     end type font_t
@@ -164,29 +197,47 @@ module fplotlib_render
     end type glyphrun_t
 
     type, abstract :: renderer_t
+        ! The canvas state. The methods below keep it; a backend may read it
+        ! but never sets it.
         real(dp) :: width = 0.0_dp    ! canvas size in points
         real(dp) :: height = 0.0_dp
         logical :: is_open = .false.
+        logical :: is_finished = .false.   ! closed since the last open
+        integer :: n_group = 0             ! groups begun and not yet ended
     contains
+        ! The contract. Each method checks the call and then hands it to
+        ! the backend's implementation below.
+        procedure, non_overridable :: open_canvas, close_canvas
+        procedure, non_overridable :: draw_path, draw_rect, draw_circle
+        procedure, non_overridable :: draw_markers, draw_glyphs, draw_image
+        procedure, non_overridable :: begin_group, end_group
+
         ! Lifecycle.
-        procedure(open_canvas_i), deferred :: open_canvas
-        procedure(close_canvas_i), deferred :: close_canvas
-        procedure(bytes_i), deferred :: bytes
+        procedure(open_canvas_i), deferred :: open_canvas_impl
+        procedure(close_canvas_i), deferred :: close_canvas_impl
 
         ! The primitives. Every one is a decision a backend has to make for
         ! itself, which is why none of them has a default.
-        procedure(draw_path_i), deferred :: draw_path
-        procedure(draw_rect_i), deferred :: draw_rect
-        procedure(draw_circle_i), deferred :: draw_circle
-        procedure(draw_markers_i), deferred :: draw_markers
-        procedure(draw_glyphs_i), deferred :: draw_glyphs
-        procedure(draw_image_i), deferred :: draw_image
+        procedure(draw_path_i), deferred :: draw_path_impl
+        procedure(draw_rect_i), deferred :: draw_rect_impl
+        procedure(draw_circle_i), deferred :: draw_circle_impl
+        procedure(draw_markers_i), deferred :: draw_markers_impl
+        procedure(draw_glyphs_i), deferred :: draw_glyphs_impl
+        procedure(draw_image_i), deferred :: draw_image_impl
 
         ! Structure. Concrete, and doing nothing is a correct implementation
         ! for any format without a document tree.
-        procedure :: begin_group
-        procedure :: end_group
+        procedure :: begin_group_impl
+        procedure :: end_group_impl
     end type renderer_t
+
+    ! Encoding is separate from drawing: a target that only draws, such as an
+    ! interactive one, need not invent a file format or a bytes method.
+    type, abstract, extends(renderer_t) :: encoded_renderer_t
+    contains
+        procedure, non_overridable :: bytes
+        procedure(bytes_i), deferred :: bytes_impl
+    end type encoded_renderer_t
 
     abstract interface
 
@@ -218,8 +269,8 @@ module fplotlib_render
         ! file type, so binary formats can return raw bytes and callers can
         ! write a file or hand it to a notebook without a temporary file.
         function bytes_i(self) result(b)
-            import :: renderer_t
-            class(renderer_t), intent(in) :: self
+            import :: encoded_renderer_t
+            class(encoded_renderer_t), intent(in) :: self
             character(len=:), allocatable :: b
         end function bytes_i
 
@@ -286,7 +337,7 @@ module fplotlib_render
             class(renderer_t), intent(inout) :: self
             real(dp), intent(in) :: x, y, w, h
             integer, intent(in) :: nx, ny
-            integer, intent(in) :: rgba(4, nx, ny)
+            integer, intent(in) :: rgba(:, :, :)
             type(paint_t), intent(in) :: paint
         end subroutine draw_image_i
 
@@ -314,13 +365,315 @@ contains
     ! layers. EPS and PNG have no document tree, so ignoring them is correct.
     ! ------------------------------------------------------------------
 
+    subroutine begin_group_impl(self, name)
+        class(renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: name
+    end subroutine begin_group_impl
+
+    subroutine end_group_impl(self)
+        class(renderer_t), intent(inout) :: self
+    end subroutine end_group_impl
+
+    ! ------------------------------------------------------------------
+    ! The contract. Each method below checks its call, keeps the canvas
+    ! state and calls the backend; see "Errors" at the top of the file.
+    ! ------------------------------------------------------------------
+
+    subroutine open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: width, height
+        integer, intent(in), optional :: bg_rgb(3)
+        real(dp), intent(in), optional :: bg_alpha
+        real(dp), intent(in), optional :: x0, y0
+
+        if (self%is_open) call contract_error("renderer: canvas is already open")
+        if (.not. all(in_range([width, height])) .or. width < 0.0_dp .or. height < 0.0_dp) then
+            call contract_error("renderer: canvas size must be finite, nonnegative and at most 1e15")
+        end if
+        if (present(bg_rgb)) call check_rgb(bg_rgb)
+        if (present(bg_alpha)) call check_alpha(bg_alpha, "renderer: background alpha must be in [0,1]")
+        if (present(x0)) call check_finite([x0], "renderer: nonfinite or out-of-range canvas origin")
+        if (present(y0)) call check_finite([y0], "renderer: nonfinite or out-of-range canvas origin")
+        call self%open_canvas_impl(width, height, bg_rgb, bg_alpha, x0, y0)
+        self%width = width
+        self%height = height
+        self%is_open = .true.
+        self%is_finished = .false.
+        self%n_group = 0
+    end subroutine open_canvas
+
+    subroutine close_canvas(self)
+        class(renderer_t), intent(inout) :: self
+
+        call check_open(self)
+        if (self%n_group /= 0) call contract_error("renderer: begin_group without end_group at close_canvas")
+        call self%close_canvas_impl()
+        self%is_open = .false.
+        self%is_finished = .true.
+    end subroutine close_canvas
+
+    subroutine draw_path(self, x, y, verbs, n_verb, paint)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        call check_path(x, y, verbs, n_verb, "path")
+        call check_paint(paint)
+        if (n_verb == 0) return
+        call self%draw_path_impl(x, y, verbs, n_verb, paint)
+    end subroutine draw_path
+
+    subroutine draw_rect(self, x, y, w, h, paint, radius)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in), optional :: radius
+
+        call check_open(self)
+        call check_box(x, y, w, h, "rectangle")
+        if (present(radius)) then
+            if (.not. in_range(radius) .or. radius < 0.0_dp) then
+                call contract_error("rectangle: invalid corner radius")
+            end if
+        end if
+        call check_paint(paint)
+        call self%draw_rect_impl(x, y, w, h, paint, radius)
+    end subroutine draw_rect
+
+    subroutine draw_circle(self, cx, cy, r, paint)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: cx, cy, r
+        type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        if (.not. all(in_range([cx, cy, r])) .or. r < 0.0_dp) then
+            call contract_error("circle: expected an in-range center and an in-range nonnegative radius")
+        end if
+        call check_paint(paint)
+        call self%draw_circle_impl(cx, cy, r, paint)
+    end subroutine draw_circle
+
+    subroutine draw_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:)
+        real(dp), intent(in) :: mx(:), my(:)
+        integer, intent(in) :: mverbs(:), n_mverb
+        type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        if (size(x) /= size(y)) call contract_error("markers: x and y differ in length")
+        call check_finite(x, "markers: nonfinite or out-of-range position")
+        call check_finite(y, "markers: nonfinite or out-of-range position")
+        call check_path(mx, my, mverbs, n_mverb, "markers")
+        call check_paint(paint)
+        if (size(x) == 0 .or. n_mverb == 0) return
+        call self%draw_markers_impl(x, y, mx, my, mverbs, n_mverb, paint)
+    end subroutine draw_markers
+
+    subroutine draw_glyphs(self, x, y, run, paint, angle)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y
+        type(glyphrun_t), intent(in) :: run
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: angle
+
+        call check_open(self)
+        call check_finite([x, y, angle], "glyphs: nonfinite or out-of-range position or angle")
+        call check_glyphs(run)
+        call check_paint(paint)
+        if (run%n == 0) return
+        call self%draw_glyphs_impl(x, y, run, paint, angle)
+    end subroutine draw_glyphs
+
+    subroutine draw_image(self, x, y, w, h, rgba, nx, ny, paint)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(:, :, :)
+        type(paint_t), intent(in) :: paint
+
+        call check_open(self)
+        if (nx < 1 .or. ny < 1 .or. any(shape(rgba) /= [4, nx, ny])) then
+            call contract_error("image: expected a nonempty 4 x nx x ny RGBA array")
+        end if
+        if (any(rgba < 0) .or. any(rgba > 255)) then
+            call contract_error("image: components must be in [0,255]")
+        end if
+        call check_box(x, y, w, h, "image")
+        call check_paint(paint)
+        call self%draw_image_impl(x, y, w, h, rgba, nx, ny, paint)
+    end subroutine draw_image
+
     subroutine begin_group(self, name)
         class(renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
+
+        call check_open(self)
+        self%n_group = self%n_group + 1
+        call self%begin_group_impl(name)
     end subroutine begin_group
 
     subroutine end_group(self)
         class(renderer_t), intent(inout) :: self
+
+        call check_open(self)
+        if (self%n_group == 0) call contract_error("renderer: end_group without begin_group")
+        call self%end_group_impl()
+        self%n_group = self%n_group - 1
     end subroutine end_group
+
+    function bytes(self) result(b)
+        class(encoded_renderer_t), intent(in) :: self
+        character(len=:), allocatable :: b
+
+        if (self%is_open .or. .not. self%is_finished) then
+            call contract_error("renderer: bytes before close_canvas")
+        end if
+        b = self%bytes_impl()
+    end function bytes
+
+    ! ------------------------------------------------------------------
+    ! The checks themselves.
+    ! ------------------------------------------------------------------
+
+    subroutine check_open(self)
+        class(renderer_t), intent(in) :: self
+        if (.not. self%is_open) call contract_error("renderer: canvas is not open")
+    end subroutine check_open
+
+    ! Finite and no further than MAX_COORD from zero: the most any format
+    ! here can write, as a plain decimal, and far beyond any canvas.
+    elemental logical function in_range(v)
+        real(dp), intent(in) :: v
+        in_range = ieee_is_finite(v) .and. abs(v) <= MAX_COORD
+    end function in_range
+
+    subroutine check_finite(values, message)
+        real(dp), intent(in) :: values(:)
+        character(len=*), intent(in) :: message
+        if (.not. all(in_range(values))) call contract_error(message)
+    end subroutine check_finite
+
+    subroutine check_rgb(rgb)
+        integer, intent(in) :: rgb(3)
+        if (any(rgb < 0) .or. any(rgb > 255)) call contract_error("color: expected RGB values in [0,255]")
+    end subroutine check_rgb
+
+    subroutine check_alpha(alpha, message)
+        real(dp), intent(in) :: alpha
+        character(len=*), intent(in) :: message
+        if (.not. ieee_is_finite(alpha) .or. alpha < 0.0_dp .or. alpha > 1.0_dp) call contract_error(message)
+    end subroutine check_alpha
+
+    ! An axis aligned box: rectangles and images.
+    subroutine check_box(x, y, w, h, what)
+        real(dp), intent(in) :: x, y, w, h
+        character(len=*), intent(in) :: what
+        if (.not. all(in_range([x, y, w, h])) .or. w < 0.0_dp .or. h < 0.0_dp) then
+            call contract_error(what//": expected in-range coordinates and nonnegative size")
+        end if
+    end subroutine check_box
+
+    subroutine check_paint(paint)
+        type(paint_t), intent(in) :: paint
+        if (paint%clip%on) then
+            call check_box(paint%clip%x, paint%clip%y, paint%clip%w, paint%clip%h, "clip")
+        end if
+        if (paint%filled) then
+            call check_rgb(paint%fill_rgb)
+            if (paint%fill_rule /= FILL_NONZERO .and. paint%fill_rule /= FILL_EVENODD) then
+                call contract_error("paint: unsupported fill rule")
+            end if
+            call check_alpha(paint%fill_alpha, "paint: fill alpha must be in [0,1]")
+        end if
+        if (.not. paint%stroked) return
+        call check_rgb(paint%stroke_rgb)
+        call check_alpha(paint%stroke_alpha, "paint: stroke alpha must be in [0,1]")
+        call check_finite([paint%line_width, paint%miter_limit, paint%dash_offset], "paint: nonfinite or out-of-range stroke")
+        if (paint%line_width < 0.0_dp .or. paint%miter_limit < 0.0_dp) then
+            call contract_error("paint: negative line width or miter limit")
+        end if
+        if (paint%cap < CAP_BUTT .or. paint%cap > CAP_SQUARE .or. &
+            paint%join < JOIN_MITER .or. paint%join > JOIN_BEVEL) then
+            call contract_error("paint: unsupported stroke cap or join")
+        end if
+        if (paint%n_dash < 0 .or. paint%n_dash > MAX_DASH) then
+            call contract_error("paint: invalid dash count")
+        end if
+        if (paint%n_dash > 0) then
+            call check_finite(paint%dash(1:paint%n_dash), "paint: nonfinite or out-of-range dash length")
+            if (any(paint%dash(1:paint%n_dash) < 0.0_dp)) call contract_error("paint: negative dash length")
+            if (sum(paint%dash(1:paint%n_dash)) <= 0.0_dp) then
+                call contract_error("paint: dash pattern must have positive length")
+            end if
+            ! Round and square ends overlap one another, so every dash a
+            ! pen's width from the canvas has to be drawn; a pen far wider
+            ! than its pattern would mean drawing ever more of them.
+            if (paint%cap /= CAP_BUTT .and. paint%line_width > MAX_PEN_PER_DASH*sum(paint%dash(1:paint%n_dash))) then
+                call contract_error("paint: a pen with round or square dash ends may be at most 100 times its dash pattern")
+            end if
+        end if
+    end subroutine check_paint
+
+    ! The verbs must start each contour with MOVE, and x and y must hold
+    ! the points they consume, all finite.
+    subroutine check_path(x, y, verbs, n_verb, what)
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        character(len=*), intent(in) :: what
+        integer :: i, points
+        logical :: started
+
+        if (n_verb < 0 .or. n_verb > size(verbs)) call contract_error(what//": invalid verb count")
+        points = 0
+        started = .false.
+        do i = 1, n_verb
+            select case (verbs(i))
+            case (VERB_MOVE)
+                started = .true.
+                points = points + 1
+            case (VERB_LINE)
+                if (.not. started) call contract_error(what//": a contour must begin with MOVE")
+                points = points + 1
+            case (VERB_CUBIC)
+                if (.not. started) call contract_error(what//": a contour must begin with MOVE")
+                points = points + 3
+            case (VERB_CLOSE)
+                if (.not. started) call contract_error(what//": a contour must begin with MOVE")
+            case default
+                call contract_error(what//": unsupported verb")
+            end select
+        end do
+        if (points > size(x) .or. points > size(y)) then
+            call contract_error(what//": not enough coordinates for the verbs")
+        end if
+        call check_finite(x(1:points), what//": nonfinite or out-of-range coordinate")
+        call check_finite(y(1:points), what//": nonfinite or out-of-range coordinate")
+    end subroutine check_path
+
+    subroutine check_glyphs(run)
+        type(glyphrun_t), intent(in) :: run
+        integer :: n
+
+        n = run%n
+        if (n < 0) call contract_error("glyphs: negative glyph count")
+        if (n == 0) return
+        if (.not. allocated(run%gid) .or. .not. allocated(run%x) .or. &
+            .not. allocated(run%y) .or. .not. allocated(run%size)) then
+            call contract_error("glyphs: run arrays are not allocated")
+        end if
+        if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < n) then
+            call contract_error("glyphs: run arrays are shorter than the glyph count")
+        end if
+        if (any(run%gid(1:n) < 0) .or. any(run%gid(1:n) > NGLYPH)) then
+            call contract_error("glyphs: invalid glyph ID")
+        end if
+        call check_finite(run%x(1:n), "glyphs: nonfinite or out-of-range glyph position")
+        call check_finite(run%y(1:n), "glyphs: nonfinite or out-of-range glyph position")
+        call check_finite(run%size(1:n), "glyphs: nonfinite or out-of-range font size")
+        if (any(run%size(1:n) < 0.0_dp)) call contract_error("glyphs: negative font size")
+    end subroutine check_glyphs
 
 end module fplotlib_render
