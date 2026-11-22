@@ -8,7 +8,7 @@
 ! into a different plot type and renders it in all four formats; none may
 ! stop, and no NaN or infinity may reach the SVG, the EPS or the PDF page.
 module test_missing
-    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, &
+    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_finite, &
                                               ieee_positive_inf
     use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib
@@ -43,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 91
+    integer, parameter :: NCASE = 93
 
 contains
 
@@ -71,8 +71,9 @@ contains
         real(dp) :: t(MAX_TICKS)
         integer :: n, y, mo, dd, hh, mi, sec, i, ios
         character(len=64) :: s
-        real(dp) :: lv(64), back
+        real(dp) :: lv(64), back, lo, hi
         character(len=8) :: lab
+        real(dp), parameter :: near(4) = [3.0e-308_dp, 5.0e-309_dp, 2.0e-310_dp, 8.0e-310_dp]
         real(dp), parameter :: far(6) = [2.5e20_dp, -4.5e100_dp, 1.2e300_dp, 1.2e308_dp, &
                                          3.0e20_dp, -1.7976e308_dp]
 
@@ -127,6 +128,24 @@ contains
             print "(a)", "far ticks: a log tick of 1e-69 was written "//s(1:n)
             nfail = nfail + 1
         end if
+        ! Values near and below the least normal double that are no decade
+        ! are not labelled as one.
+        do i = 1, size(near)
+            call format_tick_to(near(i), .true., s, n)
+            if (index(s(1:n), "10^") > 0) then
+                print "(a, es10.3, a)", "far ticks: ", near(i), " was labelled the decade "//s(1:n)
+                nfail = nfail + 1
+            end if
+        end do
+        ! A constant series near the largest double has finite log limits.
+        call figure()
+        call semilogy([0.0_dp, 1.0_dp], [1.0e308_dp, 1.0e308_dp])
+        call get_ylim(lo, hi)
+        if (.not. (ieee_is_finite(lo) .and. ieee_is_finite(hi) .and. lo > 0.0_dp .and. hi > lo)) then
+            print "(a, 2es12.4)", "far ticks: log limits of a constant 1e308 series are ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
         ! Subnormal decades too, where 10**expn underflows.
         do i = 309, 323, 7
             call format_tick_to(10.0_dp**real(-i, dp), .true., s, n)
@@ -666,6 +685,10 @@ contains
             call tick_format("y", style="percent", whole=1.0_dp)
         ! Subnormal data on a log axis.
         case (91); call semilogy(t(1:3), [1.0e-320_dp, 1.0e-310_dp, 1.0e-300_dp])
+        ! Bars of subnormal height on a log axis, and a constant series near
+        ! the largest double.
+        case (92); call bar(t(1:3), [1.0e-320_dp, 1.0e-300_dp, 1.0e-310_dp]); call set_yscale("log")
+        case (93); call semilogy(t(1:2), [1.0e308_dp, 1.0e308_dp])
         end select
     end subroutine draw_case
 

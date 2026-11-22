@@ -187,10 +187,12 @@ contains
         if (expn >= -307) then
             is_decade = abs(av / (10.0_dp ** expn) - 1.0_dp) < 1.0e-8_dp
         else
-            ! A subnormal decade has fewer digits than the test above asks
-            ! of a normal one: it is the decade to within its own spacing.
+            ! Below 1e-307 a decade may be subnormal, with fewer digits
+            ! than the test above asks for: it is the decade to within two
+            ! of the subnormal spacing, tiny*epsilon. (spacing() of a value
+            ! this small is tiny itself, far too wide.)
             is_decade = abs(av - 10.0_dp**real(expn, dp)) <= &
-                        max(1.0e-8_dp*av, 2.0_dp*spacing(10.0_dp**real(expn, dp)))
+                        max(1.0e-8_dp*av, 2.0_dp*tiny(1.0_dp)*epsilon(1.0_dp))
         end if
     end function is_decade
 
@@ -368,7 +370,7 @@ contains
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
-        if (lo <= 0.0_dp) lo = tiny(1.0_dp)
+        if (lo < tiny(1.0_dp)) lo = tiny(1.0_dp)
         if (hi <= 0.0_dp) hi = 1.0_dp
 
         i0 = int(floor(log10(lo)))
@@ -451,8 +453,8 @@ contains
                 return
             end if
             expn = nint(log10(av))
-            ! Below the least normal double, 10**expn is no longer a
-            ! decade one can divide by, and the test is made in logs.
+            ! Below the least normal double, 10**expn with an integer
+            ! exponent underflows; is_decade takes it in reals there.
             if (is_decade(av, expn)) then
                 ! matplotlib's LogFormatterSciNotation writes every decade
                 ! as a power in mathtext, ten to the nought included.

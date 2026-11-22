@@ -71,7 +71,9 @@ anything that can be seen just as fully. Axis limits, which may span the
 whole range of a double, stop at the largest double. A shape that reaches
 so far past the view that its own place on the canvas is past the largest
 double, such as a circle of radius 1e308 about a point in a unit view,
-cannot be placed, and is left out as missing data is.
+cannot be placed, and is left out as missing data is. A log axis reaches
+down to the least normal double, about 2.2e-308: a value below it,
+subnormal, zero or negative, is drawn there.
 
 The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid
