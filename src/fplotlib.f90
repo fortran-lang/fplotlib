@@ -2824,10 +2824,10 @@ contains
     end subroutine ylim
 
     ! Limits set by hand, as matplotlib's set_xlim takes them: they must be
-    ! finite, and a range too narrow to tell its ends apart is widened by
-    ! a twentieth of itself (to plus and minus a twentieth when it sits on
-    ! zero) instead of dividing by nothing. An inverted range stays
-    ! inverted.
+    ! finite, and are stored as given. A range too narrow to tell its ends
+    ! apart is widened when the figure is drawn, by nonsingular_limits in
+    ! fplotlib_draw, under the scale the axis has then. An inverted range
+    ! stays inverted.
     subroutine user_limits(what, a, b, lo, hi)
         character(len=*), intent(in) :: what
         real(dp), intent(in) :: a, b

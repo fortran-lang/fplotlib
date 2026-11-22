@@ -171,8 +171,6 @@ contains
             nfail = nfail + 1
         end if
         call close()
-        ! A constant series on a symlog axis, whatever its threshold, gets
-        ! limits about it, not a margin of the whole range of a double.
         ! Data the axis can tell apart is not widened, however small its
         ! threshold: a step of 1e-7 at 1e300, at linthresh 1e-300.
         call figure()
@@ -197,16 +195,29 @@ contains
         end if
         call close()
         call figure()
-        call plot([1.0_dp, 2.0_dp], [5.0_dp, 5.0_dp])
-        call set_yscale("symlog", linthresh=1.0e-10_dp)
+        call plot([1.0_dp, 2.0_dp], [1.0e300_dp, 1.0e300_dp*(1.0_dp + 5.0e-14_dp)])
+        call set_yscale("symlog", linthresh=1.0e-3_dp)
         call margins(0.0_dp)
         call get_ylim(lo, hi)
-        if (.not. (lo < 5.0_dp .and. hi > 5.0_dp .and. lo > 1.0_dp .and. hi < 25.0_dp)) then
-            print "(a, 2es24.16)", "far ticks: a constant on symlog with no margin has limits ", lo, hi
+        if (hi - lo < 1.0e297_dp) then
+            print "(a, 2es24.16)", "far ticks: near-constant symlog data with no margin has limits ", lo, hi
             nfail = nfail + 1
         end if
         call close()
-        ! So does a series a few roundings apart, which the transform cannot
+        ! Data a few subnormal steps apart, which the transform rounds to
+        ! whole steps, is widened rather than drawn bent.
+        call figure()
+        call plot([1.0_dp, 2.0_dp, 3.0_dp], [1.0_dp, 2.0_dp, 3.0_dp]*5.0e-324_dp)
+        call set_yscale("symlog")
+        call get_ylim(lo, hi)
+        if (hi < 1.0e-310_dp) then
+            print "(a, 2es24.16)", "far ticks: subnormal data on symlog has limits ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
+        ! A constant series on a symlog axis, whatever its threshold, gets
+        ! limits about it, not a margin of the whole range of a double; so
+        ! does a series a few roundings apart, which the transform cannot
         ! tell apart either, and one far out, where it rounds more coarsely.
         do i = 1, size(thr)
             do j = 0, 3

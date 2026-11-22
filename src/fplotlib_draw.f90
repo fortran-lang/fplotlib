@@ -1113,7 +1113,10 @@ contains
         real(dp) :: u0, u1
         u0 = scale_fwd(sc, lo)
         u1 = scale_fwd(sc, hi)
-        unresolved = abs(u1 - u0) <= 8.0_dp*epsilon(1.0_dp)*max(abs(u0), abs(u1))
+        ! Where the places are subnormal, a rounding is the least subnormal,
+        ! epsilon*tiny, which eight epsilons of them fall short of.
+        unresolved = abs(u1 - u0) <= 8.0_dp*max(epsilon(1.0_dp)*max(abs(u0), abs(u1)), &
+                                                epsilon(1.0_dp)*tiny(1.0_dp))
     end function unresolved
 
     ! Moves lo and hi apart by 5% of their size each way, or to -0.05 and
