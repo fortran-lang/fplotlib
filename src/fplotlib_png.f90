@@ -15,6 +15,7 @@
 ! No zlib, no libpng, nothing to link.
 
 module fplotlib_png
+    use, intrinsic :: iso_fortran_env, only: int64
     implicit none
     private
 
@@ -279,7 +280,10 @@ contains
             s1 = mod(s1 + buf(i), 65521)
             s2 = mod(s2 + s1, 65521)
         end do
-        a = s2*65536 + s1
+        ! s2 reaches past 32767, so the sum is formed in 64 bits and given
+        ! the same 32 bits a wrapping multiply would, without the overflow.
+        a = int(ibits(int(s2, int64)*65536_int64 + int(s1, int64), 0, 31), kind(a))
+        if (s2 >= 32768) a = ibset(a, 31)
     end function adler32
 
     ! ------------------------------------------------------------------

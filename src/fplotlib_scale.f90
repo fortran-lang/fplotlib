@@ -6,6 +6,7 @@
 ! its own `is this a log axis` flag.
 module fplotlib_scale
     use fplotlib_style, only: dp
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
@@ -33,15 +34,21 @@ contains
 
         select case (s%kind)
         case (SCALE_LOG)
-            ! Non-positive values have no place on a log axis; clamping them
-            ! to the smallest representable one keeps the map total.
+            ! A log axis reaches down to the least normal double: values
+            ! below it, subnormal, zero or negative, are drawn there, which
+            ! keeps the map total and puts no value below another.
             u = log10(max(v, tiny(1.0_dp)))
         case (SCALE_SYMLOG)
             a = abs(v)
             if (a <= s%linthresh) then
                 u = v * linscale_adj(s)
             else
-                u = sign(s%linthresh * (linscale_adj(s) + log10(a / s%linthresh)), v)
+                if (ieee_is_finite(a / s%linthresh)) then
+                    u = sign(s%linthresh * (linscale_adj(s) + log10(a / s%linthresh)), v)
+                else
+                    ! a so far past linthresh that the ratio overflows.
+                    u = sign(s%linthresh * (linscale_adj(s) + log10(a) - log10(s%linthresh)), v)
+                end if
             end if
         case default
             u = v
@@ -51,7 +58,7 @@ contains
     pure function scale_inv(s, u) result(v)
         type(scale_t), intent(in) :: s
         real(dp), intent(in) :: u
-        real(dp) :: v, edge
+        real(dp) :: v, edge, e, p
 
         select case (s%kind)
         case (SCALE_LOG)
@@ -61,7 +68,15 @@ contains
             if (abs(u) <= edge) then
                 v = u / linscale_adj(s)
             else
-                v = sign(s%linthresh * 10.0_dp ** (abs(u) / s%linthresh - linscale_adj(s)), u)
+                e = abs(u) / s%linthresh - linscale_adj(s)
+                p = 10.0_dp ** e
+                if (ieee_is_finite(p)) then
+                    v = sign(s%linthresh * p, u)
+                else
+                    ! Past the largest double before linthresh scales it
+                    ! down: the product taken in logs.
+                    v = sign(10.0_dp ** (e + log10(s%linthresh)), u)
+                end if
             end if
         case default
             v = u

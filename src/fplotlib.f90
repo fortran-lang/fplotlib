@@ -3249,7 +3249,7 @@ contains
             allocate (ax(cur_i)%series(is)%pcolor(n))
             do k = 1, n
                 ax(cur_i)%series(is)%pcolor(k) = &
-                    cmap_color(id, (cvals(min(k, size(cvals))) - lo) / (hi - lo))
+                    cmap_color(id, lin_frac(cvals(min(k, size(cvals))), lo, hi))
             end do
             ax(cur_i)%has_cmap_src = .true.
             ax(cur_i)%img_cmap = id
@@ -4404,6 +4404,20 @@ contains
         call ylim(max(-H, y0 - (0.05_dp*y1 - 0.05_dp*y0)), min(H, y1 + (0.05_dp*y1 - 0.05_dp*y0)))
     end subroutine hexbin
 
+    ! The levels matplotlib would pick for data from lo to hi, the least
+    ! and greatest of its finite values: missing values have no level. With
+    ! none at all, the levels of 0 to 1, which contour nothing.
+    pure subroutine data_levels(lo, hi, lev, nlev)
+        real(dp), intent(in) :: lo, hi
+        real(dp), intent(out) :: lev(:)
+        integer, intent(out) :: nlev
+        if (lo <= hi) then
+            call contour_levels(lo, hi, 8, lev, nlev)
+        else
+            call contour_levels(0.0_dp, 1.0_dp, 8, lev, nlev)
+        end if
+    end subroutine data_levels
+
     ! Moves lo and hi, which are equal, apart by one representable step,
     ! the one that stays finite.
     pure subroutine step_apart(lo, hi)
@@ -4519,8 +4533,11 @@ contains
             e = v(1:n + 1)
             return
         end if
+        ! Centres near the largest double are halved before they are added,
+        ! and the outer edges stop at it.
         do i = 2, n
             e(i) = 0.5_dp*(v(i - 1) + v(i))
+            if (.not. ieee_is_finite(e(i))) e(i) = 0.5_dp*v(i - 1) + 0.5_dp*v(i)
         end do
         if (n == 1) then
             e(1) = v(1) - 0.5_dp
@@ -4528,8 +4545,21 @@ contains
         else
             e(1) = v(1) - 0.5_dp*(v(2) - v(1))
             e(n + 1) = v(n) + 0.5_dp*(v(n) - v(n - 1))
+            if (.not. ieee_is_finite(e(1))) e(1) = edge_beyond(v(1), v(2))
+            if (.not. ieee_is_finite(e(n + 1))) e(n + 1) = edge_beyond(v(n), v(n - 1))
         end if
     end subroutine cell_edges
+
+    ! Half a cell beyond the centre a, away from its neighbour b, worked out
+    ! from half values and cut off at the largest double. Missing centres
+    ! give a missing edge, as they always have.
+    pure function edge_beyond(a, b) result(e)
+        real(dp), intent(in) :: a, b
+        real(dp) :: e
+        e = a + (0.5_dp*a - 0.5_dp*b)
+        if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) return
+        e = max(-huge(1.0_dp), min(huge(1.0_dp), e))
+    end function edge_beyond
 
     ! ------------------------------------------------------------------
     ! 3D axes. matplotlib picks the projection when the axes is created;
@@ -4834,7 +4864,7 @@ contains
             allocate (lev(size(levels)))
             lev = levels
         else
-            call contour_levels(minval(z), maxval(z), 8, t, nlev)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nlev)
             allocate (lev(nlev))
             lev = t(1:nlev)
         end if
@@ -4991,7 +5021,7 @@ contains
             ty = y(tri(:, i))
             v = fv(i)
             call add_polygon(tx, ty, &
-                             facecolor=cmap_color(cm, (v - lo)/(hi - lo)), &
+                             facecolor=cmap_color(cm, lin_frac(v, lo, hi)), &
                              edgecolor=edgecolor, alpha=alpha)
             ! Unlike a lone patch, a mesh cell is data and sets the limits,
             ! and its seam with the next cell must not show.
@@ -5053,7 +5083,7 @@ contains
             allocate (lev(size(levels)))
             lev = levels
         else
-            call contour_levels(minval(z), maxval(z), 8, t, nlev)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nlev)
             allocate (lev(nlev))
             lev = t(1:nlev)
         end if
@@ -5177,7 +5207,7 @@ contains
             ax(cur_i)%clev = levels
         else
             ! matplotlib picks round levels spanning the data.
-            call contour_levels(minval(z), maxval(z), 8, t, nt)
+            call data_levels(minval(z, mask=ieee_is_finite(z)), maxval(z, mask=ieee_is_finite(z)), t, nt)
             allocate (ax(cur_i)%clev(nt))
             ax(cur_i)%clev = t(1:nt)
         end if
@@ -5407,8 +5437,7 @@ contains
         call check_size_arg("add_circle", "lw", lw)
         call check_unit_arg("add_circle", "alpha", alpha)
 
-        call add_ellipse(xy, 2.0_dp*radius, 2.0_dp*radius, 0.0_dp, &
-                         facecolor, edgecolor, lw, alpha, fill)
+        call ellipse_polygon(xy, radius, radius, 0.0_dp, facecolor, edgecolor, lw, alpha, fill)
     end subroutine add_circle
 
     subroutine add_ellipse(xy, width, height, angle, facecolor, edgecolor, lw, alpha, fill)
@@ -5416,9 +5445,7 @@ contains
         real(dp), intent(in), optional :: angle, lw, alpha
         character(len=*), intent(in), optional :: facecolor, edgecolor
         logical, intent(in), optional :: fill
-        integer, parameter :: N = 72
-        real(dp) :: px(N), py(N), t, cx, cy, a, ca, sa
-        integer :: i
+        real(dp) :: a
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("add_ellipse", "width", width)
@@ -5429,17 +5456,32 @@ contains
 
         a = 0.0_dp
         if (present(angle)) a = angle
-        ca = cos(a*PI/180.0_dp)
-        sa = sin(a*PI/180.0_dp)
+        call ellipse_polygon(xy, 0.5_dp*width, 0.5_dp*height, a, facecolor, edgecolor, lw, alpha, fill)
+    end subroutine add_ellipse
+
+    ! The ellipse of semi-axes rx and ry about xy, turned by angle degrees,
+    ! as a polygon. Taking the semi-axes, rather than the width and height,
+    ! lets add_circle pass any finite radius.
+    subroutine ellipse_polygon(xy, rx, ry, angle, facecolor, edgecolor, lw, alpha, fill)
+        real(dp), intent(in) :: xy(2), rx, ry, angle
+        real(dp), intent(in), optional :: lw, alpha
+        character(len=*), intent(in), optional :: facecolor, edgecolor
+        logical, intent(in), optional :: fill
+        integer, parameter :: N = 72
+        real(dp) :: px(N), py(N), t, cx, cy, ca, sa
+        integer :: i
+
+        ca = cos(angle*PI/180.0_dp)
+        sa = sin(angle*PI/180.0_dp)
         do i = 1, N
             t = 2.0_dp*PI*real(i - 1, dp)/real(N, dp)
-            cx = 0.5_dp*width*cos(t)
-            cy = 0.5_dp*height*sin(t)
+            cx = rx*cos(t)
+            cy = ry*sin(t)
             px(i) = xy(1) + cx*ca - cy*sa
             py(i) = xy(2) + cx*sa + cy*ca
         end do
         call add_polygon(px, py, facecolor, edgecolor, lw, alpha, fill)
-    end subroutine add_ellipse
+    end subroutine ellipse_polygon
 
     subroutine add_polygon(x, y, facecolor, edgecolor, lw, alpha, fill, hatch)
         real(dp), intent(in) :: x(:), y(:)
