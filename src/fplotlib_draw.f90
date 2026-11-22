@@ -1098,6 +1098,24 @@ contains
         end if
     end subroutine nonsingular_limits
 
+    ! Moves lo and hi apart by 5% of their size each way, or to -0.05 and
+    ! 0.05 near zero, as matplotlib's nonsingular does with limits it cannot
+    ! tell apart; a sticky end stays where it is, and the ends stop at the
+    ! largest double.
+    pure subroutine widen_apart(lo, hi, sticky_lo, sticky_hi)
+        real(dp), intent(inout) :: lo, hi
+        logical, intent(in) :: sticky_lo, sticky_hi
+        real(dp) :: big
+        big = max(abs(lo), abs(hi))
+        if (big < 1.0e6_dp*tiny(1.0_dp)) then
+            if (.not. sticky_lo) lo = -0.05_dp
+            if (.not. sticky_hi) hi = 0.05_dp
+        else
+            if (.not. sticky_lo) lo = max(-huge(1.0_dp), lo - 0.05_dp*big)
+            if (.not. sticky_hi) hi = min(huge(1.0_dp), hi + 0.05_dp*big)
+        end if
+    end subroutine widen_apart
+
     ! Pad a data range by the axis margin. A sticky edge (the bar
     ! baseline) is left exactly where it is.
     subroutine expand_limits(lo, hi, sc, margin, sticky_lo, sticky_hi)
@@ -1142,11 +1160,24 @@ contains
             if (.not. sticky_hi) hi = scale_inv(sc, min(huge(1.0_dp), u1 + 2.0_dp*margin*d))
             return
         end if
-        ! A symlog axis measures in units of linthresh, which may be as small
-        ! as 1e-300, so its idea of nothing is that much smaller too.
-        thr = 1.0e-30_dp
-        if (sc%kind == SCALE_SYMLOG) thr = 1.0e-30_dp*min(1.0_dp, sc%linthresh)
-        if (abs(d) < thr) d = 1.0_dp
+        if (sc%kind == SCALE_SYMLOG) then
+            ! A symlog axis measures in units that shrink with linthresh and
+            ! round more coarsely the further out the data is, so a span is
+            ! nothing when it is within a few roundings of its own ends. Data
+            ! that close is widened in data space, by 5% of its size, and the
+            ! margin is taken on that, as matplotlib's locators do.
+            if (abs(d) <= 8.0_dp*spacing(max(abs(u0), abs(u1), tiny(1.0_dp)))) then
+                call widen_apart(lo, hi, sticky_lo, sticky_hi)
+                u0 = scale_fwd(sc, lo)
+                u1 = scale_fwd(sc, hi)
+                d = u1 - u0
+                ! Past what even that can part, the limits are as widened.
+                if (abs(d) <= 8.0_dp*spacing(max(abs(u0), abs(u1), tiny(1.0_dp)))) return
+            end if
+        else
+            thr = 1.0e-30_dp
+            if (abs(d) < thr) d = 1.0_dp
+        end if
         if (.not. sticky_lo) lo = scale_inv(sc, u0 - margin * d)
         if (.not. sticky_hi) hi = scale_inv(sc, u1 + margin * d)
         ! A margin past the largest double, as on a log axis of data up to

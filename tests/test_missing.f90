@@ -75,6 +75,8 @@ contains
         character(len=8) :: lab
         real(dp), parameter :: near(4) = [3.0e-308_dp, 5.0e-309_dp, 2.0e-310_dp, 8.0e-310_dp]
         real(dp), parameter :: thr(4) = [1.0e-300_dp, 1.0e-200_dp, 1.0e-3_dp, 1.0_dp]
+        real(dp) :: yy(2)
+        integer :: j
         real(dp), parameter :: far(6) = [2.5e20_dp, -4.5e100_dp, 1.2e300_dp, 1.2e308_dp, &
                                          3.0e20_dp, -1.7976e308_dp]
 
@@ -171,17 +173,27 @@ contains
         call close()
         ! A constant series on a symlog axis, whatever its threshold, gets
         ! limits about it, not a margin of the whole range of a double.
+        ! So does a series a few roundings apart, which the transform cannot
+        ! tell apart either, and one far out, where it rounds more coarsely.
         do i = 1, size(thr)
-            call figure()
-            call plot([1.0_dp, 2.0_dp], [5.0_dp, 5.0_dp])
-            call set_yscale("symlog", linthresh=thr(i))
-            call get_ylim(lo, hi)
-            if (.not. (lo > 1.0_dp .and. lo < 5.0_dp .and. hi > 5.0_dp .and. hi < 25.0_dp)) then
-                print "(a, es9.2, a, 2es12.4)", "far ticks: a constant 5 on symlog, linthresh ", thr(i), &
-                    ", has limits ", lo, hi
-                nfail = nfail + 1
-            end if
-            call close()
+            do j = 0, 3
+                call figure()
+                select case (j)
+                case (0); yy = [5.0_dp, 5.0_dp]
+                case (1); yy = [1.0_dp, 1.0_dp + 5.0_dp*epsilon(1.0_dp)]
+                case (2); yy = [1.0_dp, 1.0_dp + 5.0e-14_dp]
+                case (3); yy = [1.0e300_dp, 1.0e300_dp*(1.0_dp + 5.0e-14_dp)]
+                end select
+                call plot([1.0_dp, 2.0_dp], yy)
+                call set_yscale("symlog", linthresh=thr(i))
+                call get_ylim(lo, hi)
+                if (.not. (lo > 0.2_dp*yy(1) .and. lo < yy(1) .and. hi > yy(2) .and. hi < 5.0_dp*yy(2))) then
+                    print "(a, es9.2, a, es9.2, a, 2es12.4)", "far ticks: near-constant ", yy(1), &
+                        " on symlog, linthresh ", thr(i), ", has limits ", lo, hi
+                    nfail = nfail + 1
+                end if
+                call close()
+            end do
         end do
         ! A constant series near the largest double has finite log limits.
         call figure()
