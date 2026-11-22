@@ -1,13 +1,14 @@
 ! Nice tick generation for linear and log axes.
 module fplotlib_ticks
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib_style, only: dp
     implicit none
     private
 
     integer, parameter, public :: MAX_TICKS = 32
 
-    public :: linear_ticks
+    public :: linear_ticks, log_stride
     public :: nice_number
     public :: log_ticks
     public :: symlog_ticks
@@ -64,7 +65,7 @@ contains
     ! ten; of those it takes the smallest that covers the range in nbins
     ! intervals, and then backs off to a larger one only if the smaller
     ! leaves fewer than two ticks inside the view.
-    subroutine linear_ticks(vmin, vmax, nbins, ticks, n_ticks)
+    recursive subroutine linear_ticks(vmin, vmax, nbins, ticks, n_ticks)
         real(dp), intent(in) :: vmin, vmax
         integer, intent(in) :: nbins
         real(dp), intent(out) :: ticks(MAX_TICKS)
@@ -81,11 +82,24 @@ contains
         ! A range made of missing data has no ticks.
         n_ticks = 0
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
+        if (.not. ieee_is_finite(vmax - vmin)) then
+            ! A range wider than the largest double: the ticks of half of
+            ! it, doubled, which are as round and all finite.
+            call linear_ticks(0.5_dp*vmin, 0.5_dp*vmax, nbins, ticks, n_ticks)
+            ticks(1:n_ticks) = 2.0_dp*ticks(1:n_ticks)
+            return
+        end if
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
         if (abs(hi - lo) < 1.0e-30_dp*max(1.0_dp, abs(lo), abs(hi))) then
             lo = lo - 1.0_dp
             hi = hi + 1.0_dp
+        end if
+        ! A range a few ulps wide, as matplotlib's nonsingular widens it
+        ! before its locator: its ticks could not be told apart otherwise.
+        if (hi - lo <= 1.0e-14_dp*max(abs(lo), abs(hi))) then
+            lo = max(-huge(1.0_dp), lo - 1.0e-13_dp*abs(lo))
+            hi = min(huge(1.0_dp), hi + 1.0e-13_dp*abs(hi))
         end if
         nb = max(1, min(nbins, MAX_TICKS - 1))
 
@@ -105,7 +119,7 @@ contains
         n = 0
         do k = first, 1, -1
             step = STEPS(k)*scal
-            base = floor(v0/step)*step
+            base = real_floor(v0/step)*step
             low = edge_le((v0 - base)/step)
             high = edge_ge((v1 - base)/step)
             n = 0
@@ -127,6 +141,8 @@ contains
         ! does not autoscale its limits has no use for those.
         k = 0
         do i = 1, n
+            ! A tick a step past the largest double is no tick.
+            if (.not. ieee_is_finite(ticks(i))) cycle
             if (ticks(i) >= lo - 1.0e-10_dp*(hi - lo) .and. &
                 ticks(i) <= hi + 1.0e-10_dp*(hi - lo)) then
                 k = k + 1
@@ -151,19 +167,113 @@ contains
 
         dv = abs(vmax - vmin)
         maxabs = max(abs(vmin), abs(vmax))
-        if (maxabs == 0.0_dp .or. dv/maxabs < 1.0e-12_dp) then
+        if (maxabs == 0.0_dp .or. dv == 0.0_dp) then
             scal = 1.0_dp
             off = 0.0_dp
             return
         end if
         meanv = 0.5_dp*(vmax + vmin)
+        if (.not. ieee_is_finite(meanv)) meanv = 0.5_dp*vmax + 0.5_dp*vmin
         if (abs(meanv)/dv < 100.0_dp) then
             off = 0.0_dp
         else
             off = sign(10.0_dp**floor(log10(abs(meanv))), meanv)
         end if
-        scal = 10.0_dp**floor(log10(dv/real(n, dp)))
+        scal = 10.0_dp**floor(log10_span(vmin, vmax) - log10(real(n, dp)))
     end subroutine scale_range
+
+    ! Whether av is the decade 10**expn, to rounding.
+    pure logical function is_decade(av, expn)
+        real(dp), intent(in) :: av
+        integer, intent(in) :: expn
+        if (expn >= -307) then
+            is_decade = abs(av / (10.0_dp ** expn) - 1.0_dp) < 1.0e-8_dp
+        else
+            ! Below 1e-307 a decade may be subnormal, with fewer digits
+            ! than the test above asks for: it is the decade to within two
+            ! of the subnormal spacing, tiny*epsilon. (spacing() of a value
+            ! this small is tiny itself, far too wide.)
+            is_decade = abs(av - 10.0_dp**real(expn, dp)) <= &
+                        max(1.0e-8_dp*av, 2.0_dp*tiny(1.0_dp)*epsilon(1.0_dp))
+        end if
+    end function is_decade
+
+    ! v in exponent form, as 1.2e308 or -3e20: at most five significant
+    ! digits, trailing zeros dropped. For labels whose value is past a
+    ! fixed field; Fortran's own ES form drops the E of a three-digit
+    ! exponent.
+    pure function sci_str(v) result(s)
+        real(dp), intent(in) :: v
+        character(len=32) :: s
+        integer :: e
+        real(dp) :: f
+
+        if (v == 0.0_dp .or. .not. ieee_is_finite(v)) then
+            s = "0"
+            return
+        end if
+        e = floor(log10(abs(v)))
+        f = v/10.0_dp**e
+        if (.not. ieee_is_finite(f)) f = (v/10.0_dp)/10.0_dp**(e - 1)
+        s = sci_join(f, e)
+    end function sci_str
+
+    ! v/w times 10**shift in exponent form, as sci_str writes it, worked
+    ! out in logs for a value past the largest double, as a percentage of
+    ! a huge value is.
+    pure function sci_ratio(v, w, shift) result(s)
+        real(dp), intent(in) :: v, w
+        integer, intent(in) :: shift
+        character(len=32) :: s
+        real(dp) :: lg
+        integer :: e
+        if (v == 0.0_dp .or. w == 0.0_dp .or. .not. ieee_is_finite(v) .or. .not. ieee_is_finite(w)) then
+            s = "0"
+            return
+        end if
+        lg = log10(abs(v)) - log10(abs(w)) + real(shift, dp)
+        e = floor(lg)
+        ! The sign from the signs, as v*w can underflow to zero.
+        s = sci_join(sign(1.0_dp, v)*sign(1.0_dp, w)*10.0_dp**(lg - real(e, dp)), e)
+    end function sci_ratio
+
+    ! The mantissa f, from 1 to 10, and exponent e as 1.2e308: at most
+    ! four decimals, trailing zeros dropped.
+    pure function sci_join(f0, e0) result(s)
+        real(dp), intent(in) :: f0
+        integer, intent(in) :: e0
+        character(len=32) :: s
+        character(len=24) :: m
+        real(dp) :: f
+        integer :: e, k
+        f = f0
+        e = e0
+        ! Rounding to four decimals can carry into the next decade.
+        if (abs(anint(f*1.0e4_dp)/1.0e4_dp) >= 10.0_dp) then
+            e = e + 1
+            f = f/10.0_dp
+        end if
+        write (m, "(F0.4)") f
+        k = len_trim(m)
+        do while (k > 1 .and. m(k:k) == "0")
+            k = k - 1
+        end do
+        if (m(k:k) == ".") k = k - 1
+        write (s, "(A,'e',I0)") m(1:k), e
+    end function sci_join
+
+    ! log10 of the distance between a and b, worked out from half of each
+    ! where the distance itself is past the largest double, as it is for
+    ! limits that span the whole range of a double.
+    pure function log10_span(a, b) result(r)
+        real(dp), intent(in) :: a, b
+        real(dp) :: r
+        if (ieee_is_finite(b - a)) then
+            r = log10(abs(b - a))
+        else
+            r = log10(2.0_dp) + log10(abs(0.5_dp*b - 0.5_dp*a))
+        end if
+    end function log10_span
 
     ! floor and ceiling in step units, snapping to the integer when the
     ! value is within rounding distance of it.
@@ -171,7 +281,8 @@ contains
         real(dp), intent(in) :: x
         integer :: k
         real(dp) :: frac
-        k = floor(x)
+        ! Bounded first: a tick index this far out is never drawn anyway.
+        k = floor(max(-1.0e9_dp, min(1.0e9_dp, x)))
         frac = x - real(k, dp)
         if (frac > 1.0_dp - 1.0e-10_dp) k = k + 1
     end function edge_le
@@ -180,10 +291,18 @@ contains
         real(dp), intent(in) :: x
         integer :: k
         real(dp) :: frac
-        k = floor(x)
+        k = floor(max(-1.0e9_dp, min(1.0e9_dp, x)))
         frac = x - real(k, dp)
         if (frac > 1.0e-10_dp) k = k + 1
     end function edge_ge
+
+    ! floor, kept in reals, for values beyond any integer.
+    elemental function real_floor(x) result(r)
+        real(dp), intent(in) :: x
+        real(dp) :: r
+        r = aint(x)
+        if (r > x) r = r - 1.0_dp
+    end function real_floor
 
     ! Decades either side of zero, plus zero itself, thinned by a whole
     ! stride when there are more decades than will fit.
@@ -229,26 +348,43 @@ contains
         n_ticks = n
     end subroutine symlog_ticks
 
+    ! How many decades apart the major ticks of a log axis from lo to hi
+    ! are: one, unless there are more decades than MAX_TICKS, when about
+    ! nine are ticked, as matplotlib's LogLocator thins them. Minor ticks
+    ! are drawn only where it is one.
+    pure function log_stride(lo, hi) result(stride)
+        real(dp), intent(in) :: lo, hi
+        integer :: stride, nd
+        stride = 1
+        if (lo <= 0.0_dp .or. hi <= lo .or. .not. ieee_is_finite(hi)) return
+        nd = int(ceiling(log10(hi))) - int(floor(log10(lo))) + 1
+        if (nd > MAX_TICKS) stride = nd/9 + 1
+    end function log_stride
+
     subroutine log_ticks(vmin, vmax, ticks, n_ticks)
         real(dp), intent(in) :: vmin, vmax
         real(dp), intent(out) :: ticks(MAX_TICKS)
         integer, intent(out) :: n_ticks
         real(dp) :: lo, hi, t
-        integer :: i0, i1, i, n
+        integer :: i0, i1, i, n, stride
 
         n_ticks = 0
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
-        if (lo <= 0.0_dp) lo = tiny(1.0_dp)
+        if (lo < tiny(1.0_dp)) lo = tiny(1.0_dp)
         if (hi <= 0.0_dp) hi = 1.0_dp
 
         i0 = int(floor(log10(lo)))
         i1 = int(ceiling(log10(hi)))
+        stride = log_stride(lo, hi)
+        if (stride > 1) i0 = stride*floor(real(i0, dp)/real(stride, dp))
 
         n = 0
-        do i = i0, i1
+        do i = i0, i1, stride
             t = 10.0_dp ** real(i, dp)
+            ! A decade past the largest double is no tick.
+            if (.not. ieee_is_finite(t)) exit
             if (t >= lo * (1.0_dp - 1.0e-12_dp) .and. t <= hi * (1.0_dp + 1.0e-12_dp)) then
                 if (n < MAX_TICKS) then
                     n = n + 1
@@ -311,13 +447,17 @@ contains
 
         av = abs(v)
         if (is_log .or. (av > 0.0_dp .and. (av >= 1.0e4_dp .or. av < 1.0e-3_dp))) then
-            if (av < 1.0e-30_dp) then
+            ! A linear tick this near zero is zero with rounding left on it;
+            ! a log tick is a decade like any other.
+            if (av < 1.0e-30_dp .and. .not. (is_log .and. av > 0.0_dp)) then
                 s = "0"
                 n = 1
                 return
             end if
             expn = nint(log10(av))
-            if (abs(av / (10.0_dp ** expn) - 1.0_dp) < 1.0e-8_dp) then
+            ! Below the least normal double, 10**expn with an integer
+            ! exponent underflows; is_decade takes it in reals there.
+            if (is_decade(av, expn)) then
                 ! matplotlib's LogFormatterSciNotation writes every decade
                 ! as a power in mathtext, ten to the nought included.
                 if (v < 0.0_dp) then
@@ -331,14 +471,23 @@ contains
             end if
         end if
 
-        if (abs(v - real(nint(v), dp)) < 1.0e-8_dp * max(1.0_dp, av)) then
-            write (tmp, "(I0)") nint(v)
+        if (av < 1.0e15_dp .and. abs(v - anint(v)) < 1.0e-8_dp * max(1.0_dp, av)) then
+            write (tmp, "(I0)") nint(v, int64)
             n = len_trim(tmp)
             s(1:n) = tmp(1:n)
             return
         end if
 
         write (tmp, "(F20.4)") v
+        if (index(tmp, "*") > 0) then
+            ! Past what the fixed field holds, exponent form, which is
+            ! already trimmed: the trimming below would take the zeros off
+            ! its exponent.
+            tmp = sci_str(v)
+            n = len_trim(tmp)
+            s(1:n) = tmp(1:n)
+            return
+        end if
         j = 1
         do while (j < 20 .and. tmp(j:j) == " ")
             j = j + 1
@@ -388,7 +537,14 @@ contains
         if (rng <= 0.0_dp) rng = maxval(abs(locs(1:n)))
         if (rng <= 0.0_dp) return
 
-        oom = floor(log10(rng))
+        if (ieee_is_finite(rng)) then
+            oom = floor(log10(rng))
+        else if (ieee_is_finite(log10_span(lo, hi))) then
+            oom = floor(log10_span(lo, hi))
+        else
+            ! Ticks that are themselves missing need no decimals.
+            return
+        end if
         thresh = 1.0e-3_dp*10.0_dp**oom
         d = max(0, 3 - oom)
         do while (d >= 0)
@@ -484,7 +640,7 @@ contains
         real(dp), intent(in) :: v
         integer, intent(in) :: k
         real(dp) :: r
-        r = floor(v/10.0_dp**k)
+        r = real_floor(v/10.0_dp**k)
     end function decade_floor
 
     ! use_off and the power limits are what ticklabel_format sets; their
@@ -521,7 +677,8 @@ contains
             amin = min(abs(lmin), abs(lmax))
             amax = max(abs(lmin), abs(lmax))
             sgn = sign(1.0_dp, lmin)
-            kmax = ceiling(log10(amax))
+            ! Ticks are finite; a range of them is too.
+            kmax = ceiling(log10(min(amax, huge(1.0_dp))))
             ! The smallest power of ten at which the two ends still agree.
             k = kmax
             do while (k > kmax - 32)
@@ -547,10 +704,14 @@ contains
         ! taken away, which is the span of the axis rather than its values.
         if (off /= 0.0_dp) then
             span = abs(vmax - vmin)
-            if (span > 0.0_dp) oom = floor(log10(span))
+            if (.not. ieee_is_finite(span)) then
+                if (ieee_is_finite(log10_span(vmin, vmax))) oom = floor(log10_span(vmin, vmax))
+            else if (span > 0.0_dp) then
+                oom = floor(log10(span))
+            end if
         else
             amax = maxval(abs(locs(1:n)))
-            if (amax > 0.0_dp) oom = floor(log10(amax))
+            if (amax > 0.0_dp .and. ieee_is_finite(amax)) oom = floor(log10(amax))
         end if
         if (oom > lo_lim .and. oom < hi_lim) oom = 0
     end subroutine tick_offset
@@ -634,16 +795,24 @@ contains
         real(dp), intent(in) :: vmin, vmax, base
         real(dp), intent(out) :: t(MAX_TICKS)
         integer, intent(out) :: n
-        integer :: k, k0, k1
+        real(dp) :: k, k0, k1
 
         n = 0
         if (base <= 0.0_dp) return
-        k0 = ceiling(min(vmin, vmax)/base - 1.0e-9_dp)
-        k1 = floor(max(vmin, vmax)/base + 1.0e-9_dp)
-        do k = k0, k1
-            if (n >= MAX_TICKS) exit
+        if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
+        ! Counted in reals: the multiples of a small base near a large
+        ! value, a Unix time say, are past any integer. Data so far out
+        ! that it is past the largest double in steps of base has none.
+        if (.not. ieee_is_finite(vmin/base) .or. .not. ieee_is_finite(vmax/base)) return
+        k0 = -real_floor(-(min(vmin, vmax)/base - 1.0e-9_dp))
+        k1 = real_floor(max(vmin, vmax)/base + 1.0e-9_dp)
+        k = k0
+        do while (k <= k1 .and. n < MAX_TICKS)
             n = n + 1
-            t(n) = real(k, dp)*base
+            t(n) = k*base
+            ! Past 2**53 the next multiple is the same number.
+            if (k + 1.0_dp == k) exit
+            k = k + 1.0_dp
         end do
     end subroutine multiple_ticks
 
@@ -658,8 +827,14 @@ contains
         character(len=32) :: tmp
         character(len=16) :: fmt
 
-        if (dec <= 0) then
-            write (tmp, "(I0)") nint(v/whole*100.0_dp)
+        if (dec <= 0 .and. abs(v/whole*100.0_dp) < 1.0e18_dp) then
+            write (tmp, "(I0)") nint(v/whole*100.0_dp, int64)
+        else if (.not. ieee_is_finite(v/whole*100.0_dp)) then
+            ! A percentage past the largest double, worked out in logs.
+            tmp = sci_ratio(v, whole, 2)
+        else if (dec <= 0 .or. log10(max(abs(v/whole*100.0_dp), 1.0_dp)) + dec + 3.0_dp > 24.0_dp) then
+            ! Past what the fixed field holds.
+            tmp = sci_str(v/whole*100.0_dp)
         else
             write (fmt, "(A,I0,A)") "(F24.", dec, ")"
             write (tmp, fmt) v/whole*100.0_dp
@@ -680,8 +855,14 @@ contains
         integer :: i, k, dot, first, d
 
         d = max(0, dec)
-        if (d == 0) then
-            write (tmp, "(I0)") nint(abs(v))
+        if (abs(v) >= 1.0e18_dp .or. log10(max(abs(v), 1.0_dp)) + d + 3.0_dp > 32.0_dp) then
+            ! Past what grouping can show in a 64-bit integer.
+            s = sci_str(v)
+            s = adjustl(s)
+            n = len_trim(s)
+            return
+        else if (d == 0) then
+            write (tmp, "(I0)") nint(abs(v), int64)
         else
             write (fmt, "(A,I0,A)") "(F32.", d, ")"
             write (tmp, fmt) abs(v)

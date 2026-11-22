@@ -7,6 +7,7 @@
 ! valid resolutions, simply cannot arise.
 module fplotlib_contour
     use fplotlib_style, only: dp
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
@@ -25,17 +26,34 @@ contains
         integer, intent(in) :: nbins
         real(dp), intent(out) :: lev(:)
         integer, intent(out) :: nlev
-        real(dp) :: step, lo
+        real(dp) :: step, lo, k0
         integer :: i
 
-        step = level_step((zmax - zmin) / real(nbins, dp))
+        if (ieee_is_finite(zmax - zmin)) then
+            step = level_step((zmax - zmin) / real(nbins, dp))
+        else
+            ! A range past the largest double: the step from half of it,
+            ! and the levels stop at the largest double.
+            step = min(huge(1.0_dp), 2.0_dp*level_step((0.5_dp*zmax - 0.5_dp*zmin) / real(nbins, dp)))
+        end if
         if (step <= 0.0_dp) step = 1.0_dp
-        lo = floor(zmin / step) * step
+        ! floor kept in reals: data far from zero in small steps is past any
+        ! integer.
+        k0 = aint(zmin / step)
+        if (k0 > zmin / step) k0 = k0 - 1.0_dp
+        lo = k0 * step
 
         nlev = 0
         do i = 0, size(lev) - 1
             nlev = nlev + 1
-            lev(nlev) = lo + real(i, dp) * step
+            if (ieee_is_finite(lo)) then
+                lev(nlev) = lo + real(i, dp) * step
+            else
+                ! The lowest round level is past the largest double: each
+                ! level from its own count of steps instead.
+                lev(nlev) = (k0 + real(i, dp)) * step
+            end if
+            lev(nlev) = max(-huge(1.0_dp), min(huge(1.0_dp), lev(nlev)))
             if (lev(nlev) >= zmax) exit
         end do
     end subroutine contour_levels
@@ -51,6 +69,12 @@ contains
 
         if (raw <= 0.0_dp) then
             step = 1.0_dp
+            return
+        end if
+        if (.not. ieee_is_finite(raw)) then
+            ! Levels further apart than the largest double: one each side,
+            ! at the largest double.
+            step = huge(1.0_dp)
             return
         end if
         scale = 10.0_dp**floor(log10(raw))

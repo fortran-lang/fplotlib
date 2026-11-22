@@ -919,6 +919,7 @@ contains
         if (a%xlim_set) then
             xmin = a%xmin_user
             xmax = a%xmax_user
+            call nonsingular_limits(xmin, xmax, a%xsc)
         else
             ! An axes with nothing to autoscale to keeps the plain unit
             ! square matplotlib gives it, margins and all.
@@ -933,6 +934,7 @@ contains
         if (a%ylim_set) then
             ymin = a%ymin_user
             ymax = a%ymax_user
+            call nonsingular_limits(ymin, ymax, a%ysc)
         else
             if (anyy) then
                 call expand_limits(ymin, ymax, a%ysc, a%ymargin, sticky_lo, sticky_hi)
@@ -1036,6 +1038,14 @@ contains
         real(dp) :: c, h
         c = 0.5_dp * (lo + hi)
         h = 0.5_dp * (hi - lo) * f
+        if (.not. ieee_is_finite(c) .or. .not. ieee_is_finite(h)) then
+            ! Limits near the largest double, which they stop at.
+            c = 0.5_dp*lo + 0.5_dp*hi
+            h = (0.5_dp*hi - 0.5_dp*lo) * f
+            lo = max(-huge(1.0_dp), c - h)
+            hi = min(huge(1.0_dp), c + h)
+            return
+        end if
         lo = c - h
         hi = c + h
     end subroutine grow_about_centre
@@ -1048,6 +1058,85 @@ contains
         v = t
     end subroutine swap
 
+    ! Limits set by hand that are too close together to draw between, as
+    ! matplotlib's locators widen them by their nonsingular: on a linear
+    ! axis, limits near zero become -0.05 to 0.05 and equal ones grow by 5%
+    ! of their size; on a log axis, equal ones grow a decade each way; on a
+    ! symlog axis, ones it cannot tell apart grow by 5% of their size, as
+    ! autoscaling widens them. The result stops at the ends of the scale;
+    ! descending limits stay so.
+    pure subroutine nonsingular_limits(lo, hi, sc)
+        real(dp), intent(inout) :: lo, hi
+        type(scale_t), intent(in) :: sc
+        real(dp) :: a, b, big
+        logical :: flip
+
+        flip = lo > hi
+        a = min(lo, hi)
+        b = max(lo, hi)
+        if (sc%kind == SCALE_SYMLOG) then
+            if (unresolved(a, b, sc)) call widen_apart(a, b, .false., .false.)
+        else if (sc%kind == SCALE_LOG) then
+            if (a > 0.0_dp .and. b <= a*(1.0_dp + 1.0e-12_dp)) then
+                a = max(tiny(1.0_dp), 0.1_dp*a)
+                ! A decade above both ends, which keeps it above the low one
+                ! where that was raised to the least normal double.
+                b = min(huge(1.0_dp), max(10.0_dp*b, 10.0_dp*a))
+            end if
+        else
+            big = max(abs(a), abs(b))
+            if (big < 1.0e6_dp*tiny(1.0_dp)) then
+                a = -0.05_dp
+                b = 0.05_dp
+            else if (b - a <= 1.0e-15_dp*big) then
+                a = max(-huge(1.0_dp), a - 0.05_dp*abs(a))
+                b = min(huge(1.0_dp), b + 0.05_dp*abs(b))
+            end if
+        end if
+        if (flip) then
+            lo = b
+            hi = a
+        else
+            lo = a
+            hi = b
+        end if
+    end subroutine nonsingular_limits
+
+    ! Whether a symlog axis cannot tell lo and hi apart: their places on it
+    ! are within eight roundings of each other, measured relative to the
+    ! places themselves. (Relative through epsilon, not spacing(), which
+    ! for a value below about 2e-292 is tiny itself and far too wide, and
+    ! differs between compilers there.)
+    pure logical function unresolved(lo, hi, sc)
+        real(dp), intent(in) :: lo, hi
+        type(scale_t), intent(in) :: sc
+        real(dp) :: u0, u1
+        u0 = scale_fwd(sc, lo)
+        u1 = scale_fwd(sc, hi)
+        ! Where the places are subnormal, a rounding is the least subnormal,
+        ! epsilon*tiny, which eight epsilons of them fall short of.
+        unresolved = abs(u1 - u0) <= 8.0_dp*max(epsilon(1.0_dp)*max(abs(u0), abs(u1)), &
+                                                epsilon(1.0_dp)*tiny(1.0_dp))
+    end function unresolved
+
+    ! Moves lo and hi apart by 5% of their size each way, or to -0.05 and
+    ! 0.05 near zero, as matplotlib's nonsingular does with limits it cannot
+    ! tell apart; a sticky end stays where it is, and the ends stop at the
+    ! largest double.
+    pure subroutine widen_apart(lo, hi, sticky_lo, sticky_hi)
+        real(dp), intent(inout) :: lo, hi
+        logical, intent(in) :: sticky_lo, sticky_hi
+        real(dp) :: big
+        big = max(abs(lo), abs(hi))
+        if (big < 1.0e6_dp*tiny(1.0_dp)) then
+            if (.not. sticky_lo) lo = -0.05_dp
+            if (.not. sticky_hi) hi = 0.05_dp
+        else
+            if (.not. sticky_lo) lo = max(-huge(1.0_dp), lo - 0.05_dp*big)
+            if (.not. sticky_hi) hi = min(huge(1.0_dp), hi + 0.05_dp*big)
+        end if
+    end subroutine widen_apart
+
     ! Pad a data range by the axis margin. A sticky edge (the bar
     ! baseline) is left exactly where it is.
     subroutine expand_limits(lo, hi, sc, margin, sticky_lo, sticky_hi)
@@ -1055,11 +1144,30 @@ contains
         type(scale_t), intent(in) :: sc
         real(dp), intent(in) :: margin
         logical, intent(in) :: sticky_lo, sticky_hi
-        real(dp) :: u0, u1, d
+        real(dp) :: u0, u1, d, thr
 
         if (sc%kind == SCALE_LOG) then
-            if (lo <= 0.0_dp) lo = tiny(1.0_dp)
-            if (hi <= lo) hi = lo * 10.0_dp
+            if (lo < tiny(1.0_dp)) lo = tiny(1.0_dp)
+            if (hi <= lo) then
+                ! A decade up, or, near the largest double, a decade down.
+                if (lo > 0.1_dp*huge(1.0_dp)) then
+                    hi = lo
+                    lo = 0.1_dp*lo
+                else
+                    hi = lo * 10.0_dp
+                end if
+            end if
+        end if
+
+        ! A symlog axis widens data it cannot tell apart in data space,
+        ! before any margin and with none, as matplotlib's locators do: its
+        ! own units shrink with linthresh, so no fixed amount of them will do.
+        if (sc%kind == SCALE_SYMLOG) then
+            if (unresolved(lo, hi, sc)) then
+                call widen_apart(lo, hi, sticky_lo, sticky_hi)
+                ! Past what even that can part, the limits are as widened.
+                if (unresolved(lo, hi, sc)) return
+            end if
         end if
 
         if (margin <= 0.0_dp) return
@@ -1069,9 +1177,29 @@ contains
         u0 = scale_fwd(sc, lo)
         u1 = scale_fwd(sc, hi)
         d = u1 - u0
-        if (abs(d) < 1.0e-30_dp) d = 1.0_dp
+        if (.not. ieee_is_finite(d) .and. ieee_is_finite(u0) .and. ieee_is_finite(u1)) then
+            ! A range of finite ends wider than the largest double: the
+            ! margin is worked out from half of it, and the limits stop at
+            ! the largest double.
+            d = 0.5_dp*u1 - 0.5_dp*u0
+            if (.not. sticky_lo) lo = scale_inv(sc, max(-huge(1.0_dp), u0 - 2.0_dp*margin*d))
+            if (.not. sticky_hi) hi = scale_inv(sc, min(huge(1.0_dp), u1 + 2.0_dp*margin*d))
+            return
+        end if
+        ! (A symlog span was parted above.)
+        if (sc%kind /= SCALE_SYMLOG) then
+            thr = 1.0e-30_dp
+            if (abs(d) < thr) d = 1.0_dp
+        end if
         if (.not. sticky_lo) lo = scale_inv(sc, u0 - margin * d)
         if (.not. sticky_hi) hi = scale_inv(sc, u1 + margin * d)
+        ! A margin past the largest double, as on a log axis of data up to
+        ! 1e300, stops at it; on a log axis the low end stays positive.
+        if (.not. ieee_is_finite(hi) .and. ieee_is_finite(u1)) hi = huge(1.0_dp)
+        if (.not. ieee_is_finite(lo) .and. ieee_is_finite(u0)) lo = -huge(1.0_dp)
+        ! A log margin below the least normal double stops at it, where the
+        ! scale ends.
+        if (sc%kind == SCALE_LOG .and. lo < tiny(1.0_dp)) lo = tiny(1.0_dp)
     end subroutine expand_limits
 
     pure function map_x(x, xmin, xmax, ax_l, ax_w, sc) result(px)
@@ -1088,6 +1216,18 @@ contains
         py = ax_b - axis_frac(y, ymin, ymax, sc) * ax_h
     end function map_y
 
+    ! Where v sits from lo to hi, as a fraction of the way, from half values
+    ! where hi - lo is past the largest double.
+    pure elemental function lin_frac(v, lo, hi) result(t)
+        real(dp), intent(in) :: v, lo, hi
+        real(dp) :: t
+        if (ieee_is_finite(hi - lo)) then
+            t = (v - lo)/(hi - lo)
+        else
+            t = (0.5_dp*v - 0.5_dp*lo)/(0.5_dp*hi - 0.5_dp*lo)
+        end if
+    end function lin_frac
+
     ! Where v sits along the axis, as a fraction from the low end. Every
     ! scale is linear once the values have gone through its transform.
     pure function axis_frac(v, vmin, vmax, sc) result(t)
@@ -1098,6 +1238,10 @@ contains
         u1 = scale_fwd(sc, vmax)
         if (u1 == u0) then
             t = 0.5_dp
+        else if (.not. ieee_is_finite(u1 - u0) .and. ieee_is_finite(u0) .and. ieee_is_finite(u1)) then
+            ! Limits further apart than the largest double: the same
+            ! fraction, from half of each value.
+            t = (0.5_dp*scale_fwd(sc, v) - 0.5_dp*u0) / (0.5_dp*u1 - 0.5_dp*u0)
         else
             t = (scale_fwd(sc, v) - u0) / (u1 - u0)
         end if
@@ -1842,6 +1986,9 @@ contains
         ! decade falls inside the view, which a short axis need not.
         if (sc%kind == SCALE_LOG) then
             if (vmin <= 0.0_dp .or. vmax <= vmin) return
+            if (.not. ieee_is_finite(vmax)) return
+            ! Where the majors skip decades, matplotlib draws no minors.
+            if (log_stride(vmin, vmax) > 1) return
             do i = floor(log10(vmin)), floor(log10(vmax))
                 do k = 2, 9
                     call push_minor(m, nm, real(k, dp)*10.0_dp**i, vmin, vmax)
@@ -2574,8 +2721,13 @@ contains
         integer, intent(in) :: n
         integer :: f
         integer, parameter :: MAX_SAMPLES = 2048
+        real(dp) :: x
 
-        f = max(1, ceiling(extent/real(max(n, 1), dp)))
+        ! Bounded before ceiling, which an extent past any integer, or a
+        ! missing one, would overflow.
+        x = extent/real(max(n, 1), dp)
+        f = 1
+        if (x > 1.0_dp) f = ceiling(min(x, real(MAX_SAMPLES, dp)))
         f = min(f, max(1, MAX_SAMPLES/max(n, 1)))
     end function fill_factor
 
@@ -2713,8 +2865,8 @@ contains
             lo = a%img_bounds(1)
             hi = a%img_bounds(size(a%img_bounds))
             do i = 1, size(a%img_bounds) - 1
-                y0 = (a%img_bounds(i) - lo) / (hi - lo)
-                y1 = (a%img_bounds(i + 1) - lo) / (hi - lo)
+                y0 = lin_frac(a%img_bounds(i), lo, hi)
+                y1 = lin_frac(a%img_bounds(i + 1), lo, hi)
                 v = 0.5_dp * (a%img_bounds(i) + a%img_bounds(i + 1))
                 call cbar_band(b, a%cbar_horiz, bx, bt, bw, bh, y0, y1, &
                                img_color(a, v))
@@ -2753,7 +2905,7 @@ contains
         do i = 1, nt
             v = cb_ticks(i)
             if (v < lo .or. v > hi) cycle
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
             ! Bands place their ticks at the edges they stand for; every
             ! other norm puts a tick where the norm puts the value.
             if (.not. allocated(a%img_bounds)) t = cmap_t(a, v)
@@ -2888,7 +3040,12 @@ contains
         if (abs(v) <= lt) then
             u = v*adj
         else
-            u = sign(lt*(adj + log10(abs(v)/lt)), v)
+            if (ieee_is_finite(abs(v)/lt)) then
+                u = sign(lt*(adj + log10(abs(v)/lt)), v)
+            else
+                ! v so far past linthresh that the ratio overflows.
+                u = sign(lt*(adj + log10(abs(v)) - log10(lt)), v)
+            end if
         end if
     end function symlog_fwd
 
@@ -2933,14 +3090,14 @@ contains
             if (v < a%img_vcenter) then
                 t = 0.0_dp
                 if (a%img_vcenter > lo) &
-                    t = 0.5_dp*(v - lo)/(a%img_vcenter - lo)
+                    t = 0.5_dp*lin_frac(v, lo, a%img_vcenter)
             else
                 t = 1.0_dp
                 if (hi > a%img_vcenter) &
-                    t = 0.5_dp + 0.5_dp*(v - a%img_vcenter)/(hi - a%img_vcenter)
+                    t = 0.5_dp + 0.5_dp*lin_frac(v, a%img_vcenter, hi)
             end if
         case (NORM_POWER)
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
             t = max(0.0_dp, min(1.0_dp, t))**a%img_gamma
         case (NORM_SYMLOG)
             t = symlog_fwd(hi, a%img_linthresh) - symlog_fwd(lo, a%img_linthresh)
@@ -2951,7 +3108,7 @@ contains
                      - symlog_fwd(lo, a%img_linthresh))/t
             end if
         case default
-            t = (v - lo)/(hi - lo)
+            t = lin_frac(v, lo, hi)
         end select
     end function cmap_t
 
@@ -3314,6 +3471,9 @@ contains
         type(axes_t), intent(in) :: a
         real(dp), intent(out) :: lims(6)
         real(dp), parameter :: MARG(3) = [0.05_dp, 0.05_dp, 0.0_dp]
+        ! A 3D axes is linear on every axis: a scale_t is linear unless
+        ! set otherwise.
+        type(scale_t) :: lin
         real(dp) :: lo(3), hi(3), c, d
         logical :: have
         integer :: i, k
@@ -3376,10 +3536,14 @@ contains
             lims(2*i) = hi(i)
         end do
 
-        ! Limits set by hand get none of that: they are taken as given.
+        ! Limits set by hand get none of that: they are taken as given,
+        ! unless too close together to draw between.
         if (a%xlim_set) lims(1:2) = [a%xmin_user, a%xmax_user]
         if (a%ylim_set) lims(3:4) = [a%ymin_user, a%ymax_user]
         if (a%zlim_set) lims(5:6) = [a%zmin_user, a%zmax_user]
+        do i = 1, 3
+            call nonsingular_limits(lims(2*i - 1), lims(2*i), lin)
+        end do
     end subroutine limits3d
 
     ! Widens [lo, hi] to take in the finite values of low and high, the
@@ -4000,6 +4164,12 @@ contains
         if (a%aspect > 0.0_dp) then
             span_x = abs(xmax - xmin)
             span_y = abs(ymax - ymin)
+            ! Only the ratio of the spans and the box matter, so a span past
+            ! the largest double is taken, with the other, at half.
+            if (.not. ieee_is_finite(span_x) .or. .not. ieee_is_finite(span_y)) then
+                span_x = abs(0.5_dp*xmax - 0.5_dp*xmin)
+                span_y = abs(0.5_dp*ymax - 0.5_dp*ymin)
+            end if
             if (span_x > 0.0_dp .and. span_y > 0.0_dp) then
                 if (a%aspect_datalim) then
                     ! Stretch whichever range is drawn too short, about its
