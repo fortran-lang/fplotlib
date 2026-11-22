@@ -123,6 +123,21 @@ jobs:
           name: tests-out-matplotlib
           path: tests/out/
 
+  # The argument checks at the top of the plotting procedures are written
+  # by tools/gen_arg_checks.py from one table; this fails if a procedure
+  # was added or changed without running it.
+  arg-checks:
+    name: Argument checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate the argument checks
+        run: python3 tools/gen_arg_checks.py
+
+      - name: Check that nothing changed
+        run: git diff --exit-code src/fplotlib.f90
+
   # Human-only commit authorship: no AI author, committer, or Co-Authored-By
   # stamp. Same checker as LFortran's Quick checks. AI tools may help write
   # the code; a human still has to be the one who submits and guarantees it.

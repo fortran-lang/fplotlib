@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 22
+    integer, parameter :: NCASE = 35
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -35,21 +35,34 @@ module test_contract
         "fplotlib: text: font size must be finite and nonnegative", &
         "fplotlib: savefig: supported formats are", &
         "fplotlib: xlim: limits must be finite", &
+        "fplotlib: plot: alpha must be in [0, 1], got 1.5", &
+        "fplotlib: scatter: linewidths must be finite and nonnegative", &
         "fplotlib: figure: figsize must be positive and at most 1e9 inches", &
+        "fplotlib: subplots_adjust: left must be finite", &
         "fplotlib: pie: values must not be negative", &
+        "fplotlib: scatter: s must be finite and nonnegative", &
+        "fplotlib: set_xscale: linthresh must be from 1e-300 to 1e300", &
+        "fplotlib: plot: dashes must not be all zero", &
+        "fplotlib: tick_params: rotation must be finite", &
+        "fplotlib: plot: dashes must be finite and nonnegative", &
+        "fplotlib: errorbar: yerr must not be negative", &
         "fplotlib: figure: figsize must be positive and at most 1e9 inches", &
+        "fplotlib: hist: bins must be from 1 to 1000000, got 0", &
         "fplotlib: streamplot: density must be at most 10", &
+        "fplotlib: secondary_xaxis: scale must be finite", &
+        "fplotlib: tick_format: decimals must be from 0 to 17, got 25", &
         "fplotlib: subplot: a grid of more than 10000 axes", &
         "fplotlib: figure: num must be from 1 to 100000", &
         "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern", &
         "fplotlib: savefig: the cropped figure has too many pixels at this dpi", &
         "fplotlib: render_png: the figure has too many pixels at this dpi", &
-        "fplotlib: render_svg: pad_inches must be finite and at most 1e9 inches"]
+        "fplotlib: render_svg: pad_inches must be finite and at most 1e9 inches", &
+        "fplotlib: set_yscale: linthresh must be from 1e-300 to 1e300"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, &
-        1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
 
 contains
 
@@ -104,19 +117,45 @@ contains
         case (12)
             call xlim(0.0_dp, nan)
         case (13)
-            call figure(figsize=[nan, 2.0_dp])
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], alpha=1.5_dp)
         case (14)
-            call pie([1.0_dp, -1.0_dp, 2.0_dp])
+            call scatter([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], linewidths=nan)
         case (15)
-            call figure(figsize=[1.0e13_dp, 1.0_dp])
+            call figure(figsize=[nan, 2.0_dp])
         case (16)
+            call subplots_adjust(left=nan)
+        case (17)
+            call pie([1.0_dp, -1.0_dp, 2.0_dp])
+        case (18)
+            call scatter([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], s=nan)
+        case (19)
+            call set_xscale("symlog", linthresh=nan)
+        case (20)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[0.0_dp, 0.0_dp])
+        case (21)
+            call tick_params(rotation=nan)
+        case (22)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], dashes=[nan, 1.0_dp])
+        case (23)
+            call errorbar([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], yerr=[0.1_dp, -0.1_dp])
+        case (24)
+            call figure(figsize=[1.0e13_dp, 1.0_dp])
+        case (25)
+            call hist([1.0_dp, 2.0_dp], bins=0)
+        case (26)
             call streamplot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp], reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), &
                             reshape([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp], [2, 2]), density=1000.0_dp)
-        case (17)
+        case (27)
+            ! A method of type(axes) checks as its free function does.
+            call subplots(1, 1, axs)
+            sec = axs(1, 1)%secondary_xaxis(scale=nan)
+        case (28)
+            call tick_format(style="percent", decimals=25)
+        case (29)
             call subplot(1, 20000, 1)
-        case (18)
+        case (30)
             call figure(num=1000000000)
-        case (19)
+        case (31)
             call png%open_canvas(10.0_dp, 10.0_dp)
             p%filled = .false.
             p%stroked = .true.
@@ -125,16 +164,23 @@ contains
             p%n_dash = 2
             p%dash(1:2) = [1.0_dp, 1.0_dp]
             call png%draw_path([0.0_dp, 10.0_dp], [5.0_dp, 5.0_dp], [VERB_MOVE, VERB_LINE], 2, p)
-        case (20)
+        case (32)
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
             call ylabel("y", labelpad=1.0e6_dp)
             call savefig("tests/out/contract.png", bbox_inches="tight")
-        case (21)
+        case (33)
+            ! Not cropped, the figure's size is known beforehand: a broken
+            ! precondition, not a status.
             call figure(figsize=[200.0_dp, 200.0_dp], dpi=100.0_dp)
             b = render_png()
-        case (22)
+        case (34)
+            ! Checked in render_svg's own name, cropped or not.
             call figure()
             b = render_svg(pad_inches=2.0e9_dp)
+        case (35)
+            ! A symlog threshold whose linear part would be subnormal.
+            call figure()
+            call set_yscale("symlog", linthresh=1.0e-310_dp)
         end select
     end subroutine contract_case
 

@@ -224,7 +224,7 @@ module fplotlib_state
         ! A dash pattern of the caller's own, in points, which overrides
         ! the one the line style would give.
         integer :: n_dash = 0
-        real(dp) :: dashes(4) = 0.0_dp
+        real(dp) :: dashes(MAX_DASH) = 0.0_dp
         ! Per-point overrides used by scatter; unallocated means uniform.
         real(dp), allocatable :: psize(:)
         character(len=7), allocatable :: pcolor(:)
