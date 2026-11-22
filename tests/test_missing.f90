@@ -15,7 +15,7 @@ module test_missing
     use fplotlib_style, only: lower
     use fplotlib_render
     use fplotlib_draw, only: render_figure
-    use fplotlib_backend_png, only: png_renderer_t
+    use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
     implicit none
     private
@@ -65,6 +65,26 @@ contains
         integer, intent(inout) :: nfail
         type(status_t) :: st
         character(len=:), allocatable :: png
+        type(png_renderer_t) :: r
+        real(dp) :: w, h, d
+        integer :: k
+
+        ! Every check of a PNG's size counts its pixels as the canvas comes
+        ! out, rounding included.
+        do k = 1, 6
+            w = 10.0_dp + 37.3_dp*k
+            h = 5.0_dp + 11.7_dp*k
+            d = 50.0_dp + 23.9_dp*k
+            r%keep_pixels = .true.
+            call r%set_dpi(d)
+            call r%open_canvas(w, h)
+            call r%close_canvas()
+            if (png_pixels(w, h, d) /= real(r%pw, dp)*real(r%ph, dp)) then
+                print "(a, i0)", "size status: png_pixels miscounts a canvas, case ", k
+                nfail = nfail + 1
+            end if
+            deallocate (r%rgb)
+        end do
 
         call figure()
         call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
@@ -254,7 +274,7 @@ contains
             full = one_stroke(px(1:nv), py(1:nv), verbs(1:j), q)
             full_walk = .false.
             worst = max_diff(quick, full)
-            if (worst > 2) then
+            if (worst > 0) then
                 bad = bad + 1
                 if (bad <= 5) print "(a, i0, a, i0)", "dash shortcut: random stroke ", k, &
                     " differs from the full walk by ", worst

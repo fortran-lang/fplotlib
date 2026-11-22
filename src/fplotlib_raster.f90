@@ -852,9 +852,12 @@ contains
         ! An odd number of lengths repeats only after going round twice.
         if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
         if (period < 0.5_dp) then
+            ! The ends add a pen's width to each dash, and a round of the
+            ! lengths holds n_dash/2 dashes, whether or not it repeats
+            ! after one round or two.
             cover = on_fraction(paint)
-            if (paint%cap /= CAP_BUTT) &
-                cover = min(1.0_dp, cover + hw*real(paint%n_dash, dp)/max(period, tiny(1.0_dp)))
+            if (paint%cap /= CAP_BUTT) cover = min(1.0_dp, cover + hw*real(paint%n_dash, dp) &
+                                               /max(sum(paint%dash(1:paint%n_dash))*scale, tiny(1.0_dp)))
             return
         end if
         walk = .true.

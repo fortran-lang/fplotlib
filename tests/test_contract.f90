@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 32
+    integer, parameter :: NCASE = 33
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -54,12 +54,13 @@ module test_contract
         "fplotlib: subplot: a grid of more than 10000 axes", &
         "fplotlib: figure: num must be from 1 to 100000", &
         "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern", &
-        "fplotlib: savefig: the cropped figure has too many pixels at this dpi"]
+        "fplotlib: savefig: the cropped figure has too many pixels at this dpi", &
+        "fplotlib: render_png: the figure has too many pixels at this dpi"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1]
 
 contains
 
@@ -165,6 +166,11 @@ contains
             call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
             call ylabel("y", labelpad=1.0e6_dp)
             call savefig("tests/out/contract.png", bbox_inches="tight")
+        case (33)
+            ! Not cropped, the figure's size is known beforehand: a broken
+            ! precondition, not a status.
+            call figure(figsize=[200.0_dp, 200.0_dp], dpi=100.0_dp)
+            b = render_png()
         end select
     end subroutine contract_case
 

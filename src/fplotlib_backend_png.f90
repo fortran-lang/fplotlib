@@ -36,6 +36,8 @@ module fplotlib_backend_png
     ! the rasterizer keeps them, well within what the encoder can count.
     real(dp), parameter, public :: MAX_PNG_PIXELS = 1.0e8_dp
 
+    public :: png_pixels
+
     type, extends(encoded_renderer_t) :: png_renderer_t
         type(canvas_t) :: cv
         type(pathbuf_t) :: pb
@@ -63,6 +65,16 @@ module fplotlib_backend_png
 
 contains
 
+    ! How many pixels a canvas of width by height points has at dpi, counted
+    ! exactly as open_canvas sizes it, in reals so that no size overflows.
+    ! Every check of a PNG's size uses this, so that none can disagree.
+    pure function png_pixels(width, height, dpi) result(n)
+        real(dp), intent(in) :: width, height, dpi
+        real(dp) :: n, s
+        s = dpi/72.0_dp
+        n = max(1.0_dp, anint(width*s))*max(1.0_dp, anint(height*s))
+    end function png_pixels
+
     ! Has to be called before open_canvas, since the canvas is allocated at
     ! its final pixel size and never resampled.
     subroutine png_set_dpi(self, dpi)
@@ -84,9 +96,7 @@ contains
         real(dp) :: alpha, s
 
         s = self%dpi/72.0_dp
-        ! The encoder counts in default integers, and the RGBA bytes, the
-        ! scanline filters and the worst-case deflate output have to fit.
-        if (max(1.0_dp, width*s)*max(1.0_dp, height*s) > MAX_PNG_PIXELS) &
+        if (png_pixels(width, height, self%dpi) > MAX_PNG_PIXELS) &
             call contract_error("png: canvas has too many pixels at this dpi")
         wpx = max(1, nint(width*s))
         hpx = max(1, nint(height*s))

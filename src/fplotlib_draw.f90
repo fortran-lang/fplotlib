@@ -4591,12 +4591,17 @@ contains
         if (len_trim(face) == 0) face = rc_fig_face
         call clear_clip()
 
-        ! The cropped canvas of a PNG has to fit: how large it comes out
-        ! depends on the drawing, so a crop too large is returned.
+        ! A PNG has to fit MAX_PNG_PIXELS. Cropped to what is drawn, its size
+        ! depends on the drawing, which the caller cannot know beforehand,
+        ! so a crop too large is returned; the whole figure's size the
+        ! caller can work out, so a figure too large is a broken
+        ! precondition.
         select type (b)
         type is (png_renderer_t)
             if (.not. png_fits(vw, vh, b%dpi)) then
-                if (present(status)) then
+                if (.not. tight_crop(bbox_inches)) then
+                    call contract_error("render_png: the figure has too many pixels at this dpi")
+                else if (present(status)) then
                     call status%set(ERROR_SIZE, "the cropped figure has too many pixels at this dpi")
                 else
                     write (error_unit, "(a)") "fplotlib: render_png: the cropped figure has too many pixels at this dpi"
@@ -4708,11 +4713,17 @@ contains
 
     end subroutine figure_window
 
+    logical function tight_crop(bbox_inches)
+        character(len=*), intent(in), optional :: bbox_inches
+        tight_crop = .false.
+        if (present(bbox_inches)) tight_crop = lower(trim(bbox_inches)) == "tight"
+    end function tight_crop
+
     ! Whether a canvas of vw by vh points has at most MAX_PNG_PIXELS pixels
     ! at dpi.
     logical function png_fits(vw, vh, dpi)
         real(dp), intent(in) :: vw, vh, dpi
-        png_fits = max(1.0_dp, vw*dpi/72.0_dp)*max(1.0_dp, vh*dpi/72.0_dp) <= MAX_PNG_PIXELS
+        png_fits = png_pixels(vw, vh, dpi) <= MAX_PNG_PIXELS
     end function png_fits
 
     function render_svg(facecolor, transparent, bbox_inches, pad_inches, status) result(svg)
@@ -4755,15 +4766,23 @@ contains
     ! ERROR_SIZE, with an empty result, or without status the end of the
     ! program with exit code 2. The vector formats take any size, and
     ! their status is always ok.
-    function render_png(facecolor, transparent, bbox_inches, pad_inches, status) result(png)
+    !
+    ! dpi is the figure's own unless given here.
+    function render_png(facecolor, transparent, bbox_inches, pad_inches, status, dpi) result(png)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
-        real(dp), intent(in), optional :: pad_inches
+        real(dp), intent(in), optional :: pad_inches, dpi
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: png
         type(png_renderer_t) :: r
         type(status_t) :: st
-        call r%set_dpi(fig_dpi)
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("render_png: dpi must be finite and positive")
+            call r%set_dpi(dpi)
+        else
+            call r%set_dpi(fig_dpi)
+        end if
         call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, st)
         if (present(status)) status = st
         if (.not. st%ok()) then

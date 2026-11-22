@@ -32,6 +32,8 @@ module fplotlib
     ! savefig, save_animation and show return a file that cannot be
     ! written in a status_t; see fplotlib_status.
     public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE
+    ! The limits the documentation lists, for callers to check against.
+    public :: MAX_COORD, MAX_DASH, MAX_PEN_PER_DASH, MAX_PNG_PIXELS
     public :: plot, scatter, semilogx, semilogy, loglog
     public :: set_xscale, set_yscale
     public :: bar, barh, hist, fill_between, fill_betweenx, stackplot
@@ -3012,7 +3014,7 @@ contains
     subroutine check_pixels(proc, dpi)
         character(len=*), intent(in) :: proc
         real(dp), intent(in) :: dpi
-        if (max(1.0_dp, fig_w_in*dpi)*max(1.0_dp, fig_h_in*dpi) > MAX_PNG_PIXELS) then
+        if (png_pixels(fig_w_in*PT_PER_IN, fig_h_in*PT_PER_IN, dpi) > MAX_PNG_PIXELS) then
             call contract_error(proc//": the figure has too many pixels at dpi "//arg_str(dpi))
         end if
     end subroutine check_pixels

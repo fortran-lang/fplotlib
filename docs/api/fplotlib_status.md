@@ -31,7 +31,11 @@ drawn, which the caller cannot know beforehand. One with more than
 result), or stop with exit code 2 without a `status`. `render_svg`,
 `render_pdf` and `render_eps` take the same optional `status`, which is
 always ok.
-`fplotlib` re-exports `status_t`, `STATUS_OK`, `ERROR_IO` and `ERROR_SIZE`.
+`fplotlib` re-exports `status_t`, `STATUS_OK`, `ERROR_IO` and `ERROR_SIZE`,
+and the limits below: `MAX_COORD`, `MAX_DASH`, `MAX_PEN_PER_DASH` and
+`MAX_PNG_PIXELS`. A whole figure too large for a PNG, which its size and
+dpi tell beforehand, is a broken precondition; only a crop is returned.
+`status%set` is for fplotlib's own use.
 
 ## Limits
 
@@ -53,7 +57,7 @@ no longer be written. Going past one is a broken precondition, and stops:
 | `colorbar` `aspect` | 0.001 to 1000 |
 | Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
-| A PNG figure, `figsize` times `dpi` | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
+| A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |
 
 Data is never limited: a value of any size, or a missing one, is drawn or
 left out as the view shows it. Line widths and dash lengths beyond 1e12
