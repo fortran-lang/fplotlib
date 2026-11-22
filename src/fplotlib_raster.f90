@@ -143,10 +143,13 @@ contains
         m(4) = p(2)*matrix(3) + p(4)*matrix(4)
         m(5) = p(1)*matrix(5) + p(3)*matrix(6) + p(5)
         m(6) = p(2)*matrix(5) + p(4)*matrix(6) + p(6)
-        ! Frames nested so deep that together they map past the largest
-        ! double place nothing they hold, as a shape whose place is past it
-        ! is left out: a matrix of zeros draws nothing.
+        ! Frames nested so deep that together they stretch or move by more
+        ! than 1e100 place nothing they hold, as a shape whose place is past
+        ! the largest double is left out: a matrix of zeros draws nothing.
+        ! Below that, every point a frame holds, within MAX_COORD, maps to
+        ! a finite one.
         if (.not. all(ieee_is_finite(m))) m = 0.0_dp
+        if (any(abs(m) > 1.0e100_dp)) m = 0.0_dp
         call set_transform(cv, m)
         cv%n_frame = cv%n_frame + 1
         cv%frames(cv%n_frame)%matrix = m
@@ -1263,10 +1266,18 @@ contains
             l = hypot(qx - sx, qy - sy)
             if (l <= 0.0_dp) cycle
             if (framed) then
-                ! Too fine along this segment on the canvas: solid, ending
-                ! any dash under way here, as a cut does.
-                if (.not. full_walk .and. period_px*hypot(matrix(1)*(qx - sx) + matrix(3)*(qy - sy), &
-                                                         matrix(2)*(qx - sx) + matrix(4)*(qy - sy))/l < 0.5_dp) then
+                call frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, reach, ca, cb)
+                ! Solid, ending any dash under way here as a cut does: a
+                ! segment whose pattern is finer than half a pixel on the
+                ! canvas, and one whose visible piece holds more periods
+                ! than the canvas has pixels around it twice over. Only a
+                ! frame that stretches the pen far more than the line makes
+                ! the second, and then each pixel the pen sweeps sees that
+                ! many dashes, whose pattern it shows as its cover.
+                if (.not. full_walk .and. (period_px*hypot(matrix(1)*(qx - sx) + matrix(3)*(qy - sy), &
+                                                           matrix(2)*(qx - sx) + matrix(4)*(qy - sy))/l < 0.5_dp &
+                                           .or. (min(cb, 1.0_dp) - max(ca, 0.0_dp))*l > &
+                                           (2.0_dp*(bx1 - bx0 + by1 - by0) + 1000.0_dp)*period_px)) then
                     if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false., &
                                                          bare0=bare, bare1=.true.)
                     nr = 0
@@ -1295,7 +1306,7 @@ contains
             wide = hw > max(maxval(kx) - minval(kx), maxval(ky) - minval(ky)) .and. &
                    paint%cap == CAP_BUTT .and. .not. full_walk
             if (framed) then
-                call frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, reach, ca, cb)
+                ! ca, cb: where the segment is cut, found above.
                 inside = (ca <= 0.0_dp .and. cb >= 1.0_dp .and. .not. wide) .or. full_walk
             else
                 inside = (sx >= bx0 .and. sx <= bx1 .and. sy >= by0 .and. sy <= by1 .and. &

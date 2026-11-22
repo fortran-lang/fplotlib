@@ -13,7 +13,10 @@ naming the file); without it, the program stops with the message and exit
 code 2. A multi-file export is not a filesystem transaction: the pages
 before the file that failed have been written. An unknown format, a
 document without pages, or, exporting PNG, a `dpi` that is not finite and
-positive is a bug in the caller and stops the program.
+positive is a bug in the caller and stops the program. So is a PNG page
+with more than `MAX_PNG_PIXELS` pixels: a page's size is known before it
+is exported (`page_size`, and `png_pixels` in `fplotlib_backend_png` to
+count it at a dpi), unlike a figure cropped tight by `savefig`.
 
 The exporters do not lay out text or math. Glyph source mappings
 are preserved in frames; ordinary PDF text carries `ActualText`, while

@@ -278,6 +278,8 @@ contains
         character(len=:), allocatable :: quick, full
         integer :: m, w, c, d, i, worst
         logical :: same
+        ! The PNG backend's resolution, which the rasterizer's rule counts.
+        real(dp), parameter :: DPI = 100.0_dp
 
         same = .true.
         paint%stroked = .true.
@@ -302,7 +304,8 @@ contains
                         ! on the canvas is drawn solid, the one documented
                         ! approximation, which the full walk is not; such a
                         ! path is only drawn, which has to finish.
-                        if (any_solid(mats(:, m), 2.0_dp*sum(paint%dash(1:paint%n_dash)))) cycle
+                        if (any_solid(mats(:, m), sum(paint%dash(1:paint%n_dash))*DPI/72.0_dp &
+                                      *merge(2.0_dp, 1.0_dp, mod(paint%n_dash, 2) == 1))) cycle
                         full_walk = .true.
                         full = dashed_frame(mats(:, m), paint)
                         full_walk = .false.
@@ -320,12 +323,15 @@ contains
             end do
         end do
         call expect(same, "PNG dashes in transformed frames match the full walk", nfail)
-        call expect(.true., "PNG dashes in degenerate frames finish", nfail)
+        ! Reaching the next line is the check: each of these used to run
+        ! for minutes or out of memory.
         call degenerate_frames()
+        call expect(.true., "PNG dashes in degenerate frames finish", nfail)
     contains
         ! Whether some segment of the path is too fine to walk in a frame
-        ! of matrix a: its pattern, period long (doubled, as an odd count
-        ! of lengths needs), under half a pixel on the canvas.
+        ! of matrix a, by the rasterizer's rule: its pattern, period canvas
+        ! pixels long before the frame (an odd count of lengths doubled),
+        ! under half a pixel on the canvas.
         pure logical function any_solid(a, period) result(r)
             real(dp), intent(in) :: a(6), period
             integer :: i
@@ -338,11 +344,11 @@ contains
             end do
         end function any_solid
 
-        ! Frames that once made a dash walk run for minutes: a stretch of
-        ! 1e9 along x and 1e-3 along y, with a line along y a canvas pixel
-        ! a dash; a shear all but singular, with a pen of 1e6; and 25 frames
-        ! of 1e15 nested, together past the largest double, holding an
-        ! image. Each has to finish, drawing what can be seen.
+        ! Frames that once made a dash walk run for minutes or out of
+        ! memory: a stretch of 1e9 along x and 1e-3 along y, with a line
+        ! along y a canvas pixel a dash; a shear all but singular, with a
+        ! pen of 1e6; a shear of 1e8; and frames nested to 1e300 and past
+        ! the largest double, holding a dashed line and an image.
         subroutine degenerate_frames()
             type(png_renderer_t) :: png
             type(clip_t) :: none
@@ -365,6 +371,21 @@ contains
             call png%begin_frame([1.0_dp, 1.0_dp, 1.0_dp, 1.0_dp + 1.0e-15_dp, 10.0_dp, 10.0_dp], none)
             call png%draw_path([-1.0e15_dp, 1.0e15_dp], [-1.0e14_dp, 3.0e14_dp], [VERB_MOVE, VERB_LINE], 2, q)
             call png%end_frame()
+            ! A shear of 1e8, which stretches a thin pen into a sliver
+            ! longer than the canvas by far, across which every dash falls.
+            q%line_width = 1.0_dp
+            q%dash(1:2) = [6.0_dp, 3.0_dp]
+            call png%begin_frame([1.0_dp, 0.0_dp, 1.0e8_dp, 1.0_dp, 0.0_dp, 75.0_dp], none)
+            call png%draw_path([-1.0e12_dp, 1.0e12_dp], [0.0_dp, 0.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+            call png%end_frame()
+            ! A dashed line in frames that together scale by 1e300.
+            do i = 1, 20
+                call png%begin_frame([1.0e15_dp, 0.0_dp, 0.0_dp, 1.0e15_dp, 0.0_dp, 0.0_dp], none)
+            end do
+            call png%draw_path([-1.0e9_dp, 1.0e9_dp], [0.0_dp, 0.0_dp], [VERB_MOVE, VERB_LINE], 2, q)
+            do i = 1, 20
+                call png%end_frame()
+            end do
             rgba = 255
             do i = 1, 25
                 call png%begin_frame([1.0e15_dp, 0.0_dp, 0.0_dp, 1.0e15_dp, 0.0_dp, 0.0_dp], none)

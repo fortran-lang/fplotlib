@@ -86,10 +86,17 @@ The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid
 line at the share of the line the pattern would cover (more where round
 or square ends close the gaps). Walking such a pattern dash by dash could
-take without end. Everything else it draws as the full walk of every dash
-would, up to the rounding of where along a very long segment the pattern
-stands, which the walk works out by adding dash after dash and the
-shortcuts by division.
+take without end. In a frame (see [`fplotlib_render`](fplotlib_render.md))
+the same holds segment by segment, half a pixel measured on the canvas; and
+a segment whose visible piece holds more periods than twice the canvas's
+width and height in pixels, which only a frame that stretches the pen far
+more than the line can make, is drawn the same way, since each pixel the
+pen sweeps then sees that many dashes. Everything else it draws as the full
+walk of every dash would, up to the rounding of where along a very long
+segment the pattern stands, which the walk works out by adding dash after
+dash and the shortcuts by division. Frames nested so that together they
+stretch or move by more than 1e100 place nothing they hold in a PNG, as a
+shape whose place on the canvas is past the largest double is left out.
 
 ```{f:module} fplotlib_status
 ```

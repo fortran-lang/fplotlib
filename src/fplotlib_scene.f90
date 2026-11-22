@@ -541,13 +541,16 @@ contains
         real(dp), intent(in) :: x(:), y(:)
         integer, intent(in) :: verbs(:), n_verb
         type(paint_t), intent(in) :: paint
-        integer :: k
+        integer :: k, np
 
+        ! Only the points the verbs use, which renderer_t has checked: any
+        ! beyond them are no part of the path, its ink bounds included.
+        np = verb_points(verbs, n_verb)
         k = record_item(self, PATH, paint)
         associate (p => self%scene%items(k))
-            allocate (p%px(size(x)), p%py(size(y)), p%verbs(n_verb))
-            p%px = x
-            p%py = y
+            allocate (p%px(np), p%py(np), p%verbs(n_verb))
+            p%px = x(1:np)
+            p%py = y(1:np)
             p%verbs = verbs(1:n_verb)
             p%nv = n_verb
         end associate
@@ -585,15 +588,16 @@ contains
         real(dp), intent(in) :: x(:), y(:), mx(:), my(:)
         integer, intent(in) :: mverbs(:), n_mverb
         type(paint_t), intent(in) :: paint
-        integer :: k
+        integer :: k, np
 
         k = record_item(self, MARKERS, paint)
         associate (p => self%scene%items(k))
-            allocate (p%px(size(x)), p%py(size(y)), p%mx(size(mx)), p%my(size(my)), p%verbs(n_mverb))
+            np = verb_points(mverbs, n_mverb)
+            allocate (p%px(size(x)), p%py(size(y)), p%mx(np), p%my(np), p%verbs(n_mverb))
             p%px = x
             p%py = y
-            p%mx = mx
-            p%my = my
+            p%mx = mx(1:np)
+            p%my = my(1:np)
             p%verbs = mverbs(1:n_mverb)
             p%nv = n_mverb
         end associate
@@ -745,6 +749,21 @@ contains
         call rec%close_canvas()
         call rec%take(frame)
     end subroutine document_page_frame
+
+    ! How many points the verbs consume: one a MOVE or LINE, three a CUBIC.
+    pure integer function verb_points(verbs, n_verb) result(np)
+        integer, intent(in) :: verbs(:), n_verb
+        integer :: i
+        np = 0
+        do i = 1, n_verb
+            select case (verbs(i))
+            case (VERB_MOVE, VERB_LINE)
+                np = np + 1
+            case (VERB_CUBIC)
+                np = np + 3
+            end select
+        end do
+    end function verb_points
 
     ! A frame's own checks, by the rules renderer_t keeps: sizes and
     ! coordinates finite and within MAX_COORD of zero, sizes nonnegative.

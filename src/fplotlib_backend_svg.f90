@@ -615,26 +615,23 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
-        integer :: seen, at, k
+        integer :: k
         character(len=12) :: suffix
+        character(len=:), allocatable :: id
 
         call sync_clip(self, none)
-        ! The k-th use of a name is name-k from the second on.
-        seen = 0
-        at = 1
-        do
-            k = index(self%group_names(at:), new_line("a")//name//new_line("a"))
-            if (k == 0) exit
-            seen = seen + 1
-            at = at + k
+        ! A name used before becomes name-2, name-3, ...: the first of those
+        ! no group on the canvas has used, a name given as such included.
+        id = name
+        k = 1
+        do while (index(self%group_names, new_line("a")//id//new_line("a")) > 0)
+            k = k + 1
+            write (suffix, "(i0)") k
+            id = name//"-"//trim(suffix)
         end do
-        self%group_names = self%group_names//name//new_line("a")
+        self%group_names = self%group_names//id//new_line("a")
         call put(self, '<g id="')
-        call put(self, name)
-        if (seen > 0) then
-            write (suffix, "(i0)") seen + 1
-            call put(self, "-"//trim(suffix))
-        end if
+        call put(self, id)
         call put(self, '">')
         call put_eol(self)
     end subroutine svg_begin_group

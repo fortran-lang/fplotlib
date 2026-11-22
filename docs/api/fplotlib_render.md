@@ -41,12 +41,16 @@ paint clip inside a clipped frame is cut as geometry, so its edges are
 antialiased rather than whole pixels. A dashed stroke is built in the
 frame's coordinates, but what the rasterizer may skip of it is decided by
 the canvas: a segment is walked only where the matrix maps it into the
-canvas, widened on each side by the pen as the matrix stretches that axis,
-so the walk is as short as without a frame however the frame shrinks,
-shears or stretches. A segment whose pattern is finer than half a pixel on
-the canvas is drawn solid at the pattern's cover, the approximation
-[`fplotlib_status`](fplotlib_status.md) describes; everywhere else the
-dashes are what walking every one of them draws.
+canvas, widened on each side by the pen as the matrix stretches that axis.
+A segment whose pattern is finer than half a pixel on the canvas, or whose
+visible piece holds more periods than the canvas has pixels around it
+twice over, is drawn solid at the pattern's cover, the approximation
+[`fplotlib_status`](fplotlib_status.md) describes; that bounds every walk
+by the canvas, however the frame shrinks, shears or stretches. Everywhere
+else the dashes are what walking every one of them draws.
+
+Pages are not part of `renderer_t`: `pdf_renderer_t%new_page` starts the
+next page of a PDF, and the other formats write one page each.
 
 ```{f:module} fplotlib_render
 ```
