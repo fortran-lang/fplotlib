@@ -2,8 +2,9 @@ program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
+    use test_missing, only: missing_data_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface
+    integer :: fig1, nmath, ndelim, nface, nmissing
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
     real(dp) :: td(366), yd(366)
@@ -85,6 +86,7 @@ program test_plots
     real(dp) :: stx(nst), sty(3, nst)
     character(len=4), parameter :: stlab(3) = ["low ", "mid ", "high"]
     real(dp), parameter :: pi = 3.14159265358979323846_dp
+
 
     ! Everything is written under tests/out, relative to the project root,
     ! which is where fpm test and the pixi tasks run this program from.
@@ -1573,6 +1575,8 @@ program test_plots
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
+    ! NaN and infinite values in every plot type; see test_missing.f90.
+    call missing_data_check(nmissing)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1580,6 +1584,7 @@ program test_plots
     if (nmath > 0) error stop "math layout differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
+    if (nmissing > 0) error stop "missing data reached the output"
 
 contains
 
