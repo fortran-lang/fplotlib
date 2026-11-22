@@ -43,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 90
+    integer, parameter :: NCASE = 91
 
 contains
 
@@ -72,6 +72,7 @@ contains
         integer :: n, y, mo, dd, hh, mi, sec, i, ios
         character(len=64) :: s
         real(dp) :: lv(64), back
+        character(len=8) :: lab
         real(dp), parameter :: far(6) = [2.5e20_dp, -4.5e100_dp, 1.2e300_dp, 1.2e308_dp, &
                                          3.0e20_dp, -1.7976e308_dp]
 
@@ -126,6 +127,15 @@ contains
             print "(a)", "far ticks: a log tick of 1e-69 was written "//s(1:n)
             nfail = nfail + 1
         end if
+        ! Subnormal decades too, where 10**expn underflows.
+        do i = 309, 323, 7
+            call format_tick_to(10.0_dp**real(-i, dp), .true., s, n)
+            write (lab, "(I0)") -i
+            if (index(s(1:n), trim(lab)) == 0) then
+                print "(a)", "far ticks: a log tick of 1e"//trim(lab)//" was written "//s(1:n)
+                nfail = nfail + 1
+            end if
+        end do
         ! Contour levels of data far from zero in small steps cover it.
         call contour_levels(1.0e9_dp, 1.0e9_dp + 0.5_dp, 7, lv, n)
         if (n < 2 .or. lv(1) > 1.0e9_dp .or. lv(n) < 1.0e9_dp + 0.5_dp .or. lv(1) < 1.0e9_dp - 1.0_dp) then
@@ -654,6 +664,8 @@ contains
         case (89); call plot([0.0_dp, 1.0_dp], [1.7e18_dp, 1.7e18_dp + 1.0e6_dp])
         case (90); call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e307_dp])
             call tick_format("y", style="percent", whole=1.0_dp)
+        ! Subnormal data on a log axis.
+        case (91); call semilogy(t(1:3), [1.0e-320_dp, 1.0e-310_dp, 1.0e-300_dp])
         end select
     end subroutine draw_case
 

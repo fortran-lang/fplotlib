@@ -34,8 +34,13 @@ contains
         select case (s%kind)
         case (SCALE_LOG)
             ! Non-positive values have no place on a log axis; clamping them
-            ! to the smallest representable one keeps the map total.
-            u = log10(max(v, tiny(1.0_dp)))
+            ! to the least normal double keeps the map total. A positive
+            ! value, subnormal or not, keeps its own place.
+            if (v > 0.0_dp) then
+                u = log10(v)
+            else
+                u = log10(tiny(1.0_dp))
+            end if
         case (SCALE_SYMLOG)
             a = abs(v)
             if (a <= s%linthresh) then

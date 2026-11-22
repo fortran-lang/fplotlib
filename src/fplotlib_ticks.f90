@@ -180,6 +180,20 @@ contains
         scal = 10.0_dp**floor(log10_span(vmin, vmax) - log10(real(n, dp)))
     end subroutine scale_range
 
+    ! Whether av is the decade 10**expn, to rounding.
+    pure logical function is_decade(av, expn)
+        real(dp), intent(in) :: av
+        integer, intent(in) :: expn
+        if (expn >= -307) then
+            is_decade = abs(av / (10.0_dp ** expn) - 1.0_dp) < 1.0e-8_dp
+        else
+            ! A subnormal decade has fewer digits than the test above asks
+            ! of a normal one: it is the decade to within its own spacing.
+            is_decade = abs(av - 10.0_dp**real(expn, dp)) <= &
+                        max(1.0e-8_dp*av, 2.0_dp*spacing(10.0_dp**real(expn, dp)))
+        end if
+    end function is_decade
+
     ! v in exponent form, as 1.2e308 or -3e20: at most five significant
     ! digits, trailing zeros dropped. For labels whose value is past a
     ! fixed field; Fortran's own ES form drops the E of a three-digit
@@ -215,7 +229,8 @@ contains
         end if
         lg = log10(abs(v)) - log10(abs(w)) + real(shift, dp)
         e = floor(lg)
-        s = sci_join(sign(10.0_dp**(lg - real(e, dp)), v*w), e)
+        ! The sign from the signs, as v*w can underflow to zero.
+        s = sci_join(sign(1.0_dp, v)*sign(1.0_dp, w)*10.0_dp**(lg - real(e, dp)), e)
     end function sci_ratio
 
     ! The mantissa f, from 1 to 10, and exponent e as 1.2e308: at most
@@ -436,7 +451,9 @@ contains
                 return
             end if
             expn = nint(log10(av))
-            if (abs(av / (10.0_dp ** expn) - 1.0_dp) < 1.0e-8_dp) then
+            ! Below the least normal double, 10**expn is no longer a
+            ! decade one can divide by, and the test is made in logs.
+            if (is_decade(av, expn)) then
                 ! matplotlib's LogFormatterSciNotation writes every decade
                 ! as a power in mathtext, ten to the nought included.
                 if (v < 0.0_dp) then
