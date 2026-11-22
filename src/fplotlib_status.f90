@@ -15,7 +15,7 @@ module fplotlib_status
     use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
-    public :: status_t, contract_error
+    public :: status_t, contract_error, set_status
     public :: STATUS_OK, ERROR_IO, ERROR_SIZE
 
     ! ERROR_IO: a file could not be opened, written or closed.
@@ -33,7 +33,6 @@ module fplotlib_status
         character(len=MESSAGE_LEN) :: message = ""
     contains
         procedure :: ok => status_okay
-        procedure :: set => status_set
     end type status_t
 
 contains
@@ -43,13 +42,15 @@ contains
         status_okay = self%code == STATUS_OK
     end function status_okay
 
-    subroutine status_set(self, code, message)
-        class(status_t), intent(out) :: self
+    ! Records a failure. It is fplotlib's own: the fplotlib module does not
+    ! export it, and a caller only reads a status.
+    subroutine set_status(status, code, message)
+        type(status_t), intent(out) :: status
         integer, intent(in) :: code
         character(len=*), intent(in) :: message
-        self%code = code
-        self%message = message
-    end subroutine status_set
+        status%code = code
+        status%message = message
+    end subroutine set_status
 
     ! Stops the program on a broken precondition. message names the rule,
     ! usually after the call or part of fplotlib that checks it, as in

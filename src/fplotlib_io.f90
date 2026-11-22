@@ -31,20 +31,20 @@ contains
         open (newunit=u, file=trim(filename), status="replace", action="write", &
               form="unformatted", access="stream", iostat=ios, iomsg=message)
         if (ios /= 0) then
-            call status%set(ERROR_IO, io_message("cannot open", filename, message))
+            call set_status(status, ERROR_IO, io_message("cannot open", filename, message))
             return
         end if
         if (len(data) > 0) then
             write (u, iostat=ios, iomsg=message) data
             if (ios /= 0) then
-                call status%set(ERROR_IO, io_message("cannot write", filename, message))
+                call set_status(status, ERROR_IO, io_message("cannot write", filename, message))
                 close (u, iostat=close_ios, iomsg=close_message)
                 if (close_ios /= 0) status%message = trim(status%message)//"; close failed: "//trim(close_message)
                 return
             end if
         end if
         close (u, iostat=ios, iomsg=message)
-        if (ios /= 0) call status%set(ERROR_IO, io_message("cannot close", filename, message))
+        if (ios /= 0) call set_status(status, ERROR_IO, io_message("cannot close", filename, message))
     end subroutine write_bytes
 
     ! The compiler's message, with the file name in front unless the

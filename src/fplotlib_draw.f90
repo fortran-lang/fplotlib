@@ -15,7 +15,7 @@ module fplotlib_draw
     use fplotlib_ticks
     use fplotlib_svg
     use fplotlib_render
-    use fplotlib_status, only: contract_error, status_t, ERROR_SIZE
+    use fplotlib_status, only: contract_error, status_t, set_status, ERROR_SIZE
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: error_unit
     use fplotlib_backend_svg
@@ -4602,7 +4602,7 @@ contains
                 if (.not. tight_crop(bbox_inches)) then
                     call contract_error("render_png: the figure has too many pixels at this dpi")
                 else if (present(status)) then
-                    call status%set(ERROR_SIZE, "the cropped figure has too many pixels at this dpi")
+                    call set_status(status, ERROR_SIZE, "the cropped figure has too many pixels at this dpi")
                 else
                     write (error_unit, "(a)") "fplotlib: render_png: the cropped figure has too many pixels at this dpi"
                     error stop 2

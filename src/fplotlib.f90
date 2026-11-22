@@ -21,7 +21,7 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
-    use fplotlib_status, only: status_t, contract_error, STATUS_OK, ERROR_IO, ERROR_SIZE
+    use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -31,12 +31,13 @@ module fplotlib
     public :: dp
     ! savefig, save_animation and show return a file that cannot be
     ! written in a status_t; see fplotlib_status.
-    public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE
+    public :: status_t, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
 
     ! The most bytes of frames an animation reel holds.
-    ! Eight hundred million: the APNG encoder's output, up to 9/8 of it
-    ! with fixed Huffman codes, has to stay within its 2**30 byte buffer.
-    real(dp), parameter :: MAX_REEL_BYTES = 8.0e8_dp
+    ! The most bytes an animation's frames may take, each counted as
+    ! encoded at worst: the encoders' buffers double up to 2**30 bytes,
+    ! beyond which a default integer cannot count.
+    real(dp), parameter :: MAX_REEL_BYTES = 1.0e9_dp
     ! The limits a plotting call can reach, for callers to check against.
     ! The renderer's own (MAX_COORD, MAX_PEN_PER_DASH) are in
     ! fplotlib_render.
@@ -7391,7 +7392,7 @@ contains
         type(status_t), intent(out), optional :: status
 
         if (present(status)) then
-            call status%set(code, message)
+            call set_status(status, code, message)
             return
         end if
         write (error_unit, "(a)") "fplotlib: "//proc//": "//message
@@ -7428,6 +7429,7 @@ contains
         real(dp), intent(in), optional :: dpi
         type(png_renderer_t) :: r
         real(dp) :: saved_dpi
+        character(len=16) :: most
 
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
@@ -7448,22 +7450,37 @@ contains
                 call contract_error("add_frame: every frame must have the size of the first")
             end if
         end if
+        ! The reel and the GIF and APNG encoders count bytes in default
+        ! integers. A frame encodes, at worst, to reel_frame_bytes, and
+        ! the frames together must stay within MAX_REEL_BYTES.
+        if (real(anim_n + 1, dp)*reel_frame_bytes(r%pw, r%ph) > MAX_REEL_BYTES) then
+            write (most, "(I0)") int(MAX_REEL_BYTES/reel_frame_bytes(r%pw, r%ph))
+            call contract_error("add_frame: an animation holds at most "//trim(most)// &
+                                " frames of this size (MAX_REEL_BYTES)")
+        end if
         anim_w = r%pw
         anim_h = r%ph
         call anim_append(r%rgb)
         anim_n = anim_n + 1
     end subroutine add_frame
 
+    ! The most bytes a frame of w by h pixels can take as encoded. In an
+    ! APNG it is a filter byte and three bytes of colour a row, deflated
+    ! with fixed Huffman codes into at most nine bits a byte; in a GIF, a
+    ! palette index a pixel, packed into LZW codes of at most twelve bits.
+    ! The 1024 covers each frame's own chunks, headers and GIF palette.
+    pure function reel_frame_bytes(w, h) result(n)
+        integer, intent(in) :: w, h
+        real(dp) :: n
+
+        n = real(h, dp)*(3.0_dp*real(w, dp) + 1.0_dp)*9.0_dp/8.0_dp + 1024.0_dp
+    end function reel_frame_bytes
+
     subroutine anim_append(frame)
         character(len=*), intent(in) :: frame
         character(len=:), allocatable :: bigger
         integer :: cap, need
 
-        ! The reel, and the GIF and APNG encoders after it, count bytes in
-        ! default integers: a billion bytes of frames is the most it holds.
-        if (real(anim_len, dp) + real(len(frame), dp) > MAX_REEL_BYTES) &
-            call contract_error("add_frame: an animation holds at most 8e8 bytes of frames, "// &
-                                "three per pixel")
         need = anim_len + len(frame)
         cap = 0
         if (allocated(anim_pix)) cap = len(anim_pix)
