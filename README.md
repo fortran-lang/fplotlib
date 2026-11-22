@@ -253,11 +253,39 @@ fpm build --compiler flang
 fpm build --compiler lfortran
 ```
 
-The pixi tasks below are for developing fplotlib itself, with pinned compilers.
+## Errors
+
+A call that breaks a documented precondition is a bug in the calling
+program, and it stops with a message naming the call and the rule, and
+exit code 1: `figure(num=0)`, `savefig` of an unknown format, `xlim`
+with an infinite limit, or, below the plotting API, drawing on a canvas
+that is not open or passing a nonfinite coordinate to a renderer. The
+few upper bounds there are, such as at most 10000 axes in a grid, are
+listed in the `fplotlib_status` documentation.
+
+Missing data is not such a bug: as in matplotlib, a NaN or an infinity in
+plotted data is left out of the picture, and a line breaks around it. Data
+far outside the view, such as a fill value of 1e30 under a `ylim`, is
+clipped and drawn where it crosses the view.
+
+A failure that a correct program can still meet at run time is returned
+instead, through a `status_t` from `fplotlib_status`. Today that is an
+output file that cannot be written, or a PNG cropped with
+`bbox_inches="tight"` to more pixels than it can hold. `savefig`,
+`save_animation` and the `render_*` functions return it in their optional
+`status`, and without one stop with the message and exit code 2:
+
+```fortran
+use fplotlib
+type(status_t) :: st
+call savefig("results/plot.png", status=st)
+if (.not. st%ok()) print *, trim(st%message)
+```
 
 ## Build
 
-Requires [pixi](https://pixi.sh). Every compiler has its own environment with
+The pixi tasks below are for developing fplotlib itself, with pinned compilers.
+They require [pixi](https://pixi.sh). Every compiler has its own environment with
 nothing in it but the compiler and fpm: gfortran and LFortran come from
 conda-forge on Linux and macOS, flang on Linux (on macOS provide a system
 flang on `PATH`). A task installs its environment the first time it runs.
@@ -346,6 +374,9 @@ src/           library modules
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
                fplotlib.f90         the plotting API
+               fplotlib_render.f90  the renderer contract the backends implement
+               fplotlib_status.f90  contract_error, and the status_t of calls that can fail
+               fplotlib_io.f90      writing a file, with the failure returned
 examples/      demo.f90
 tests/         Fortran test plots, fingerprints, matplotlib refs, compare scripts
 ```

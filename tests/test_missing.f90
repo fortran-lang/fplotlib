@@ -12,10 +12,10 @@ module test_missing
                                               ieee_positive_inf
     use, intrinsic :: iso_fortran_env, only: int64
     use fplotlib
-    use fplotlib_draw, only: lower
+    use fplotlib_style, only: lower
     use fplotlib_render
     use fplotlib_draw, only: render_figure
-    use fplotlib_backend_png, only: png_renderer_t
+    use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
     implicit none
     private
@@ -29,18 +29,15 @@ module test_missing
         real(dp) :: far = 0.0_dp
         real(dp) :: widest = 0.0_dp   ! the widest stroke
     contains
-        procedure :: open_canvas => ext_open
-        procedure :: close_canvas => ext_close
-        procedure :: draw_path => ext_path
-        procedure :: draw_rect => ext_rect
-        procedure :: draw_circle => ext_circle
-        procedure :: draw_markers => ext_markers
-        procedure :: draw_glyphs => ext_glyphs
-        procedure :: draw_image => ext_image
-        procedure :: bytes => ext_bytes
+        procedure :: open_canvas_impl => ext_open
+        procedure :: close_canvas_impl => ext_close
+        procedure :: draw_path_impl => ext_path
+        procedure :: draw_rect_impl => ext_rect
+        procedure :: draw_circle_impl => ext_circle
+        procedure :: draw_markers_impl => ext_markers
+        procedure :: draw_glyphs_impl => ext_glyphs
+        procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
-
-    real(dp), parameter :: MAX_PEN_PER_DASH = 100.0_dp
 
     integer, parameter :: NCASE = 74
 
@@ -58,8 +55,64 @@ contains
             call close()
         end do
         call dash_shortcut_check(nfail)
+        call size_status_check(nfail)
         print "(a, i0, a, i0)", "missing data: ", NCASE, " plots, failures = ", nfail
     end subroutine missing_data_check
+
+    ! A label placed a million points off makes a tight crop too large for
+    ! a PNG: a failure at run time, which savefig returns in its status.
+    subroutine size_status_check(nfail)
+        integer, intent(inout) :: nfail
+        type(status_t) :: st
+        character(len=:), allocatable :: png
+        type(png_renderer_t) :: r
+        real(dp) :: w, h, d
+        integer :: k
+
+        ! Every check of a PNG's size counts its pixels as the canvas comes
+        ! out, rounding included.
+        do k = 1, 6
+            w = 10.0_dp + 37.3_dp*k
+            h = 5.0_dp + 11.7_dp*k
+            d = 50.0_dp + 23.9_dp*k
+            r%keep_pixels = .true.
+            call r%set_dpi(d)
+            call r%open_canvas(w, h)
+            call r%close_canvas()
+            if (png_pixels(w, h, d) /= real(r%pw, dp)*real(r%ph, dp)) then
+                print "(a, i0)", "size status: png_pixels miscounts a canvas, case ", k
+                nfail = nfail + 1
+            end if
+            deallocate (r%rgb)
+        end do
+
+        ! A figure too large for a PNG whole, cropped tight to the little
+        ! that is drawn in it, saves.
+        call figure(figsize=[150.0_dp, 150.0_dp], dpi=100.0_dp)
+        call subplots_adjust(left=0.45_dp, right=0.55_dp, bottom=0.45_dp, top=0.55_dp)
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call savefig("tests/out/missing_size.png", bbox_inches="tight", status=st)
+        if (.not. st%ok()) then
+            print "(a, i0)", "size status: a tight crop that fits did not save, code ", st%code
+            nfail = nfail + 1
+        end if
+        call close()
+
+        call figure()
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call ylabel("y", labelpad=1.0e6_dp)
+        call savefig("tests/out/missing_size.png", bbox_inches="tight", status=st)
+        if (st%code /= ERROR_SIZE) then
+            print "(a, i0)", "size status: expected ERROR_SIZE from a tight PNG too large, got ", st%code
+            nfail = nfail + 1
+        end if
+        png = render_png(bbox_inches="tight", status=st)
+        if (st%code /= ERROR_SIZE .or. len(png) /= 0) then
+            print "(a, i0)", "size status: expected ERROR_SIZE and nothing from render_png, got ", st%code
+            nfail = nfail + 1
+        end if
+        call close()
+    end subroutine size_status_check
 
     ! The PNG backend skips dash work that cannot be seen. It must not skip
     ! anything that can. Each stroke here is drawn twice at 72 dpi: on a
@@ -627,17 +680,11 @@ contains
         call see(self, [x, y])
     end subroutine ext_glyphs
 
-    function ext_bytes(self) result(b)
-        class(extent_renderer_t), intent(in) :: self
-        character(len=:), allocatable :: b
-        b = ""
-    end function ext_bytes
-
     subroutine ext_image(self, x, y, w, h, rgba, nx, ny, paint)
         class(extent_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: nx, ny
-        integer, intent(in) :: rgba(4, nx, ny)
+        integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
         call see(self, [x, y, x + w, y + h])
     end subroutine ext_image

@@ -41,7 +41,7 @@
 module fplotlib_mathtext
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render, only: glyphrun_t
-    use fplotlib_text, only: text_layout, run_add
+    use fplotlib_text, only: text_layout, run_add, check_font
     use fplotlib_mathsym, only: sym_lookup, sym_class, CL_ORD, CL_OP, CL_BIN, &
                                 CL_REL, CL_OPEN, CL_CLOSE, CL_PUNCT, CL_INNER
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_bbox, glyph_italic, &
@@ -258,6 +258,11 @@ contains
         type(math_context_t), intent(inout), optional :: context
         type(math_context_t) :: scratch
 
+        if (present(face)) then
+            call check_font(face, size)
+        else
+            call check_font(FACE_REGULAR, size)
+        end if
         if (present(context)) then
             call math_layout_impl(context, s, size, run, rules, width, face)
         else
@@ -342,6 +347,7 @@ contains
         type(math_context_t), intent(inout), optional :: context
         type(math_context_t) :: scratch
 
+        call check_font(FACE_REGULAR, size)
         if (present(context)) then
             call math_formula_impl(context, s, size, display, run, rules, w, h, d)
         else
