@@ -15,6 +15,8 @@ module fplotlib_draw
     use fplotlib_ticks
     use fplotlib_svg
     use fplotlib_render
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+    use, intrinsic :: iso_fortran_env, only: error_unit
     use fplotlib_backend_svg
     use fplotlib_backend_pdf
     use fplotlib_backend_eps
@@ -276,6 +278,15 @@ contains
         end do
         if (len_trim(fig_suptitle) > 0) need_t = need_t + LABEL_BOX * fig_suptitle_size
 
+        ! A figure too small for its decorations keeps the layout it had,
+        ! with the warning matplotlib gives, rather than axes of negative
+        ! size.
+        if ((p + need_l) / W >= 1.0_dp - (p + need_r) / W .or. &
+            (p + need_b) / H >= 1.0_dp - (p + need_t) / H) then
+            write (error_unit, "(a)") "fplotlib: tight_layout not applied: " &
+                //"the decorations leave no room for the axes"
+            return
+        end if
         fig_left = (p + need_l) / W
         fig_right = 1.0_dp - (p + need_r) / W
         fig_bottom = (p + need_b) / H
@@ -1245,11 +1256,11 @@ contains
             end do
             if (s%patch_fill) then
                 p = brush(trim(s%color), s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call put_path(b, px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
             end if
             if (len_trim(s%edgecolor) > 0) then
                 p = pen(trim(s%edgecolor), s%edgewidth, s%alpha)
-                call b%draw_path(px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
+                call put_path(b, px(1:s%n), py(1:s%n), s%pverb, size(s%pverb), p)
             end if
             return
         end if
@@ -2492,7 +2503,7 @@ contains
         end do
 
         p%clip = g_clip
-        call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
+        call put_image(b, min(px0, px1), min(py0, py1), abs(px1 - px0), &
                           abs(py1 - py0), rgba, nc*fx, nr*fy, p)
     end subroutine append_image
 
@@ -2542,7 +2553,7 @@ contains
         end do
 
         p%clip = g_clip
-        call b%draw_image(min(px0, px1), min(py0, py1), abs(px1 - px0), &
+        call put_image(b, min(px0, px1), min(py0, py1), abs(px1 - px0), &
                           abs(py1 - py0), rgba, ow, oh, p)
     end subroutine append_image_smooth
 
@@ -2681,6 +2692,8 @@ contains
         character(len=512) :: esc
 
         call cbar_box(a, W, H, bx, bt, bw, bh)
+        ! A bar the layout left no room for is not drawn.
+        if (.not. (bw > 0.0_dp .and. bh > 0.0_dp)) return
         bb = bt + bh
 
         ! Slices are grown slightly so they abut without seams, so keep them
@@ -2708,7 +2721,7 @@ contains
         end if
         call clear_clip()
 
-        call b%draw_rect(bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw))
+        call put_rect(b, bx, bt, bw, bh, pen(rc_spine_color, rc_spine_lw))
 
         lo = a%img_vmin
         hi = a%img_vmax
@@ -3301,34 +3314,30 @@ contains
         have = .false.
         do i = 1, a%n_series
             select case (a%series(i)%kind)
+            ! Missing values have no extent, as they have in 2D.
             case (SERIES_LINE3D, SERIES_SCATTER3D, SERIES_TRISURF)
                 if (a%series(i)%nolim) cycle
-                do k = 1, a%series(i)%n
-                    lo(1) = min(lo(1), a%series(i)%x(k))
-                    hi(1) = max(hi(1), a%series(i)%x(k))
-                    lo(2) = min(lo(2), a%series(i)%y(k))
-                    hi(2) = max(hi(2), a%series(i)%y(k))
-                    lo(3) = min(lo(3), a%series(i)%z(k))
-                    hi(3) = max(hi(3), a%series(i)%z(k))
-                end do
-                have = .true.
+                k = a%series(i)%n
+                call fold_finite(lo(1), hi(1), a%series(i)%x(1:k), a%series(i)%x(1:k), have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y(1:k), a%series(i)%y(1:k), have)
+                call fold_finite(lo(3), hi(3), a%series(i)%z(1:k), a%series(i)%z(1:k), have)
             case (SERIES_BAR3D)
-                lo(1) = min(lo(1), minval(a%series(i)%x))
-                hi(1) = max(hi(1), maxval(a%series(i)%x) + a%series(i)%d3x)
-                lo(2) = min(lo(2), minval(a%series(i)%y))
-                hi(2) = max(hi(2), maxval(a%series(i)%y) + a%series(i)%d3y)
-                lo(3) = min(lo(3), minval(a%series(i)%z))
-                hi(3) = max(hi(3), maxval(a%series(i)%z2))
-                have = .true.
+                call fold_finite(lo(1), hi(1), a%series(i)%x, a%series(i)%x + a%series(i)%d3x, have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y, a%series(i)%y + a%series(i)%d3y, have)
+                call fold_finite(lo(3), hi(3), a%series(i)%z, a%series(i)%z2, have)
             case (SERIES_SURFACE)
-                lo(1) = min(lo(1), minval(a%series(i)%x))
-                hi(1) = max(hi(1), maxval(a%series(i)%x))
-                lo(2) = min(lo(2), minval(a%series(i)%y))
-                hi(2) = max(hi(2), maxval(a%series(i)%y))
-                lo(3) = min(lo(3), minval(a%series(i)%zg))
-                hi(3) = max(hi(3), maxval(a%series(i)%zg))
-                have = .true.
+                call fold_finite(lo(1), hi(1), a%series(i)%x, a%series(i)%x, have)
+                call fold_finite(lo(2), hi(2), a%series(i)%y, a%series(i)%y, have)
+                call fold_finite(lo(3), hi(3), reshape(a%series(i)%zg, [size(a%series(i)%zg)]), &
+                                 reshape(a%series(i)%zg, [size(a%series(i)%zg)]), have)
             end select
+        end do
+        ! An axis whose every value is missing gets the unit range.
+        do i = 1, 3
+            if (lo(i) > hi(i)) then
+                lo(i) = 0.0_dp
+                hi(i) = 1.0_dp
+            end if
         end do
         if (.not. have) then
             lo = 0.0_dp
@@ -3363,6 +3372,23 @@ contains
         if (a%ylim_set) lims(3:4) = [a%ymin_user, a%ymax_user]
         if (a%zlim_set) lims(5:6) = [a%zmin_user, a%zmax_user]
     end subroutine limits3d
+
+    ! Widens [lo, hi] to take in the finite values of low and high, the
+    ! lower and upper ends of what one series spans; have records that
+    ! there was something to take in.
+    pure subroutine fold_finite(lo, hi, low, high, have)
+        real(dp), intent(inout) :: lo, hi
+        real(dp), intent(in) :: low(:), high(:)
+        logical, intent(inout) :: have
+        integer :: k
+        do k = 1, size(low)
+            if (ieee_is_finite(low(k))) lo = min(lo, low(k))
+        end do
+        do k = 1, size(high)
+            if (ieee_is_finite(high(k))) hi = max(hi, high(k))
+        end do
+        have = .true.
+    end subroutine fold_finite
 
     ! A data point to device points, with the projected depth alongside.
     subroutine dev3(M, bl, bt, side, x, y, z, ux, uy, uz)
@@ -3599,6 +3625,7 @@ contains
         real(dp), intent(in) :: M(4, 4), bl, bt, side
         real(dp), allocatable :: px(:), py(:), pd(:)
         integer, allocatable :: idx(:)
+        logical, allocatable :: ok(:)
         real(dp) :: sat, lo, span, one(1), oney(1)
         integer :: i, k, n
         type(paint_t) :: p
@@ -3615,7 +3642,7 @@ contains
                 if (a%series(i)%linestyle /= LINE_NONE) then
                     p = pen(a%series(i)%color, a%series(i)%linewidth, &
                             a%series(i)%alpha, a%series(i)%linestyle)
-                    call b%draw_path(px, py, line_verbs(n), n, p)
+                    call put_path(b, px, py, line_verbs(n), n, p)
                 end if
                 call append_markers(b, a%series(i)%marker, px, py, n, &
                                     a%series(i)%markersize, a%series(i)%color, &
@@ -3629,11 +3656,20 @@ contains
                 end do
                 call order_far_first(pd, n, idx)
                 ! Depth shading: the further a point is, the more it fades
-                ! into the background, down to three tenths opacity.
-                lo = minval(pd)
-                span = sqrt((maxval(px) - minval(px))**2 + (maxval(py) - minval(py))**2 &
-                            + (maxval(pd) - lo)**2)
+                ! into the background, down to three tenths opacity. A point
+                ! with a missing coordinate is not drawn and does not count.
+                allocate (ok(n))
+                ok = ieee_is_finite(px) .and. ieee_is_finite(py) .and. ieee_is_finite(pd)
+                if (.not. any(ok)) then
+                    deallocate (px, py, pd, idx, ok)
+                    cycle
+                end if
+                lo = minval(pd, mask=ok)
+                span = sqrt((maxval(px, mask=ok) - minval(px, mask=ok))**2 &
+                            + (maxval(py, mask=ok) - minval(py, mask=ok))**2 &
+                            + (maxval(pd, mask=ok) - lo)**2)
                 do k = 1, n
+                    if (.not. ok(idx(k))) cycle
                     sat = 1.0_dp
                     if (span > 0.0_dp) sat = 1.0_dp - (pd(idx(k)) - lo)/span
                     sat = max(0.3_dp, min(1.0_dp, sat))
@@ -3643,7 +3679,7 @@ contains
                                         a%series(i)%markersize, a%series(i)%color, &
                                         a%series(i)%alpha*sat)
                 end do
-                deallocate (px, py, pd, idx)
+                deallocate (px, py, pd, idx, ok)
             case (SERIES_SURFACE)
                 call render_surface(b, a%series(i), M, bl, bt, side)
             case (SERIES_TRISURF)
@@ -3936,6 +3972,9 @@ contains
         ax_t = (1.0_dp - a%top) * H
         ax_w = ax_r - ax_l
         ax_h = ax_b - ax_t
+        ! An axes the layout left no room for, as matplotlib's would be
+        ! with the same subplot parameters, has nothing to show.
+        if (.not. (ax_w > 0.0_dp .and. ax_h > 0.0_dp)) return
 
         if (a%polar) then
             call render_polar(b, a, ax_l, ax_r, ax_b, ax_t)
@@ -4218,7 +4257,7 @@ contains
                         k1 = k1 + 1
                     end do
                     if (k1 - k0 >= 2) &
-                        call b%draw_path(lx(k0:k1 - 1), ly(k0:k1 - 1), &
+                        call put_path(b, lx(k0:k1 - 1), ly(k0:k1 - 1), &
                                          line_verbs(k1 - k0), k1 - k0, pnt)
                     k0 = k1
                 end do
@@ -4290,7 +4329,7 @@ contains
         ! them alone renders exactly as it did before they could be hidden.
         if (.not. a%frame_off) then
             if (all(a%spine)) then
-                call b%draw_rect(ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw))
+                call put_rect(b, ax_l, ax_t, ax_w, ax_h, pen(rc_spine_color, rc_spine_lw))
             else
                 if (a%spine(SPINE_LEFT)) call append_spine(b, ax_l, ax_t, ax_l, ax_b)
                 if (a%spine(SPINE_RIGHT)) call append_spine(b, ax_r, ax_t, ax_r, ax_b)
@@ -4475,7 +4514,7 @@ contains
                     pnt%stroked = .true.
                     pnt%stroke_rgb = hex_rgb(rc_legend_edge)
                     pnt%line_width = 0.8_dp
-                    call b%draw_rect(leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp)
+                    call put_rect(b, leg_x, leg_y, leg_w, leg_h, pnt, 2.0_dp)
                 end if
                 leg_x0 = leg_x
                 k = 0

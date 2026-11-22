@@ -21,6 +21,7 @@ module fplotlib
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_draw
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
@@ -680,13 +681,18 @@ contains
     ! A second axis along one edge, reading the same data in other units.
     ! matplotlib takes a pair of functions; here the two units are related
     ! by scale and offset, which is what a change of units amounts to.
-    function add_secondary(parent, is_x, location, scale, offset) result(h)
-        integer, intent(in) :: parent
+    function add_secondary(parent_in, is_x, location, scale, offset) result(h)
+        integer, intent(in) :: parent_in
         logical, intent(in) :: is_x
         character(len=*), intent(in), optional :: location
         real(dp), intent(in), optional :: scale, offset
         type(axes) :: h
         character(len=8) :: loc
+        integer :: parent
+
+        ! A copy, since the caller may pass cur_i itself, which push_axes
+        ! moves to the new axes: that would make it its own parent.
+        parent = parent_in
 
         loc = "top"
         if (.not. is_x) loc = "right"
@@ -3089,7 +3095,8 @@ contains
 
     ! The direction of travel at a point, normalised so that a step in the
     ! parameter is a step in arc length. code is 1 off the grid and 2 where
-    ! the field stalls.
+    ! the field stalls or is missing, which ends the line as a masked value
+    ! does in matplotlib.
     subroutine stream_dir(st, xi, yi, dirn, dxi, dyi, code)
         type(stream_t), intent(in) :: st
         real(dp), intent(in) :: xi, yi
@@ -3106,12 +3113,17 @@ contains
             return
         end if
         ds_dt = stream_interp(st%sp, xi, yi)
-        if (ds_dt == 0.0_dp) then
+        if (ds_dt == 0.0_dp .or. .not. ieee_is_finite(ds_dt)) then
             code = 2
             return
         end if
         dxi = real(dirn, dp)*stream_interp(st%u, xi, yi)/ds_dt
         dyi = real(dirn, dp)*stream_interp(st%v, xi, yi)/ds_dt
+        if (.not. ieee_is_finite(dxi) .or. .not. ieee_is_finite(dyi)) then
+            dxi = 0.0_dp
+            dyi = 0.0_dp
+            code = 2
+        end if
     end subroutine stream_dir
 
     ! Claim the mask cell a point falls in. ok comes back false when another
@@ -3304,36 +3316,67 @@ contains
         integer :: nb(2), n, i, jx, jy
         real(dp) :: x0, x1, y0, y1
         real(dp), allocatable :: xe(:), ye(:), h(:, :)
+        logical, allocatable :: ok(:)
 
         call ensure_fig()
         n = min(size(x), size(y))
-        if (n < 1) return
+        ! A point with a missing coordinate is in no bin.
+        allocate (ok(n))
+        ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
+        if (.not. any(ok)) return
         nb = [10, 10]
         if (present(bins)) nb = max(1, bins)
 
-        x0 = minval(x(1:n)); x1 = maxval(x(1:n))
-        y0 = minval(y(1:n)); y1 = maxval(y(1:n))
+        x0 = minval(x(1:n), mask=ok); x1 = maxval(x(1:n), mask=ok)
+        y0 = minval(y(1:n), mask=ok); y1 = maxval(y(1:n), mask=ok)
         if (x1 <= x0) x1 = x0 + 1.0_dp
         if (y1 <= y0) y1 = y0 + 1.0_dp
 
         allocate (xe(nb(1) + 1), ye(nb(2) + 1), h(nb(2), nb(1)))
+        ! Data spanning more than the largest double must not overflow the
+        ! edges or the bin numbers.
         do i = 1, nb(1) + 1
-            xe(i) = x0 + (x1 - x0)*real(i - 1, dp)/real(nb(1), dp)
+            xe(i) = between(x0, x1, real(i - 1, dp)/real(nb(1), dp))
         end do
         do i = 1, nb(2) + 1
-            ye(i) = y0 + (y1 - y0)*real(i - 1, dp)/real(nb(2), dp)
+            ye(i) = between(y0, y1, real(i - 1, dp)/real(nb(2), dp))
         end do
 
         h = 0.0_dp
         do i = 1, n
+            if (.not. ok(i)) cycle
             ! The last cell owns its right edge, as numpy's histogram does.
-            jx = min(nb(1), 1 + int((x(i) - x0)/(x1 - x0)*real(nb(1), dp)))
-            jy = min(nb(2), 1 + int((y(i) - y0)/(y1 - y0)*real(nb(2), dp)))
+            jx = bin_index(x(i), x0, x1, nb(1))
+            jy = bin_index(y(i), y0, y1, nb(2))
             h(jy, jx) = h(jy, jx) + 1.0_dp
         end do
 
         call pcolormesh(xe, ye, h, cmap, vmin, vmax)
     end subroutine hist2d
+
+    ! The point a fraction t of the way from a to b, measured from a, and
+    ! interpolated between the two instead when b - a overflows.
+    pure function between(a, b, t) result(v)
+        real(dp), intent(in) :: a, b, t
+        real(dp) :: v
+        if (ieee_is_finite(b - a)) then
+            v = a + (b - a)*t
+        else
+            v = a*(1.0_dp - t) + b*t
+        end if
+    end function between
+
+    ! Which of n equal bins between lo and hi holds v, with the last bin
+    ! owning hi.
+    pure function bin_index(v, lo, hi, n) result(k)
+        real(dp), intent(in) :: v, lo, hi
+        integer, intent(in) :: n
+        integer :: k
+        real(dp) :: t
+        t = (0.5_dp*v - 0.5_dp*lo)/(0.5_dp*hi - 0.5_dp*lo)
+        t = max(0.0_dp, min(1.0_dp, t))
+        k = min(n, 1 + int(t*real(n, dp)))
+    end function bin_index
 
     ! Hexagonal binning. matplotlib lays two rectangular grids over the
     ! data, one offset half a cell from the other, and gives each point to
@@ -3345,12 +3388,17 @@ contains
         character(len=*), intent(in), optional :: cmap
         integer :: nx, ny, nx1, ny1, nx2, ny2, n, i, j, k, ix1, iy1, ix2, iy2, mc
         real(dp) :: x0, x1, y0, y1, sx, sy, ix, iy, d1, d2, pad, cmax, t, cxp, cyp
-        real(dp) :: hx(6), hy(6)
+        real(dp) :: hx(6), hy(6), H
+        logical :: wide_x, wide_y
         real(dp), allocatable :: c1(:, :), c2(:, :)
+        logical, allocatable :: ok(:)
 
         call ensure_fig()
         n = min(size(x), size(y))
-        if (n < 1) return
+        ! A point with a missing coordinate is in no cell.
+        allocate (ok(n))
+        ok = ieee_is_finite(x(1:n)) .and. ieee_is_finite(y(1:n))
+        if (.not. any(ok)) return
         nx = 100
         if (present(gridsize)) nx = max(1, gridsize)
         ny = int(real(nx, dp)/sqrt(3.0_dp))
@@ -3360,14 +3408,39 @@ contains
         mc = 0
         if (present(mincnt)) mc = mincnt
 
-        x0 = minval(x(1:n)); x1 = maxval(x(1:n))
-        y0 = minval(y(1:n)); y1 = maxval(y(1:n))
-        pad = 1.0e-9_dp*(x1 - x0)
-        x0 = x0 - pad; x1 = x1 + pad
+        ! Data near the largest double, or spanning more than it, is binned
+        ! as all other data is: what would overflow is worked out from half
+        ! the values, and the grid, which cannot be drawn past the largest
+        ! double, is cut off there.
+        H = huge(1.0_dp)
+        x0 = minval(x(1:n), mask=ok); x1 = maxval(x(1:n), mask=ok)
+        y0 = minval(y(1:n), mask=ok); y1 = maxval(y(1:n), mask=ok)
+        if (ieee_is_finite(x1 - x0)) then
+            pad = 1.0e-9_dp*(x1 - x0)
+        else
+            pad = 2.0e-9_dp*(0.5_dp*x1 - 0.5_dp*x0)
+        end if
+        x0 = max(-H, x0 - pad); x1 = min(H, x1 + pad)
+        ! Where adding one is lost in rounding, the ends step apart by the
+        ! least they can, inward from the largest double.
         if (x1 <= x0) x1 = x0 + 1.0_dp
+        if (x1 <= x0) call step_apart(x0, x1)
         if (y1 <= y0) y1 = y0 + 1.0_dp
-        sx = (x1 - x0)/real(nx, dp)
-        sy = (y1 - y0)/real(ny, dp)
+        if (y1 <= y0) call step_apart(y0, y1)
+        wide_x = .not. ieee_is_finite(x1 - x0)
+        wide_y = .not. ieee_is_finite(y1 - y0)
+        ! A wide span keeps half a cell in sx and sy; ix and iy below and
+        ! the hexagon are worked out to match.
+        if (wide_x) then
+            sx = (0.5_dp*x1 - 0.5_dp*x0)/real(nx, dp)
+        else
+            sx = (x1 - x0)/real(nx, dp)
+        end if
+        if (wide_y) then
+            sy = (0.5_dp*y1 - 0.5_dp*y0)/real(ny, dp)
+        else
+            sy = (y1 - y0)/real(ny, dp)
+        end if
 
         nx1 = nx + 1; ny1 = ny + 1
         nx2 = nx; ny2 = ny
@@ -3376,8 +3449,17 @@ contains
         c2 = 0.0_dp
 
         do i = 1, n
-            ix = (x(i) - x0)/sx
-            iy = (y(i) - y0)/sy
+            if (.not. ok(i)) cycle
+            if (wide_x) then
+                ix = (0.5_dp*x(i) - 0.5_dp*x0)/sx
+            else
+                ix = (x(i) - x0)/sx
+            end if
+            if (wide_y) then
+                iy = (0.5_dp*y(i) - 0.5_dp*y0)/sy
+            else
+                iy = (y(i) - y0)/sy
+            end if
             ix1 = nint(ix); iy1 = nint(iy)
             ix2 = floor(ix); iy2 = floor(iy)
             d1 = (ix - real(ix1, dp))**2 + 3.0_dp*(iy - real(iy1, dp))**2
@@ -3398,6 +3480,8 @@ contains
         ! points, which is what makes the two grids interlock.
         hx = 0.5_dp*sx*[1.0_dp, 1.0_dp, 0.0_dp, -1.0_dp, -1.0_dp, 0.0_dp]
         hy = (sy/3.0_dp)*[-0.5_dp, 0.5_dp, 1.0_dp, 0.5_dp, -0.5_dp, -1.0_dp]
+        if (wide_x) hx = 2.0_dp*hx
+        if (wide_y) hy = 2.0_dp*hy
 
         ax(cur_i)%img_cmap = CMAP_VIRIDIS
         if (present(cmap)) ax(cur_i)%img_cmap = cmap_from_str(cmap)
@@ -3411,15 +3495,16 @@ contains
                     if (k == 1) then
                         if (c1(i, j) < real(mc, dp)) cycle
                         t = (c1(i, j) - real(mc, dp))/max(cmax - real(mc, dp), 1.0_dp)
-                        cxp = x0 + real(i - 1, dp)*sx
-                        cyp = y0 + real(j - 1, dp)*sy
+                        cxp = grid_at(x0, x1, sx, wide_x, real(i - 1, dp), nx)
+                        cyp = grid_at(y0, y1, sy, wide_y, real(j - 1, dp), ny)
                     else
                         if (c2(i, j) < real(mc, dp)) cycle
                         t = (c2(i, j) - real(mc, dp))/max(cmax - real(mc, dp), 1.0_dp)
-                        cxp = x0 + (real(i - 1, dp) + 0.5_dp)*sx
-                        cyp = y0 + (real(j - 1, dp) + 0.5_dp)*sy
+                        cxp = grid_at(x0, x1, sx, wide_x, real(i - 1, dp) + 0.5_dp, nx)
+                        cyp = grid_at(y0, y1, sy, wide_y, real(j - 1, dp) + 0.5_dp, ny)
                     end if
-                    call add_polygon(cxp + hx, cyp + hy, &
+                    ! Vertices past the largest double are cut off at it.
+                    call add_polygon(max(-H, min(H, cxp + hx)), max(-H, min(H, cyp + hy)), &
                                      facecolor=cmap_color(ax(cur_i)%img_cmap, t))
                 end do
             end do
@@ -3427,9 +3512,36 @@ contains
 
         ! Patches never ask for room of their own, so the axes is told what
         ! the binning covered, margins and all.
-        call xlim(x0 - 0.05_dp*(x1 - x0), x1 + 0.05_dp*(x1 - x0))
-        call ylim(y0 - 0.05_dp*(y1 - y0), y1 + 0.05_dp*(y1 - y0))
+        ! Each end scaled before the difference, which cannot overflow; the
+        ! margins stop at the largest double.
+        call xlim(max(-H, x0 - (0.05_dp*x1 - 0.05_dp*x0)), min(H, x1 + (0.05_dp*x1 - 0.05_dp*x0)))
+        call ylim(max(-H, y0 - (0.05_dp*y1 - 0.05_dp*y0)), min(H, y1 + (0.05_dp*y1 - 0.05_dp*y0)))
     end subroutine hexbin
+
+    ! Moves lo and hi, which are equal, apart by one representable step,
+    ! the one that stays finite.
+    pure subroutine step_apart(lo, hi)
+        real(dp), intent(inout) :: lo, hi
+        if (lo < 0.0_dp) then
+            hi = nearest(hi, 1.0_dp)
+        else
+            lo = nearest(lo, -1.0_dp)
+        end if
+    end subroutine step_apart
+
+    ! The k-th line of a hexbin grid of n cells from lo to hi, a cell being
+    ! s wide, or, for a span wider than the largest double, s half a cell.
+    pure function grid_at(lo, hi, s, wide, k, n) result(v)
+        real(dp), intent(in) :: lo, hi, s, k
+        logical, intent(in) :: wide
+        integer, intent(in) :: n
+        real(dp) :: v
+        if (wide) then
+            v = between(lo, hi, k/real(n, dp))
+        else
+            v = lo + k*s
+        end if
+    end function grid_at
 
     ! A grid of coloured cells with edges of the caller's choosing. x and
     ! y are the edges, one more than the samples along that direction; if
@@ -4512,13 +4624,17 @@ contains
         logical, intent(in), optional :: counterclock
         integer :: is, i, n
         real(dp) :: rad, pd, ld, off
+        real(dp), allocatable :: v(:)
 
         call ensure_fig()
         n = size(values)
         if (n <= 0) return
-        if (any(values < 0.0_dp) .or. sum(values) <= 0.0_dp) return
+        ! A missing value is a wedge of nothing.
+        allocate (v(n))
+        v = merge(values, 0.0_dp, ieee_is_finite(values))
+        if (any(v < 0.0_dp) .or. sum(v) <= 0.0_dp) return
 
-        is = new_shape_series(SERIES_PIE, values, values)
+        is = new_shape_series(SERIES_PIE, v, v)
         if (is < 1) return
         allocate (ax(cur_i)%series(is)%pcolor(n))
         do i = 1, n
@@ -4560,12 +4676,12 @@ contains
             off = ax(cur_i)%series(is)%pexp(i)
             if (present(labels)) then
                 if (i <= size(labels)) &
-                    call add_pie_text(ax(cur_i)%series(is), values, i, labels(i), &
+                    call add_pie_text(ax(cur_i)%series(is), v, i, labels(i), &
                                       ld*rad, off*rad)
             end if
             if (present(autopct)) &
-                call add_pie_text(ax(cur_i)%series(is), values, i, &
-                                  pct_text(autopct, 100.0_dp*values(i)/sum(values)), &
+                call add_pie_text(ax(cur_i)%series(is), v, i, &
+                                  pct_text(autopct, 100.0_dp*v(i)/sum(v)), &
                                   pd*rad, off*rad)
         end do
 
@@ -5186,8 +5302,15 @@ contains
             nb = 10
             if (present(bins)) nb = bins
             if (nb < 1) return
-            lo = minval(x)
-            hi = maxval(x)
+            ! Missing values are in no bin and do not stretch the range.
+            lo = huge(1.0_dp)
+            hi = -huge(1.0_dp)
+            do i = 1, n
+                if (.not. ieee_is_finite(x(i))) cycle
+                lo = min(lo, x(i))
+                hi = max(hi, x(i))
+            end do
+            if (lo > hi) return
             if (hi <= lo) then
                 lo = lo - 0.5_dp
                 hi = hi + 0.5_dp
@@ -5211,6 +5334,7 @@ contains
             widths(i) = edges(i + 1) - edges(i)
         end do
         do i = 1, n
+            if (.not. ieee_is_finite(x(i))) cycle
             if (x(i) < edges(1) .or. x(i) > edges(nb + 1)) cycle
             k = bin_of(x(i), edges, nb)
             if (present(weights)) then

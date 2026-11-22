@@ -1,5 +1,6 @@
 ! Nice tick generation for linear and log axes.
 module fplotlib_ticks
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_style, only: dp
     implicit none
     private
@@ -77,6 +78,9 @@ contains
         real(dp) :: v0, v1
         integer :: nb, i, k, first, low, high, n, inside
 
+        ! A range made of missing data has no ticks.
+        n_ticks = 0
+        if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
         if (abs(hi - lo) < 1.0e-30_dp*max(1.0_dp, abs(lo), abs(hi))) then
@@ -190,6 +194,8 @@ contains
         real(dp) :: lo, hi, m, v
         integer :: nd, stride, k, n
 
+        n_ticks = 0
+        if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
         m = max(abs(lo), abs(hi))
@@ -230,6 +236,8 @@ contains
         real(dp) :: lo, hi, t
         integer :: i0, i1, i, n
 
+        n_ticks = 0
+        if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         lo = min(vmin, vmax)
         hi = max(vmin, vmax)
         if (lo <= 0.0_dp) lo = tiny(1.0_dp)
