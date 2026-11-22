@@ -849,6 +849,8 @@ contains
         cover = 1.0_dp
         if (paint%n_dash == 0) return
         period = sum(paint%dash(1:paint%n_dash))*scale
+        ! An odd number of lengths repeats only after going round twice.
+        if (mod(paint%n_dash, 2) == 1) period = 2.0_dp*period
         if (period < 0.5_dp) then
             cover = on_fraction(paint)
             if (paint%cap /= CAP_BUTT) &

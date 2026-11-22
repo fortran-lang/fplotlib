@@ -3007,12 +3007,12 @@ contains
         end if
     end subroutine check_margin_arg
 
-    ! The PNG encoder counts in default integers, so a raster of the figure
-    ! at dpi must have fewer than huge(1)/8 pixels, as the backend checks.
+    ! A raster of the figure at dpi has at most MAX_PNG_PIXELS pixels, as
+    ! the backend checks.
     subroutine check_pixels(proc, dpi)
         character(len=*), intent(in) :: proc
         real(dp), intent(in) :: dpi
-        if (max(1.0_dp, fig_w_in*dpi)*max(1.0_dp, fig_h_in*dpi) > real(huge(1)/8, dp)) then
+        if (max(1.0_dp, fig_w_in*dpi)*max(1.0_dp, fig_h_in*dpi) > MAX_PNG_PIXELS) then
             call contract_error(proc//": the figure has too many pixels at dpi "//arg_str(dpi))
         end if
     end subroutine check_pixels
@@ -7322,7 +7322,8 @@ contains
         real(dp), intent(in), optional :: dpi, pad_inches
         type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: data
-        real(dp) :: saved_dpi, vx, vy, vw, vh
+        real(dp) :: saved_dpi
+        type(status_t) :: local
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_arg("savefig", "pad_inches", pad_inches)
@@ -7346,28 +7347,23 @@ contains
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
         ! Cropped to what is drawn, a PNG's size depends on the drawing,
-        ! which the caller cannot know beforehand: one too large for the
-        ! encoder is a failure at run time, returned like a file that
-        ! cannot be written.
-        if (file_ext(filename) == "png" .and. present(bbox_inches)) then
-            call figure_window(bbox_inches, pad_inches, vx, vy, vw, vh)
-            if (.not. png_fits(vw, vh, fig_dpi)) then
-                fig_dpi = saved_dpi
-                call fail_run("savefig", ERROR_SIZE, "the cropped figure has too many pixels at this dpi", status)
-                return
-            end if
-        end if
+        ! which the caller cannot know beforehand: one too large is a
+        ! failure at run time, returned like a file that cannot be written.
         select case (file_ext(filename))
         case ("svg")
-            data = render_svg(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_svg(facecolor, transparent, bbox_inches, pad_inches, local)
         case ("pdf")
-            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_pdf(facecolor, transparent, bbox_inches, pad_inches, local)
         case ("png")
-            data = render_png(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_png(facecolor, transparent, bbox_inches, pad_inches, local)
         case ("eps")
-            data = render_eps(facecolor, transparent, bbox_inches, pad_inches)
+            data = render_eps(facecolor, transparent, bbox_inches, pad_inches, local)
         end select
         fig_dpi = saved_dpi
+        if (.not. local%ok()) then
+            call fail_run("savefig", local%code, local%message, status)
+            return
+        end if
         call save_bytes("savefig", filename, data, status)
     end subroutine savefig
 
@@ -7380,7 +7376,7 @@ contains
         type(status_t), intent(out), optional :: status
 
         if (present(status)) then
-            call status%set(code, proc//": "//message)
+            call status%set(code, message)
             return
         end if
         write (error_unit, "(a)") "fplotlib: "//proc//": "//message

@@ -64,6 +64,7 @@ contains
     subroutine size_status_check(nfail)
         integer, intent(inout) :: nfail
         type(status_t) :: st
+        character(len=:), allocatable :: png
 
         call figure()
         call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
@@ -71,6 +72,11 @@ contains
         call savefig("tests/out/missing_size.png", bbox_inches="tight", status=st)
         if (st%code /= ERROR_SIZE) then
             print "(a, i0)", "size status: expected ERROR_SIZE from a tight PNG too large, got ", st%code
+            nfail = nfail + 1
+        end if
+        png = render_png(bbox_inches="tight", status=st)
+        if (st%code /= ERROR_SIZE .or. len(png) /= 0) then
+            print "(a, i0)", "size status: expected ERROR_SIZE and nothing from render_png, got ", st%code
             nfail = nfail + 1
         end if
         call close()
@@ -194,6 +200,23 @@ contains
         full_walk = .false.
         if (max_diff(quick, full) > 2) then
             print "(a)", "dash shortcut: a dot of no length went missing"
+            bad = bad + 1
+        end if
+        ! A single length repeats every two: a 0.36 point pattern is 0.72
+        ! points long, past half a pixel, and is walked.
+        q = plain
+        q%stroked = .true.
+        q%line_width = 35.9_dp
+        q%cap = CAP_ROUND
+        q%n_dash = 1
+        q%dash(1) = 0.3594_dp
+        full_walk = .false.
+        quick = one_stroke([10.0_dp, 90.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], q)
+        full_walk = .true.
+        full = one_stroke([10.0_dp, 90.0_dp], [50.0_dp, 50.0_dp], [VERB_MOVE, VERB_LINE], q)
+        full_walk = .false.
+        if (max_diff(quick, full) > 2) then
+            print "(a)", "dash shortcut: a single-length pattern was taken for half its length"
             bad = bad + 1
         end if
         do k = 1, 400

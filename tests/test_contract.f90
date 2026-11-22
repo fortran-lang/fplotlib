@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 31
+    integer, parameter :: NCASE = 32
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -53,7 +53,13 @@ module test_contract
         "fplotlib: tick_format: decimals must be from 0 to 17, got 25", &
         "fplotlib: subplot: a grid of more than 10000 axes", &
         "fplotlib: figure: num must be from 1 to 100000", &
-        "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern"]
+        "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern", &
+        "fplotlib: savefig: the cropped figure has too many pixels at this dpi"]
+    ! The exit status each case must end with: 1 for a broken
+    ! precondition, 2 for a failure at run time with no status to take it.
+    integer, parameter :: CODE(NCASE) = [ &
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]
 
 contains
 
@@ -155,6 +161,10 @@ contains
             p%n_dash = 2
             p%dash(1:2) = [1.0_dp, 1.0_dp]
             call png%draw_path([0.0_dp, 10.0_dp], [5.0_dp, 5.0_dp], [VERB_MOVE, VERB_LINE], 2, p)
+        case (32)
+            call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+            call ylabel("y", labelpad=1.0e6_dp)
+            call savefig("tests/out/contract.png", bbox_inches="tight")
         end select
     end subroutine contract_case
 
@@ -185,9 +195,9 @@ contains
             end if
             ! Exit code 1 is a broken precondition; 2 is a file that could
             ! not be written.
-            if (cstat /= 0 .or. stat /= 1 .or. .not. found) then
-                print "(a, i0, a, i0, a)", "contract case ", k, ": exit status ", stat, &
-                    ", expected 1 and '"//err//"'"
+            if (cstat /= 0 .or. stat /= CODE(k) .or. .not. found) then
+                print "(a, i0, a, i0, a, i0, a)", "contract case ", k, ": exit status ", stat, &
+                    ", expected ", CODE(k), " and '"//err//"'"
                 nfail = nfail + 1
             end if
         end do

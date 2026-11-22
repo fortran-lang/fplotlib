@@ -15,7 +15,7 @@ module fplotlib_draw
     use fplotlib_ticks
     use fplotlib_svg
     use fplotlib_render
-    use fplotlib_status, only: contract_error
+    use fplotlib_status, only: contract_error, status_t, ERROR_SIZE
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: error_unit
     use fplotlib_backend_svg
@@ -4567,11 +4567,14 @@ contains
     ! Draw the whole figure into any backend. Everything above this point is
     ! format independent; the only thing render_svg and its PDF and PNG
     ! counterparts add is the choice of renderer.
-    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches)
+    ! status, when present, is ERROR_SIZE for a PNG cropped to too many
+    ! pixels, and nothing is drawn; it is ok otherwise.
+    subroutine render_figure(b, facecolor, transparent, bbox_inches, pad_inches, status)
         class(renderer_t), intent(inout) :: b
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         real(dp) :: W, H, vx, vy, vw, vh
         character(len=512) :: esc
         character(len=7) :: face
@@ -4588,12 +4591,19 @@ contains
         if (len_trim(face) == 0) face = rc_fig_face
         call clear_clip()
 
-        ! The cropped canvas of a PNG has to fit the encoder. savefig finds
-        ! out first and returns the failure; render_png has no status.
+        ! The cropped canvas of a PNG has to fit: how large it comes out
+        ! depends on the drawing, so a crop too large is returned.
         select type (b)
         type is (png_renderer_t)
-            if (.not. png_fits(vw, vh, b%dpi)) &
-                call contract_error("render_png: the cropped figure has too many pixels at this dpi")
+            if (.not. png_fits(vw, vh, b%dpi)) then
+                if (present(status)) then
+                    call status%set(ERROR_SIZE, "the cropped figure has too many pixels at this dpi")
+                else
+                    write (error_unit, "(a)") "fplotlib: render_png: the cropped figure has too many pixels at this dpi"
+                    error stop 2
+                end if
+                return
+            end if
         end select
 
         ! transparent drops the figure patch entirely
@@ -4698,53 +4708,70 @@ contains
 
     end subroutine figure_window
 
-    ! Whether a canvas of vw by vh points has few enough pixels at dpi for
-    ! the PNG encoder, which counts in default integers.
+    ! Whether a canvas of vw by vh points has at most MAX_PNG_PIXELS pixels
+    ! at dpi.
     logical function png_fits(vw, vh, dpi)
         real(dp), intent(in) :: vw, vh, dpi
-        png_fits = max(1.0_dp, vw*dpi/72.0_dp)*max(1.0_dp, vh*dpi/72.0_dp) <= real(huge(1)/8, dp)
+        png_fits = max(1.0_dp, vw*dpi/72.0_dp)*max(1.0_dp, vh*dpi/72.0_dp) <= MAX_PNG_PIXELS
     end function png_fits
 
-    function render_svg(facecolor, transparent, bbox_inches, pad_inches) result(svg)
+    function render_svg(facecolor, transparent, bbox_inches, pad_inches, status) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: svg
         type(svg_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         svg = r%bytes()
     end function render_svg
 
-    function render_pdf(facecolor, transparent, bbox_inches, pad_inches) result(pdf)
+    function render_pdf(facecolor, transparent, bbox_inches, pad_inches, status) result(pdf)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: pdf
         type(pdf_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         pdf = r%bytes()
     end function render_pdf
 
     ! Unlike the vector formats, dpi is not decorative here: it is what
     ! decides how many pixels the figure is rasterized into.
-    function render_eps(facecolor, transparent, bbox_inches, pad_inches) result(eps)
+    function render_eps(facecolor, transparent, bbox_inches, pad_inches, status) result(eps)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: eps
         type(eps_renderer_t) :: r
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, status)
         eps = r%bytes()
     end function render_eps
 
-    function render_png(facecolor, transparent, bbox_inches, pad_inches) result(png)
+    ! A PNG cropped with bbox_inches="tight" to more than MAX_PNG_PIXELS is a
+    ! failure the caller could not foresee: returned in status as
+    ! ERROR_SIZE, with an empty result, or without status the end of the
+    ! program with exit code 2. The vector formats take any size, and
+    ! their status is always ok.
+    function render_png(facecolor, transparent, bbox_inches, pad_inches, status) result(png)
         character(len=*), intent(in), optional :: facecolor, bbox_inches
         logical, intent(in), optional :: transparent
         real(dp), intent(in), optional :: pad_inches
+        type(status_t), intent(out), optional :: status
         character(len=:), allocatable :: png
         type(png_renderer_t) :: r
+        type(status_t) :: st
         call r%set_dpi(fig_dpi)
-        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches)
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, st)
+        if (present(status)) status = st
+        if (.not. st%ok()) then
+            png = ""
+            if (present(status)) return
+            write (error_unit, "(a)") "fplotlib: render_png: "//st%message
+            error stop 2
+        end if
         png = r%bytes()
     end function render_png
 

@@ -32,6 +32,10 @@ module fplotlib_backend_png
     ! the only place a pixel size is decided.
     real(dp), parameter :: DEFAULT_DPI = 100.0_dp
 
+    ! The most pixels a canvas may have: a hundred million, some 4 GB as
+    ! the rasterizer keeps them, well within what the encoder can count.
+    real(dp), parameter, public :: MAX_PNG_PIXELS = 1.0e8_dp
+
     type, extends(encoded_renderer_t) :: png_renderer_t
         type(canvas_t) :: cv
         type(pathbuf_t) :: pb
@@ -82,7 +86,7 @@ contains
         s = self%dpi/72.0_dp
         ! The encoder counts in default integers, and the RGBA bytes, the
         ! scanline filters and the worst-case deflate output have to fit.
-        if (max(1.0_dp, width*s)*max(1.0_dp, height*s) > real(huge(1)/8, dp)) &
+        if (max(1.0_dp, width*s)*max(1.0_dp, height*s) > MAX_PNG_PIXELS) &
             call contract_error("png: canvas has too many pixels at this dpi")
         wpx = max(1, nint(width*s))
         hpx = max(1, nint(height*s))
