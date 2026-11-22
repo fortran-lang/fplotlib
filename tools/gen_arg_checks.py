@@ -21,6 +21,8 @@ Each real argument is one of:
   finite    any finite value                  (angles, offsets, limits)
   margin    finite, > -0.5                    (margins)
   pad       finite, at most 1e9 either way    (pad_inches; checked whether cropped or not)
+  thresh    1e-300 to 1e300                   (symlog linthresh: its linear part must be normal)
+  linscale  finite, > 0, at most 1e6          (symlog linscale)
   layout    finite, at most 1000 either way    (fractions of the figure or axes)
   ratio     1e-3 to 1e3                        (a shape's width to height)
   errors    not negative, NaN allowed         (error bar lengths, arrays only)
@@ -49,7 +51,7 @@ BY_NAME = {
     'radius': 'size', 'arrowsize': 'size', 'density': 'size', 'linelength': 'size',
     'labelsep': 'size',
     'dpi': 'own', 'fps': 'own', 'ratio': 'own',
-    'linthresh': 'positive', 'linscale': 'positive', 'gamma': 'positive', 'base': 'positive',
+    'linthresh': 'thresh', 'linscale': 'linscale', 'gamma': 'positive', 'base': 'positive',
     'aspect': 'positive',
     'rotation': 'finite', 'angle': 'finite', 'startangle': 'finite', 'elev': 'finite',
     'azim': 'finite', 'labelpad': 'finite', 'offset': 'finite', 'vmin': 'finite',
@@ -120,7 +122,8 @@ IHELPER = {'count': 'check_count_arg', 'grid': 'check_grid_arg', 'nonneg': 'chec
            'digits': 'check_digits_arg'}
 IAHELPER = {'count': 'check_count_args', 'grid': 'check_grid_args'}
 HELPER = {'layout': 'check_layout_arg', 'ratio': 'check_ratio_arg', 'unit': 'check_unit_arg', 'size': 'check_size_arg', 'positive': 'check_positive_arg',
-          'finite': 'check_finite_arg', 'margin': 'check_margin_arg', 'pad': 'check_pad_arg'}
+          'finite': 'check_finite_arg', 'margin': 'check_margin_arg', 'pad': 'check_pad_arg',
+          'thresh': 'check_thresh_arg', 'linscale': 'check_linscale_arg'}
 AHELPER = {'errors': 'check_errors_arg', 'dashes': 'check_dashes_arg', 'size': 'check_size_args', 'positive': 'check_positive_args', 'finite': 'check_finite_args'}
 # Each block the script writes starts with this line; only such blocks are
 # ever removed, so a check written by hand is left alone.

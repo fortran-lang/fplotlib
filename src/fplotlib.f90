@@ -1862,7 +1862,7 @@ contains
         call check_finite_args("imshow", "boundaries", boundaries)
         call check_finite_arg("imshow", "vcenter", vcenter)
         call check_positive_arg("imshow", "gamma", gamma)
-        call check_positive_arg("imshow", "linthresh", linthresh)
+        call check_thresh_arg("imshow", "linthresh", linthresh)
 
         call ax_sca(self)
         call imshow(z, cmap, vmin, vmax, extent, origin, aspect, norm, &
@@ -1906,7 +1906,7 @@ contains
         call check_finite_arg("pcolormesh", "vmax", vmax)
         call check_finite_arg("pcolormesh", "vcenter", vcenter)
         call check_positive_arg("pcolormesh", "gamma", gamma)
-        call check_positive_arg("pcolormesh", "linthresh", linthresh)
+        call check_thresh_arg("pcolormesh", "linthresh", linthresh)
 
         call ax_sca(self)
         call pcolormesh(x, y, c, cmap, vmin, vmax, norm, vcenter, gamma, linthresh)
@@ -2200,8 +2200,8 @@ contains
         real(dp), intent(in), optional :: linthresh, linscale
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_positive_arg("set_xscale", "linthresh", linthresh)
-        call check_positive_arg("set_xscale", "linscale", linscale)
+        call check_thresh_arg("set_xscale", "linthresh", linthresh)
+        call check_linscale_arg("set_xscale", "linscale", linscale)
 
         call ax_sca(self)
         call set_xscale(name, linthresh, linscale)
@@ -2213,8 +2213,8 @@ contains
         real(dp), intent(in), optional :: linthresh, linscale
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_positive_arg("set_yscale", "linthresh", linthresh)
-        call check_positive_arg("set_yscale", "linscale", linscale)
+        call check_thresh_arg("set_yscale", "linthresh", linthresh)
+        call check_linscale_arg("set_yscale", "linscale", linscale)
 
         call ax_sca(self)
         call set_yscale(name, linthresh, linscale)
@@ -2832,22 +2832,15 @@ contains
         character(len=*), intent(in) :: what
         real(dp), intent(in) :: a, b
         real(dp), intent(out) :: lo, hi
-        real(dp) :: big
 
         if (.not. ieee_is_finite(a) .or. .not. ieee_is_finite(b)) then
             call contract_error(what//": limits must be finite")
         end if
-        lo = min(a, b)
-        hi = max(a, b)
-        big = max(abs(lo), abs(hi))
-        if (big < 1.0e6_dp*tiny(1.0_dp)) then
-            lo = -0.05_dp
-            hi = 0.05_dp
-        else if (hi - lo <= 1.0e-15_dp*big) then
-            lo = lo - 0.05_dp*abs(lo)
-            hi = hi + 0.05_dp*abs(hi)
-        end if
-        if (a > b) call swap(lo, hi)
+        ! Taken as given: limits too close together to draw between are
+        ! widened when the figure is drawn, by the rule of the axis scale,
+        ! which may be set after them.
+        lo = a
+        hi = b
     end subroutine user_limits
 
     ! Style arguments are checked where they come in, so that a bad one
@@ -2878,6 +2871,29 @@ contains
         if (.not. present(v)) return
         if (.not. ieee_is_finite(v)) call contract_error(proc//": "//name//" must be finite, got "//arg_str(v))
     end subroutine check_finite_arg
+
+    ! A symlog threshold: the linear part of the scale, which is linthresh
+    ! wide, must lie among normal doubles, and the log part reach to the
+    ! largest double without overflowing.
+    subroutine check_thresh_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v < 1.0e-300_dp .or. v > 1.0e300_dp) then
+            call contract_error(proc//": "//name//" must be from 1e-300 to 1e300, got "//arg_str(v))
+        end if
+    end subroutine check_thresh_arg
+
+    ! A symlog linscale, which with linthresh at most 1e300 keeps the
+    ! transformed axis finite.
+    subroutine check_linscale_arg(proc, name, v)
+        character(len=*), intent(in) :: proc, name
+        real(dp), intent(in), optional :: v
+        if (.not. present(v)) return
+        if (.not. ieee_is_finite(v) .or. v <= 0.0_dp .or. v > 1.0e6_dp) then
+            call contract_error(proc//": "//name//" must be positive and at most 1e6, got "//arg_str(v))
+        end if
+    end subroutine check_linscale_arg
 
     subroutine check_positive_arg(proc, name, v)
         character(len=*), intent(in) :: proc, name
@@ -3250,8 +3266,8 @@ contains
         real(dp), intent(in), optional :: linthresh, linscale
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_positive_arg("set_xscale", "linthresh", linthresh)
-        call check_positive_arg("set_xscale", "linscale", linscale)
+        call check_thresh_arg("set_xscale", "linthresh", linthresh)
+        call check_linscale_arg("set_xscale", "linscale", linscale)
 
         call ensure_fig()
         ax(cur_i)%xsc = make_scale(name, linthresh, linscale)
@@ -3262,8 +3278,8 @@ contains
         real(dp), intent(in), optional :: linthresh, linscale
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
-        call check_positive_arg("set_yscale", "linthresh", linthresh)
-        call check_positive_arg("set_yscale", "linscale", linscale)
+        call check_thresh_arg("set_yscale", "linthresh", linthresh)
+        call check_linscale_arg("set_yscale", "linscale", linscale)
 
         call ensure_fig()
         ax(cur_i)%ysc = make_scale(name, linthresh, linscale)
@@ -3427,7 +3443,7 @@ contains
         call check_finite_args("imshow", "boundaries", boundaries)
         call check_finite_arg("imshow", "vcenter", vcenter)
         call check_positive_arg("imshow", "gamma", gamma)
-        call check_positive_arg("imshow", "linthresh", linthresh)
+        call check_thresh_arg("imshow", "linthresh", linthresh)
 
         call ensure_fig()
         nr = size(z, 1)
@@ -4449,7 +4465,7 @@ contains
         call check_finite_arg("pcolormesh", "vmax", vmax)
         call check_finite_arg("pcolormesh", "vcenter", vcenter)
         call check_positive_arg("pcolormesh", "gamma", gamma)
-        call check_positive_arg("pcolormesh", "linthresh", linthresh)
+        call check_thresh_arg("pcolormesh", "linthresh", linthresh)
 
         call ensure_fig()
         nr = size(c, 1)

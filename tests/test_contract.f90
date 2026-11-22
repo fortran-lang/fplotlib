@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 34
+    integer, parameter :: NCASE = 35
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -41,7 +41,7 @@ module test_contract
         "fplotlib: subplots_adjust: left must be finite", &
         "fplotlib: pie: values must not be negative", &
         "fplotlib: scatter: s must be finite and nonnegative", &
-        "fplotlib: set_xscale: linthresh must be finite and positive", &
+        "fplotlib: set_xscale: linthresh must be from 1e-300 to 1e300", &
         "fplotlib: plot: dashes must not be all zero", &
         "fplotlib: tick_params: rotation must be finite", &
         "fplotlib: plot: dashes must be finite and nonnegative", &
@@ -56,12 +56,13 @@ module test_contract
         "fplotlib: paint: a pen with round or square dash ends may be at most 100 times its dash pattern", &
         "fplotlib: savefig: the cropped figure has too many pixels at this dpi", &
         "fplotlib: render_png: the figure has too many pixels at this dpi", &
-        "fplotlib: render_svg: pad_inches must be finite and at most 1e9 inches"]
+        "fplotlib: render_svg: pad_inches must be finite and at most 1e9 inches", &
+        "fplotlib: set_yscale: linthresh must be from 1e-300 to 1e300"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1]
 
 contains
 
@@ -176,6 +177,10 @@ contains
             ! Checked in render_svg's own name, cropped or not.
             call figure()
             b = render_svg(pad_inches=2.0e9_dp)
+        case (35)
+            ! A symlog threshold whose linear part would be subnormal.
+            call figure()
+            call set_yscale("symlog", linthresh=1.0e-310_dp)
         end select
     end subroutine contract_case
 

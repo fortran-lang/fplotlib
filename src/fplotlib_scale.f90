@@ -6,6 +6,7 @@
 ! its own `is this a log axis` flag.
 module fplotlib_scale
     use fplotlib_style, only: dp
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
     private
 
@@ -42,7 +43,12 @@ contains
             if (a <= s%linthresh) then
                 u = v * linscale_adj(s)
             else
-                u = sign(s%linthresh * (linscale_adj(s) + log10(a / s%linthresh)), v)
+                if (ieee_is_finite(a / s%linthresh)) then
+                    u = sign(s%linthresh * (linscale_adj(s) + log10(a / s%linthresh)), v)
+                else
+                    ! a so far past linthresh that the ratio overflows.
+                    u = sign(s%linthresh * (linscale_adj(s) + log10(a) - log10(s%linthresh)), v)
+                end if
             end if
         case default
             u = v

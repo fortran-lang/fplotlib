@@ -59,6 +59,8 @@ no longer be written. Going past one is a broken precondition, and stops:
 | `streamplot` `density` | at most 10 |
 | `subplots_adjust` fractions, `colorbar` `fraction`, `pad`, `shrink` | at most 1000 in size |
 | `colorbar` `aspect` | 0.001 to 1000 |
+| symlog `linthresh` (`set_xscale`, `set_yscale`, `imshow`, `pcolormesh`) | 1e-300 to 1e300 |
+| symlog `linscale` | at most 1e6 |
 | Lengths in a dash pattern, `plot` `dashes` included | at most `MAX_DASH` (8) |
 | A renderer pen with round or square dash ends, in every format | at most `MAX_PEN_PER_DASH` (100) times its dash pattern |
 | A PNG figure, `figsize` times `dpi`, rounded to whole pixels | at most `MAX_PNG_PIXELS` (1e8) pixels, some 4 GB as rasterized |

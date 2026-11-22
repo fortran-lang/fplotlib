@@ -43,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 93
+    integer, parameter :: NCASE = 97
 
 contains
 
@@ -137,6 +137,37 @@ contains
                 nfail = nfail + 1
             end if
         end do
+        ! Equal limits near the largest double stay finite, and limits near
+        ! zero on a log axis stay positive.
+        call figure()
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call ylim(1.75e308_dp, 1.75e308_dp)
+        call get_ylim(lo, hi)
+        if (.not. (ieee_is_finite(lo) .and. ieee_is_finite(hi) .and. hi > lo)) then
+            print "(a, 2es12.4)", "far ticks: equal limits of 1.75e308 became ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
+        call figure()
+        call semilogy([0.0_dp, 1.0_dp], [2.0e-303_dp, 8.0e-303_dp])
+        call ylim(1.0e-303_dp, 1.0e-302_dp)
+        call get_ylim(lo, hi)
+        if (lo /= 1.0e-303_dp .or. hi /= 1.0e-302_dp) then
+            print "(a, 2es12.4)", "far ticks: log limits 1e-303 to 1e-302 became ", lo, hi
+            nfail = nfail + 1
+        end if
+        call close()
+        ! A symlog axis with a small threshold takes its margin from the data,
+        ! not from a unit its own units are far smaller than.
+        call figure()
+        call plot([1.0_dp, 2.0_dp, 3.0_dp], [-1.0_dp, 0.5_dp, 1.0e200_dp])
+        call set_yscale("symlog", linthresh=1.0e-200_dp)
+        call get_ylim(lo, hi)
+        if (lo < -1.0e40_dp .or. lo > -1.0_dp) then
+            print "(a, es12.4)", "far ticks: symlog with linthresh 1e-200 autoscaled down to ", lo
+            nfail = nfail + 1
+        end if
+        call close()
         ! A constant series near the largest double has finite log limits.
         call figure()
         call semilogy([0.0_dp, 1.0_dp], [1.0e308_dp, 1.0e308_dp])
@@ -689,6 +720,14 @@ contains
         ! the largest double.
         case (92); call bar(t(1:3), [1.0e-320_dp, 1.0e-300_dp, 1.0e-310_dp]); call set_yscale("log")
         case (93); call semilogy(t(1:2), [1.0e308_dp, 1.0e308_dp])
+        ! Equal limits near the largest double, limits near zero on a log
+        ! axis, and symlog with a small threshold and data up to 1e300.
+        case (94); call plot(x, x); call ylim(1.75e308_dp, 1.75e308_dp)
+        case (95); call semilogy(t(1:2), [2.0e-303_dp, 8.0e-303_dp]); call ylim(1.0e-303_dp, 1.0e-302_dp)
+        case (96); call plot(t(1:3), [-1.0e300_dp, 0.0_dp, 1.0e300_dp])
+            call set_yscale("symlog", linthresh=1.0e-10_dp)
+        case (97); call imshow(reshape([0.0_dp, 1.0_dp, 1.0e300_dp, -1.0e300_dp], [2, 2]), &
+                               norm="symlog", linthresh=1.0e-10_dp); call colorbar()
         end select
     end subroutine draw_case
 

@@ -919,6 +919,7 @@ contains
         if (a%xlim_set) then
             xmin = a%xmin_user
             xmax = a%xmax_user
+            call nonsingular_limits(xmin, xmax, a%xsc)
         else
             ! An axes with nothing to autoscale to keeps the plain unit
             ! square matplotlib gives it, margins and all.
@@ -933,6 +934,7 @@ contains
         if (a%ylim_set) then
             ymin = a%ymin_user
             ymax = a%ymax_user
+            call nonsingular_limits(ymin, ymax, a%ysc)
         else
             if (anyy) then
                 call expand_limits(ymin, ymax, a%ysc, a%ymargin, sticky_lo, sticky_hi)
@@ -1056,6 +1058,44 @@ contains
         v = t
     end subroutine swap
 
+    ! Limits set by hand that are too close together to draw between, as
+    ! matplotlib's locators widen them by their nonsingular: on a linear
+    ! axis, limits near zero become -0.05 to 0.05 and equal ones grow by 5%
+    ! of their size; on a log axis, equal ones grow a decade each way. The
+    ! result stops at the ends of the scale; descending limits stay so.
+    pure subroutine nonsingular_limits(lo, hi, sc)
+        real(dp), intent(inout) :: lo, hi
+        type(scale_t), intent(in) :: sc
+        real(dp) :: a, b, big
+        logical :: flip
+
+        flip = lo > hi
+        a = min(lo, hi)
+        b = max(lo, hi)
+        if (sc%kind == SCALE_LOG) then
+            if (a > 0.0_dp .and. b <= a*(1.0_dp + 1.0e-12_dp)) then
+                a = max(tiny(1.0_dp), 0.1_dp*a)
+                b = min(huge(1.0_dp), 10.0_dp*b)
+            end if
+        else
+            big = max(abs(a), abs(b))
+            if (big < 1.0e6_dp*tiny(1.0_dp)) then
+                a = -0.05_dp
+                b = 0.05_dp
+            else if (b - a <= 1.0e-15_dp*big) then
+                a = max(-huge(1.0_dp), a - 0.05_dp*abs(a))
+                b = min(huge(1.0_dp), b + 0.05_dp*abs(b))
+            end if
+        end if
+        if (flip) then
+            lo = b
+            hi = a
+        else
+            lo = a
+            hi = b
+        end if
+    end subroutine nonsingular_limits
+
     ! Pad a data range by the axis margin. A sticky edge (the bar
     ! baseline) is left exactly where it is.
     subroutine expand_limits(lo, hi, sc, margin, sticky_lo, sticky_hi)
@@ -1063,7 +1103,7 @@ contains
         type(scale_t), intent(in) :: sc
         real(dp), intent(in) :: margin
         logical, intent(in) :: sticky_lo, sticky_hi
-        real(dp) :: u0, u1, d
+        real(dp) :: u0, u1, d, thr
 
         if (sc%kind == SCALE_LOG) then
             if (lo < tiny(1.0_dp)) lo = tiny(1.0_dp)
@@ -1094,7 +1134,11 @@ contains
             if (.not. sticky_hi) hi = scale_inv(sc, min(huge(1.0_dp), u1 + 2.0_dp*margin*d))
             return
         end if
-        if (abs(d) < 1.0e-30_dp) d = 1.0_dp
+        ! A symlog axis measures in units of linthresh, which may be as small
+        ! as 1e-300, so its idea of nothing is that much smaller too.
+        thr = 1.0e-30_dp
+        if (sc%kind == SCALE_SYMLOG) thr = 1.0e-30_dp*min(1.0_dp, sc%linthresh)
+        if (abs(d) < thr) d = 1.0_dp
         if (.not. sticky_lo) lo = scale_inv(sc, u0 - margin * d)
         if (.not. sticky_hi) hi = scale_inv(sc, u1 + margin * d)
         ! A margin past the largest double, as on a log axis of data up to
@@ -2944,7 +2988,12 @@ contains
         if (abs(v) <= lt) then
             u = v*adj
         else
-            u = sign(lt*(adj + log10(abs(v)/lt)), v)
+            if (ieee_is_finite(abs(v)/lt)) then
+                u = sign(lt*(adj + log10(abs(v)/lt)), v)
+            else
+                ! v so far past linthresh that the ratio overflows.
+                u = sign(lt*(adj + log10(abs(v)) - log10(lt)), v)
+            end if
         end if
     end function symlog_fwd
 
@@ -3370,6 +3419,9 @@ contains
         type(axes_t), intent(in) :: a
         real(dp), intent(out) :: lims(6)
         real(dp), parameter :: MARG(3) = [0.05_dp, 0.05_dp, 0.0_dp]
+        ! A 3D axes is linear on every axis: a scale_t is linear unless
+        ! set otherwise.
+        type(scale_t) :: lin
         real(dp) :: lo(3), hi(3), c, d
         logical :: have
         integer :: i, k
@@ -3432,10 +3484,14 @@ contains
             lims(2*i) = hi(i)
         end do
 
-        ! Limits set by hand get none of that: they are taken as given.
+        ! Limits set by hand get none of that: they are taken as given,
+        ! unless too close together to draw between.
         if (a%xlim_set) lims(1:2) = [a%xmin_user, a%xmax_user]
         if (a%ylim_set) lims(3:4) = [a%ymin_user, a%ymax_user]
         if (a%zlim_set) lims(5:6) = [a%zmin_user, a%zmax_user]
+        do i = 1, 3
+            call nonsingular_limits(lims(2*i - 1), lims(2*i), lin)
+        end do
     end subroutine limits3d
 
     ! Widens [lo, hi] to take in the finite values of low and high, the

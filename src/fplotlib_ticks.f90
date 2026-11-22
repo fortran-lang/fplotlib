@@ -141,6 +141,8 @@ contains
         ! does not autoscale its limits has no use for those.
         k = 0
         do i = 1, n
+            ! A tick a step past the largest double is no tick.
+            if (.not. ieee_is_finite(ticks(i))) cycle
             if (ticks(i) >= lo - 1.0e-10_dp*(hi - lo) .and. &
                 ticks(i) <= hi + 1.0e-10_dp*(hi - lo)) then
                 k = k + 1
@@ -675,7 +677,8 @@ contains
             amin = min(abs(lmin), abs(lmax))
             amax = max(abs(lmin), abs(lmax))
             sgn = sign(1.0_dp, lmin)
-            kmax = ceiling(log10(amax))
+            ! Ticks are finite; a range of them is too.
+            kmax = ceiling(log10(min(amax, huge(1.0_dp))))
             ! The smallest power of ten at which the two ends still agree.
             k = kmax
             do while (k > kmax - 32)
