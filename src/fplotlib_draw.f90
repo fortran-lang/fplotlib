@@ -1093,7 +1093,10 @@ contains
         ! 1e300, stops at it; on a log axis the low end stays positive.
         if (.not. ieee_is_finite(hi) .and. ieee_is_finite(u1)) hi = huge(1.0_dp)
         if (.not. ieee_is_finite(lo) .and. ieee_is_finite(u0)) lo = -huge(1.0_dp)
-        if (sc%kind == SCALE_LOG .and. lo <= 0.0_dp) lo = tiny(1.0_dp)
+        ! A log margin below the least positive double: the data's own low
+        ! end, which may be subnormal, or failing that the least normal
+        ! double.
+        if (sc%kind == SCALE_LOG .and. lo <= 0.0_dp) lo = min(tiny(1.0_dp), scale_inv(sc, u0))
     end subroutine expand_limits
 
     pure function map_x(x, xmin, xmax, ax_l, ax_w, sc) result(px)

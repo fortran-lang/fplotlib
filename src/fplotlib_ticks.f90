@@ -95,6 +95,12 @@ contains
             lo = lo - 1.0_dp
             hi = hi + 1.0_dp
         end if
+        ! A range a few ulps wide, as matplotlib's nonsingular widens it
+        ! before its locator: its ticks could not be told apart otherwise.
+        if (hi - lo <= 1.0e-14_dp*max(abs(lo), abs(hi))) then
+            lo = max(-huge(1.0_dp), lo - 1.0e-13_dp*abs(lo))
+            hi = min(huge(1.0_dp), hi + 1.0e-13_dp*abs(hi))
+        end if
         nb = max(1, min(nbins, MAX_TICKS - 1))
 
         call scale_range(lo, hi, nb, scal, off)
@@ -159,7 +165,7 @@ contains
 
         dv = abs(vmax - vmin)
         maxabs = max(abs(vmin), abs(vmax))
-        if (maxabs == 0.0_dp .or. dv/maxabs < 1.0e-12_dp) then
+        if (maxabs == 0.0_dp .or. dv == 0.0_dp) then
             scal = 1.0_dp
             off = 0.0_dp
             return
@@ -181,8 +187,7 @@ contains
     pure function sci_str(v) result(s)
         real(dp), intent(in) :: v
         character(len=32) :: s
-        character(len=24) :: m
-        integer :: e, k
+        integer :: e
         real(dp) :: f
 
         if (v == 0.0_dp .or. .not. ieee_is_finite(v)) then
@@ -192,6 +197,38 @@ contains
         e = floor(log10(abs(v)))
         f = v/10.0_dp**e
         if (.not. ieee_is_finite(f)) f = (v/10.0_dp)/10.0_dp**(e - 1)
+        s = sci_join(f, e)
+    end function sci_str
+
+    ! v/w times 10**shift in exponent form, as sci_str writes it, worked
+    ! out in logs for a value past the largest double, as a percentage of
+    ! a huge value is.
+    pure function sci_ratio(v, w, shift) result(s)
+        real(dp), intent(in) :: v, w
+        integer, intent(in) :: shift
+        character(len=32) :: s
+        real(dp) :: lg
+        integer :: e
+        if (v == 0.0_dp .or. w == 0.0_dp .or. .not. ieee_is_finite(v) .or. .not. ieee_is_finite(w)) then
+            s = "0"
+            return
+        end if
+        lg = log10(abs(v)) - log10(abs(w)) + real(shift, dp)
+        e = floor(lg)
+        s = sci_join(sign(10.0_dp**(lg - real(e, dp)), v*w), e)
+    end function sci_ratio
+
+    ! The mantissa f, from 1 to 10, and exponent e as 1.2e308: at most
+    ! four decimals, trailing zeros dropped.
+    pure function sci_join(f0, e0) result(s)
+        real(dp), intent(in) :: f0
+        integer, intent(in) :: e0
+        character(len=32) :: s
+        character(len=24) :: m
+        real(dp) :: f
+        integer :: e, k
+        f = f0
+        e = e0
         ! Rounding to four decimals can carry into the next decade.
         if (abs(anint(f*1.0e4_dp)/1.0e4_dp) >= 10.0_dp) then
             e = e + 1
@@ -204,7 +241,7 @@ contains
         end do
         if (m(k:k) == ".") k = k - 1
         write (s, "(A,'e',I0)") m(1:k), e
-    end function sci_str
+    end function sci_join
 
     ! log10 of the distance between a and b, worked out from half of each
     ! where the distance itself is past the largest double, as it is for
@@ -391,7 +428,9 @@ contains
 
         av = abs(v)
         if (is_log .or. (av > 0.0_dp .and. (av >= 1.0e4_dp .or. av < 1.0e-3_dp))) then
-            if (av < 1.0e-30_dp) then
+            ! A linear tick this near zero is zero with rounding left on it;
+            ! a log tick is a decade like any other.
+            if (av < 1.0e-30_dp .and. .not. (is_log .and. av > 0.0_dp)) then
                 s = "0"
                 n = 1
                 return
@@ -650,7 +689,7 @@ contains
             end if
         else
             amax = maxval(abs(locs(1:n)))
-            if (amax > 0.0_dp) oom = floor(log10(amax))
+            if (amax > 0.0_dp .and. ieee_is_finite(amax)) oom = floor(log10(amax))
         end if
         if (oom > lo_lim .and. oom < hi_lim) oom = 0
     end subroutine tick_offset
@@ -740,7 +779,9 @@ contains
         if (base <= 0.0_dp) return
         if (.not. ieee_is_finite(vmin) .or. .not. ieee_is_finite(vmax)) return
         ! Counted in reals: the multiples of a small base near a large
-        ! value, a Unix time say, are past any integer.
+        ! value, a Unix time say, are past any integer. Data so far out
+        ! that it is past the largest double in steps of base has none.
+        if (.not. ieee_is_finite(vmin/base) .or. .not. ieee_is_finite(vmax/base)) return
         k0 = -real_floor(-(min(vmin, vmax)/base - 1.0e-9_dp))
         k1 = real_floor(max(vmin, vmax)/base + 1.0e-9_dp)
         k = k0
@@ -766,6 +807,9 @@ contains
 
         if (dec <= 0 .and. abs(v/whole*100.0_dp) < 1.0e18_dp) then
             write (tmp, "(I0)") nint(v/whole*100.0_dp, int64)
+        else if (.not. ieee_is_finite(v/whole*100.0_dp)) then
+            ! A percentage past the largest double, worked out in logs.
+            tmp = sci_ratio(v, whole, 2)
         else if (dec <= 0 .or. log10(max(abs(v/whole*100.0_dp), 1.0_dp)) + dec + 3.0_dp > 24.0_dp) then
             ! Past what the fixed field holds.
             tmp = sci_str(v/whole*100.0_dp)

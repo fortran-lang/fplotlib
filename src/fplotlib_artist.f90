@@ -1102,6 +1102,9 @@ contains
         ang = 0.0_dp
         ! The API turns angles clockwise, matplotlib counterclockwise.
         if (present(rot)) ang = -rot
+        ! Reduced once here, so that glyphs and the rules of a formula turn
+        ! by the same angle.
+        if (abs(ang) > 360.0_dp) ang = turn_angle(ang)
         if (len_trim(s) == 0) return
         if (math_is(s)) then
             call append_math(b, x, y, s, f, brush(color), an, bl, ang)

@@ -18,7 +18,7 @@ module test_missing
     use fplotlib_backend_png, only: png_renderer_t, png_pixels
     use fplotlib_raster, only: full_walk
     use fplotlib_ticks, only: multiple_ticks, format_grouped, format_percent, MAX_TICKS, log_ticks, &
-                              format_tick_to
+                              format_tick_to, linear_ticks
     use fplotlib_dates, only: num_date
     use fplotlib_contour, only: contour_levels
     implicit none
@@ -43,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 87
+    integer, parameter :: NCASE = 90
 
 contains
 
@@ -107,6 +107,25 @@ contains
                 nfail = nfail + 1
             end if
         end do
+        ! A narrow range far from zero is ticked across, not in a heap of
+        ! MAX_TICKS steps of one at its low end.
+        call linear_ticks(1.7e18_dp, 1.7e18_dp + 1.0e6_dp, 8, t, n)
+        if (n < 3 .or. n > 12 .or. t(n) - t(1) < 5.0e5_dp) then
+            print "(a, i0)", "far ticks: a range of 1e6 at 1.7e18 had ticks ", n
+            nfail = nfail + 1
+        end if
+        ! A percentage past the largest double, and a log decade below
+        ! 1e-30, are labelled with their values.
+        call format_percent(1.0e307_dp, 1.0_dp, 0, s, n)
+        if (s(1:n) /= "1e309%") then
+            print "(a)", "far ticks: format_percent wrote "//s(1:n)
+            nfail = nfail + 1
+        end if
+        call format_tick_to(1.0e-69_dp, .true., s, n)
+        if (index(s(1:n), "-69") == 0) then
+            print "(a)", "far ticks: a log tick of 1e-69 was written "//s(1:n)
+            nfail = nfail + 1
+        end if
         ! Contour levels of data far from zero in small steps cover it.
         call contour_levels(1.0e9_dp, 1.0e9_dp + 0.5_dp, 7, lv, n)
         if (n < 2 .or. lv(1) > 1.0e9_dp .or. lv(n) < 1.0e9_dp + 0.5_dp .or. lv(1) < 1.0e9_dp - 1.0_dp) then
@@ -628,6 +647,13 @@ contains
                                           -huge(1.0_dp)], [2, 2])); call colorbar()
         case (86); call plot(x, x); call text(1.0_dp, 1.0_dp, "turned", rotation=1.0e16_dp)
         case (87); call scatter(t(1:3), t(1:3), cvals=[0.0_dp, 3.0e20_dp, 1.0e20_dp]); call colorbar()
+        ! Ticks every half near the lowest double, a range a millionth of a
+        ! millionth of its size, as nanosecond times are, and percentages
+        ! past the largest double.
+        case (88); call plot([0.0_dp, 1.0_dp], [-1.7e308_dp, 1.0_dp]); call tick_locator("y", base=0.5_dp)
+        case (89); call plot([0.0_dp, 1.0_dp], [1.7e18_dp, 1.7e18_dp + 1.0e6_dp])
+        case (90); call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0e307_dp])
+            call tick_format("y", style="percent", whole=1.0_dp)
         end select
     end subroutine draw_case
 
