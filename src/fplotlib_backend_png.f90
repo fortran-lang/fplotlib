@@ -300,7 +300,7 @@ contains
         integer :: i, n
 
         rp = r*self%cv%scale
-        n = max(12, min(256, ceiling(rp*3.0_dp)))
+        n = max(12, min(256, ceiling(min(rp, 100.0_dp)*3.0_dp)))
         call pb_reset(self%pb)
         do i = 1, n
             a = TWOPI*real(i - 1, dp)/real(n, dp)
