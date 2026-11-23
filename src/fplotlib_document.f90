@@ -34,13 +34,16 @@ contains
         type(png_renderer_t) :: png
         type(eps_renderer_t) :: eps
         real(dp) :: w, h, resolution
+        character(len=:), allocatable :: fmt
         integer :: p, n
         n = document%page_count()
         if (n == 0) call contract_error("export_document: no pages")
         ! The resolution savefig and the PNG backend take by default.
         resolution = 100.0_dp
         if (present(dpi)) resolution = dpi
-        select case (format)
+        ! In any case, as save_document takes a file's extension.
+        fmt = lower(format)
+        select case (fmt)
         case ("pdf")
             allocate (pending(1))
             do p = 1, n
@@ -59,7 +62,7 @@ contains
             do p = 1, n
                 pending(p)%page = p
                 call document%page_size(p, w, h)
-                select case (format)
+                select case (fmt)
                 case ("svg")
                     call svg%open_canvas(w, h)
                     call document%draw_page(p, svg)
@@ -133,4 +136,13 @@ contains
         end if
     end function page_file
 
+    pure function lower(s) result(t)
+        character(len=*), intent(in) :: s
+        character(len=len(s)) :: t
+        integer :: i
+        t = s
+        do i = 1, len(s)
+            if (s(i:i) >= "A" .and. s(i:i) <= "Z") t(i:i) = achar(iachar(s(i:i)) + 32)
+        end do
+    end function lower
 end module fplotlib_document

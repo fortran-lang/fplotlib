@@ -412,7 +412,9 @@ contains
         ink%filled = .true.
         if (present(paint)) ink = paint
         call math_formula(s, size, display, run, rules, w, h, d, context=context)
-        call recorder%open_canvas(w, h + d)
+        ! A formula of negative space, \! say, is narrower than nothing:
+        ! its frame is empty, and the glyphs stay where they are.
+        call recorder%open_canvas(max(0.0_dp, w), max(0.0_dp, h + d))
         call recorder%draw_glyphs(0.0_dp, h, run, ink, 0.0_dp)
         do k = 1, rules%n
             call recorder%draw_rect(rules%x(k), h + rules%y(k), rules%w(k), rules%h(k), ink)

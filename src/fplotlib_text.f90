@@ -190,7 +190,10 @@ contains
         if (.not. allocated(run%gid)) then
             allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
                       run%x(16), run%y(16), run%size(16))
-        else if (run%n >= size(run%gid)) then
+        else
+            call fill_mapping(run)
+        end if
+        if (run%n >= size(run%gid)) then
             cap = max(16, 2*size(run%gid))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
@@ -224,6 +227,50 @@ contains
         run%size(run%n) = fs
     end subroutine run_add
 
+    ! A run built by hand may leave out each glyph's font and source range,
+    ! which the renderer contract takes as optional: they are added, as
+    ! long as gid, each glyph's face and no source, before a glyph or a
+    ! mapping is added to the run.
+    subroutine fill_mapping(run)
+        type(glyphrun_t), intent(inout) :: run
+        integer, allocatable :: ti(:)
+        integer :: cap, i, m
+
+        cap = size(run%gid)
+        if (.not. allocated(run%font)) then
+            allocate (run%font(cap))
+            do i = 1, min(run%n, cap)
+                run%font(i) = glyph_face(run%gid(i))
+            end do
+        else if (size(run%font) < cap) then
+            allocate (ti(cap))
+            m = min(run%n, size(run%font))
+            ti(1:m) = run%font(1:m)
+            do i = m + 1, min(run%n, cap)
+                ti(i) = glyph_face(run%gid(i))
+            end do
+            call move_alloc(ti, run%font)
+        end if
+        call fill_zero(run%first)
+        call fill_zero(run%last)
+    contains
+        subroutine fill_zero(a)
+            integer, allocatable, intent(inout) :: a(:)
+            integer, allocatable :: grown(:)
+            integer :: k
+            if (.not. allocated(a)) then
+                allocate (a(cap))
+                a = 0
+            else if (size(a) < cap) then
+                allocate (grown(cap))
+                grown = 0
+                k = min(run%n, size(a))
+                grown(1:k) = a(1:k)
+                call move_alloc(grown, a)
+            end if
+        end subroutine fill_zero
+    end subroutine fill_mapping
+
     ! A cluster may contain several glyphs and several Unicode characters.
     subroutine run_map(run, first_glyph, last_glyph, text, math)
         type(glyphrun_t), intent(inout) :: run
@@ -241,6 +288,7 @@ contains
         run%text = run%text//text
         if (present(math)) run%source_math = run%source_math .or. math
         if (first_glyph > last_glyph) return
+        call fill_mapping(run)
         run%first(first_glyph:last_glyph) = offset + 1
         run%last(first_glyph:last_glyph) = len(run%text)
     end subroutine run_map

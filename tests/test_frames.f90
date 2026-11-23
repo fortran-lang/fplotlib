@@ -25,8 +25,39 @@ contains
         call logical_text(nfail)
         call recorded_source(nfail)
         call captured_plot(nfail)
+        call bare_runs_and_formulas(nfail)
         print "(a,i0)", "owned frames: failures = ", nfail
     end subroutine frames_check
+
+    ! A glyph run built by hand without each glyph's font and source,
+    ! which the renderer contract takes as optional, can still be added to
+    ! by text_layout; and a formula narrower than nothing, of negative
+    ! space alone, makes an empty frame rather than stopping.
+    subroutine bare_runs_and_formulas(nfail)
+        integer, intent(inout) :: nfail
+        type(glyphrun_t) :: run
+        type(frame_t) :: frame
+        real(dp) :: advance, w, h
+
+        allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
+        run%gid = 1
+        run%x = 0.0_dp
+        run%y = 0.0_dp
+        run%size = 10.0_dp
+        run%n = 1
+        call text_layout("BC", 10.0_dp, FACE_REGULAR, 5.0_dp, 0.0_dp, run, advance)
+        call check(run%n == 3, "text_layout adds to a run without fonts or source ranges", nfail)
+        if (run%n == 3) then
+            call check(run%first(1) == 0 .and. run%last(1) == 0 .and. &
+                       all(run%first(2:3) == [1, 2]), "the hand-built glyph keeps no source", nfail)
+        end if
+        call math_frame("x\!\!\!\!\!\!\!", 10.0_dp, .false., frame)
+        call frame%metrics(w, h)
+        call check(w == 0.0_dp, "a formula of negative width makes a frame of no width", nfail)
+        call math_frame("\!", 10.0_dp, .false., frame)
+        call frame%metrics(w, h)
+        call check(w == 0.0_dp .and. h >= 0.0_dp, "negative space alone makes an empty frame", nfail)
+    end subroutine bare_runs_and_formulas
 
     subroutine check(ok, message, nfail)
         logical, intent(in) :: ok

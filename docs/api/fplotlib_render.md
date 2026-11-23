@@ -46,7 +46,8 @@ writes what it holds to a millionth of a point on the page, as far as the
 viewer computes that finely; many PDF and PostScript readers work in single
 precision. `frame_decimals(r)` gives that count for the frames open now,
 and `frame_decimals(r, outer=.true.)` for those around the innermost, for a
-custom encoder to use the same.
+custom encoder to use the same; the cap at seventeen significant digits is
+`fmt_num`'s, which a custom formatter applies itself.
 
 The PNG backend draws a frame's content transformed and clipped exactly; a
 paint clip inside a clipped frame is cut as geometry, so its edges are
