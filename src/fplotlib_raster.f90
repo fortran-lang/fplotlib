@@ -1202,16 +1202,17 @@ contains
     ! widened by the pen's reach as the matrix stretches its axis. A segment
     ! is cut where it leaves that box, found in the frame's own coordinates
     ! from where along the segment each side is crossed, so nothing is
-    ! taken back through the inverse of the matrix. A segment the matrix
-    ! shrinks so far that its pattern is finer than half a pixel on the
-    ! canvas is not walked but added to solid, to be drawn at the cover
-    ! the pattern gives, as a whole stroke that fine is.
+    ! taken back through the inverse of the matrix. A segment whose dashes
+    ! the matrix makes stripes less than half a pixel apart on the canvas
+    ! is not walked but added to solid, to be drawn at the cover the
+    ! pattern gives, as a whole stroke that fine is.
     subroutine stroke_dashed(out, px, py, n, hw, paint, scale, bx0, bx1, by0, by1, kx, ky, margin, &
                              matrix, solid, reach)
         type(pathbuf_t), intent(inout) :: out
         real(dp), intent(in) :: px(:), py(:), hw, scale, bx0, bx1, by0, by1
         ! The canvas's corners in the stroke's coordinates, and two canvas
-        ! pixels in them.
+        ! pixels in them; in a frame, the corners of the canvas two pixels
+        ! wider all round, and no margin.
         real(dp), intent(in) :: kx(4), ky(4), margin
         integer, intent(in) :: n
         type(paint_t), intent(in) :: paint
@@ -1219,7 +1220,10 @@ contains
         type(pathbuf_t), intent(inout), optional :: solid
         ! The pen's reach in the frame's coordinates.
         real(dp), intent(in), optional :: reach
-        real(dp) :: period_px, ca, cb, ext
+        real(dp) :: period_px, ca, cb, ext, d, room
+        ! What is left of a dash too short to count, a trillionth of a
+        ! canvas pixel: in a frame, divided by the most the matrix stretches.
+        real(dp) :: tol
         real(dp), allocatable :: zx(:), zy(:)
         integer :: nz
         logical :: framed
@@ -1232,6 +1236,8 @@ contains
         allocate (rx(2*n + 8), ry(2*n + 8))
         framed = present(matrix)
         nz = 0
+        tol = 1.0e-12_dp
+        if (framed) tol = 1.0e-12_dp/max(max_stretch(matrix), 1.0_dp)
         if (framed) then
             allocate (zx(n), zy(n))
             period_px = sum(paint%dash(1:paint%n_dash))*scale
@@ -1294,6 +1300,10 @@ contains
                 ! times, and a cap reaches at most 100 periods further at
                 ! either end: so the count of periods walked, the second
                 ! test, is only a guard, which no such segment exceeds.
+                ! Only a matrix whose canvas corners are past the largest
+                ! double, which leaves the span along the line uncut, can
+                ! make it apply, and that matrix squeezes the pen to far
+                ! less than a level of one pixel.
                 if (.not. full_walk .and. (period_px*abs(matrix(1)*matrix(4) - matrix(2)*matrix(3))*l &
                                            < 0.5_dp*hypot(matrix(3)*(qx - sx) - matrix(1)*(qy - sy), &
                                                           matrix(4)*(qx - sx) - matrix(2)*(qy - sy)) &
@@ -1306,9 +1316,10 @@ contains
                     ! for a walk that did not come is dropped.
                     if (on .and. nr > 0 .and. nz == 0) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        d = stub_len(px(i), py(i), min(rem, l))
                         nr = nr + 1
-                        rx(nr) = px(i) + stub_at(px(i), py(i))*vx
-                        ry(nr) = py(i) + stub_at(px(i), py(i))*vy
+                        rx(nr) = px(i) + d*vx
+                        ry(nr) = py(i) + d*vy
                         call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare, bare1=.true.)
                     end if
                     nr = 0
@@ -1325,10 +1336,11 @@ contains
                     ! And a dash running on through its last point into a
                     ! segment that is walked starts there with the join: a
                     ! capless stub a step back along this segment.
-                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > tol) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
-                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
-                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
+                        d = stub_len(px(i + 1), py(i + 1), min(paint%dash(di)*scale - rem, l))
+                        rx(1) = px(i + 1) - d*vx
+                        ry(1) = py(i + 1) - d*vy
                         rx(2) = px(i + 1)
                         ry(2) = py(i + 1)
                         nr = 2
@@ -1408,9 +1420,14 @@ contains
                 if (.not. visible .or. cut0) then
                     if (on .and. nr > 0) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        ! Within the dash and short of where the walk
+                        ! resumes, so that it stays where nothing is seen.
+                        room = min(rem, l)
+                        if (visible) room = min(room, hypot(ax - px(i), ay - py(i)))
+                        d = stub_len(px(i), py(i), room)
                         nr = nr + 1
-                        rx(nr) = px(i) + stub_at(px(i), py(i))*vx
-                        ry(nr) = py(i) + stub_at(px(i), py(i))*vy
+                        rx(nr) = px(i) + d*vx
+                        ry(nr) = py(i) + d*vy
                         call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare, bare1=.true.)
                     end if
                     nr = 0
@@ -1421,10 +1438,11 @@ contains
                     ! Unseen itself, the segment may still end in a join
                     ! that reaches the canvas: when a dash runs through
                     ! its end, not when one only starts there.
-                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > tol) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
-                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
-                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
+                        d = stub_len(px(i + 1), py(i + 1), min(paint%dash(di)*scale - rem, l))
+                        rx(1) = px(i + 1) - d*vx
+                        ry(1) = py(i + 1) - d*vy
                         rx(2) = px(i + 1)
                         ry(2) = py(i + 1)
                         nr = 2
@@ -1462,7 +1480,7 @@ contains
                 end if
                 rem = rem - seg
                 t0 = t1
-                if (rem <= 1.0e-12_dp) then
+                if (rem <= tol) then
                     if (on .and. nr > 1) then
                         call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare)
                         nr = 0
@@ -1487,10 +1505,12 @@ contains
                     ! capless stub there, a step back along this segment,
                     ! so that the join at that point is drawn; a dash
                     ! that only starts there has no join.
-                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > tol) then
                         call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
-                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
-                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
+                        d = stub_len(px(i + 1), py(i + 1), min(paint%dash(di)*scale - rem, &
+                                                               hypot(px(i + 1) - qx, py(i + 1) - qy)))
+                        rx(1) = px(i + 1) - d*vx
+                        ry(1) = py(i + 1) - d*vy
                         rx(2) = px(i + 1)
                         ry(2) = py(i + 1)
                         nr = 2
@@ -1569,6 +1589,19 @@ contains
         real(dp) :: d
         d = 1.0e-6_dp + 1.0e3_dp*epsilon(1.0_dp)*max(abs(x), abs(y))
     end function stub_at
+
+    ! The length of a capless stub that carries the join at (x, y): at
+    ! most room, the part of the dash through that point that lies along
+    ! the segment short of where the walk goes on, so that the stub lies
+    ! inside a dash the full walk draws, where it adds nothing that can be
+    ! seen, whatever a frame stretches or moves it by. stub_at, in a
+    ! frame's coordinates, could otherwise reach the canvas. Never under
+    ! four steps of a double at the point, to move it.
+    pure function stub_len(x, y, room) result(d)
+        real(dp), intent(in) :: x, y, room
+        real(dp) :: d
+        d = max(min(stub_at(x, y), room), 4.0_dp*spacing(max(abs(x), abs(y))))
+    end function stub_len
 
     ! The unit vector from (x0, y0) to (x1, y1), scaled down first so that
     ! ends however far apart cannot overflow.

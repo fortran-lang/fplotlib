@@ -2,7 +2,8 @@
 
 `export_document(document, format, assets, dpi)` exports finished pages
 without plotting state or a filesystem. It returns one byte asset for PDF,
-or one per page for SVG, PNG and EPS. `dpi` affects PNG only.
+or one per page for SVG, PNG and EPS. `dpi` affects PNG only, and is 100
+unless given, as for `savefig`.
 `save_document(document, filename, status, dpi)` writes the same assets
 directly to files. Both live here, not in the high-level plotting facade.
 

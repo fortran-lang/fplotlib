@@ -435,7 +435,10 @@ contains
     ! segment's pattern sub-pixel and leaves the other's. Compared outside
     ! the solid segment's own pen, which the approximation draws at its
     ! cover. The dash phase at the corner stays clear of a dash ending
-    ! exactly there, where rounding decides whether it reaches on.
+    ! exactly there, where rounding decides whether it reaches on. Round
+    ! and square ends take a thin pen: with a wide one their dashes
+    ! overlap, whose coverage the full walk sums at their edges, so that
+    ! it is no exact reference there.
     subroutine png_dash_joins_check(nfail)
         integer, intent(inout) :: nfail
         real(dp), parameter :: m(6) = [1.0_dp, 0.0_dp, 0.0_dp, 0.05_dp, 0.0_dp, 50.0_dp]
@@ -444,7 +447,7 @@ contains
         integer, parameter :: joins(3) = [JOIN_MITER, JOIN_ROUND, JOIN_BEVEL]
         ! A paint as declared, with every default.
         type(paint_t) :: paint, bare, fresh
-        real(dp) :: x(3), y(3)
+        real(dp) :: x(3), y(3), a(6), big, unit
         character(len=:), allocatable :: quick, full, mask
         integer :: order, c, j, k, i, worst
         logical :: same
@@ -526,6 +529,48 @@ contains
             end if
         end do
         call expect(same, "PNG dashes along a squeezed frame match the full walk", nfail)
+
+        ! A dash running through a corner off the canvas carries its join
+        ! there by a stub, which has to stay inside the dash however far a
+        ! frame moves or stretches it: here 1e14 points along, and 1e7 times
+        ! larger, the dash goes 2 pixels past the corner and 3 before it.
+        same = .true.
+        do k = 1, 4
+            paint = fresh
+            paint%stroked = .true.
+            paint%cap = CAP_BUTT
+            select case (k)
+            case (1, 2)
+                big = merge(1.0e14_dp, 5.0e14_dp, k == 1)
+                a = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 100.0_dp - big, 75.0_dp]
+                unit = 1.0_dp
+                x = [-1100.0_dp, -108.0_dp, 1000.0_dp] + big
+            case default
+                big = merge(1.0e7_dp, 1.0e8_dp, k == 3)
+                a = [big, 0.0_dp, 0.0_dp, big, 100.0_dp, 75.0_dp]
+                unit = 1.0_dp/big
+                x = [-1100.0_dp, -108.0_dp, 1000.0_dp]*unit
+            end select
+            y = [0.0_dp, 0.0_dp, 30.0_dp]*unit
+            paint%line_width = 4.0_dp*unit
+            paint%n_dash = 2
+            paint%dash(1:2) = [5.0_dp, 20.0_dp]*unit
+            paint%dash_offset = modulo(5.0_dp - 994.0_dp, 25.0_dp)*unit
+            full_walk = .false.
+            quick = draw_in_frame(a, x, y, 3, paint)
+            full_walk = .true.
+            full = draw_in_frame(a, x, y, 3, paint)
+            full_walk = .false.
+            worst = 0
+            do i = 1, len(quick)
+                worst = max(worst, abs(iachar(quick(i:i)) - iachar(full(i:i))))
+            end do
+            if (worst > 1) then
+                same = .false.
+                print "(a, 2(i0, 1x))", "  join stub differs: case, worst ", k, worst
+            end if
+        end do
+        call expect(same, "PNG dash join stubs in far moved and stretched frames match the full walk", nfail)
     contains
         function draw_in_frame(m, x, y, n, paint) result(rgb)
             real(dp), intent(in) :: m(6), x(:), y(:)
