@@ -171,7 +171,7 @@ contains
                    index(b, 'id="a&#10;b"') > 0 .and. index(b, 'id="a&#13;b"') > 0, &
                    "SVG writes tab, newline and return in a group name as references", nfail)
         call check(index(b, 'id="m2-2"') > 0 .and. index(b, 'id="g40-2"') > 0, &
-                   "SVG group names never take a marker's or glyph's id", nfail)
+                   "SVG renames group names shaped like a marker's or glyph's id", nfail)
         call check(index(b, 'id="&#65533;x"') > 0 .and. index(b, 'id="&#65533;x-2"') > 0, &
                    "SVG group names that read alike are different ids", nfail)
         call check(index(b, 'aria-label="a'//repeat("&#65533;", 6)//'Z"') > 0, &

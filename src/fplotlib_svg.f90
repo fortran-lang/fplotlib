@@ -164,8 +164,8 @@ contains
     end function matrix_decimals
 
     ! s as XML character data or an attribute value, in out(1:n); out needs
-    ! eight characters for each of s, and a shorter one is a contract
-    ! error. Every code point has one written form, so two strings are
+    ! up to eight characters for each of s, and writing past its end is a
+    ! contract error. Every code point has one written form, so two strings are
     ! written the same exactly when a reader reads them the same: printable
     ! ASCII as itself, & < > " as entities, any other code point XML 1.0
     ! can hold as a decimal reference, as every reader takes it the same
