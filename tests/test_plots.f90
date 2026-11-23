@@ -5,9 +5,11 @@ program test_plots
     use test_missing, only: missing_data_check
     use test_contract, only: contract_case, contract_check
     use test_glyph_runs, only: glyph_runs_check
+    use test_frame_backends, only: frame_backend_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nmissing, ncontract
     integer :: nglyph
+    integer :: nbackend
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1596,6 +1598,8 @@ program test_plots
     call contract_check(ncontract)
     ! Glyph runs and their source; see test_glyph_runs.f90.
     call glyph_runs_check(nglyph)
+    ! Frames in each backend; see test_frame_backends.f90.
+    call frame_backend_check(nbackend)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1606,6 +1610,7 @@ program test_plots
     if (nmissing > 0) error stop "missing data reached the output"
     if (ncontract > 0) error stop "a broken precondition did not stop as expected"
     if (nglyph > 0) error stop "glyph runs failed"
+    if (nbackend > 0) error stop "frame backends failed"
 
 contains
 

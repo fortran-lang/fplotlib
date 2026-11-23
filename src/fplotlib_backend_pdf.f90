@@ -24,7 +24,7 @@ module fplotlib_backend_pdf
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
-                         builder_get, fmt_num
+                         builder_get, fmt_num, matrix_decimals
     use fplotlib_png, only: zlib_compress
     use fplotlib_glyphs, only: glyph_adv, glyph_inked
     use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
@@ -71,6 +71,8 @@ module fplotlib_backend_pdf
         procedure :: draw_markers_impl => pdf_draw_markers
         procedure :: draw_glyphs_impl => pdf_draw_glyphs
         procedure :: draw_image_impl => pdf_draw_image
+        procedure :: begin_frame_impl => pdf_begin_frame
+        procedure :: end_frame_impl => pdf_end_frame
     end type pdf_renderer_t
 
 
@@ -82,22 +84,31 @@ contains
         call builder_append(self%c, s)
     end subroutine put
 
-    subroutine put_num(self, x)
+    ! A number in the coordinates of the frames open now, to a millionth of
+    ! a point on the page, or to as many decimals as given.
+    subroutine put_num(self, x, decimals)
         class(pdf_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        if (present(decimals)) then
+            call fmt_num(x, s, n, decimals)
+        else
+            call fmt_num(x, s, n, frame_decimals(self))
+        end if
         call builder_append(self%c, s(1:n))
         call builder_append(self%c, " ")
     end subroutine put_num
 
-    function num_str(x) result(t)
+    ! A number to six decimals, or as many as given.
+    function num_str(x, decimals) result(t)
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=:), allocatable :: t
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        call fmt_num(x, s, n, decimals)
         t = s(1:n)
     end function num_str
 
@@ -174,7 +185,7 @@ contains
         end if
         if (p%fill_alpha < 1.0_dp .or. p%stroke_alpha < 1.0_dp) then
             g = alpha_state(self, p%fill_alpha, p%stroke_alpha)
-            if (g > 0) call put(self, "/GS"//int_str(g)//" gs"//new_line("a"))
+            call put(self, "/GS"//int_str(g)//" gs"//new_line("a"))
         end if
         if (p%filled) call put_rgb(self, p%fill_rgb, .false.)
         if (p%stroked) then
@@ -192,7 +203,7 @@ contains
                 do i = 1, p%n_dash
                     call put_num(self, p%dash(i))
                 end do
-                call put(self, "] "//num_str(p%dash_offset)//" d"//new_line("a"))
+                call put(self, "] "//num_str(p%dash_offset, frame_decimals(self))//" d"//new_line("a"))
             else
                 call put(self, "[] 0 d"//new_line("a"))
             end if
@@ -256,6 +267,36 @@ contains
             call pdf_draw_rect(self, self%x0, self%y0, width, height, p)
         end if
     end subroutine pdf_open_canvas
+
+    subroutine pdf_begin_frame(self, matrix, clip)
+        class(pdf_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        ! renderer_t has checked the call and counts the frame.
+        call put(self, "q"//new_line("a"))
+        ! In the coordinates of the frames around it, with fifteen
+        ! significant digits of each factor.
+        do i = 1, 6
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
+                                              matrix_decimals(matrix(i))))
+        end do
+        call put(self, "cm"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "re W n"//new_line("a"))
+        end if
+    end subroutine pdf_begin_frame
+
+    subroutine pdf_end_frame(self)
+        class(pdf_renderer_t), intent(inout) :: self
+
+        call put(self, "Q"//new_line("a"))
+    end subroutine pdf_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(pdf_renderer_t), intent(inout) :: self
@@ -395,7 +436,7 @@ contains
             end if
             if (.not. open) then
                 if (font /= cur_font .or. run%size(i) /= cur_size) then
-                    call put(self, "/T"//int_str(font)//" "//num_str(run%size(i)) &
+                    call put(self, "/T"//int_str(font)//" "//num_str(run%size(i), frame_decimals(self)) &
                              //" Tf"//eol)
                     cur_font = font
                     cur_size = run%size(i)

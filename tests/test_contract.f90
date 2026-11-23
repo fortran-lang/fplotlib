@@ -21,7 +21,21 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 38
+    integer, parameter :: NCASE = 44
+
+    ! A target that draws nothing and cannot transform: it leaves the
+    ! frame methods to renderer_t's defaults.
+    type, extends(renderer_t) :: flat_renderer_t
+    contains
+        procedure :: open_canvas_impl => flat_open
+        procedure :: close_canvas_impl => flat_close
+        procedure :: draw_path_impl => flat_path
+        procedure :: draw_rect_impl => flat_rect
+        procedure :: draw_circle_impl => flat_circle
+        procedure :: draw_markers_impl => flat_markers
+        procedure :: draw_glyphs_impl => flat_glyphs
+        procedure :: draw_image_impl => flat_image
+    end type flat_renderer_t
     character(len=*), parameter :: EXPECT(NCASE) = [character(len=100) :: &
         "fplotlib: renderer: canvas is not open", &
         "fplotlib: path: nonfinite or out-of-range coordinate", &
@@ -60,12 +74,19 @@ module test_contract
         "fplotlib: set_yscale: linthresh must be from 1e-300 to 1e300", &
         "fplotlib: text: glyph run count must be nonnegative", &
         "fplotlib: text: a glyph run needs gid, x, y and size", &
-        "fplotlib: text: glyph run arrays shorter than its count"]
+        "fplotlib: text: glyph run arrays shorter than its count", &
+        "fplotlib: renderer: end_frame without begin_frame", &
+        "fplotlib: renderer: end_frame inside a group begun after the frame", &
+        "fplotlib: renderer: begin_frame without end_frame at close_canvas", &
+        "fplotlib: frame: nonfinite or out-of-range transform", &
+        "fplotlib: renderer: this target cannot transform or clip a frame", &
+        "fplotlib: renderer: frame_decimals(outer) with no frame open"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
+        1, 1, 1, 1]
 
 contains
 
@@ -73,6 +94,7 @@ contains
     subroutine contract_case(k)
         integer, intent(in) :: k
         type(svg_renderer_t) :: svg
+        integer :: k2
         type(glyphrun_t) :: run
         real(dp) :: adv
         type(png_renderer_t) :: png
@@ -83,6 +105,9 @@ contains
         real(dp) :: nan, w
         type(axes), allocatable :: axs(:, :)
         type(axes) :: sec
+        type(flat_renderer_t) :: flat
+        type(clip_t) :: none
+        real(dp), parameter :: unit(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
 
         nan = ieee_value(nan, ieee_quiet_nan)
         p%filled = .true.
@@ -197,6 +222,31 @@ contains
             allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
             run%n = 5
             call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        ! Frames scope a transform and a clip, and nest with groups.
+        case (39)
+            call svg%open_canvas(10.0_dp, 10.0_dp)
+            call svg%end_frame()
+        case (40)
+            call svg%open_canvas(10.0_dp, 10.0_dp)
+            call svg%begin_frame(unit, none)
+            call svg%begin_group("g")
+            call svg%end_frame()
+        case (41)
+            call png%open_canvas(10.0_dp, 10.0_dp)
+            call png%begin_frame(unit, none)
+            call png%close_canvas()
+        case (42)
+            call eps%open_canvas(10.0_dp, 10.0_dp)
+            call eps%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, nan, 0.0_dp, 0.0_dp], none)
+        case (43)
+            ! The identity without a clip is fine; a scale is not.
+            call flat%open_canvas(10.0_dp, 10.0_dp)
+            call flat%begin_frame(unit, none)
+            call flat%end_frame()
+            call flat%begin_frame([2.0_dp, 0.0_dp, 0.0_dp, 2.0_dp, 0.0_dp, 0.0_dp], none)
+        case (44)
+            call svg%open_canvas(10.0_dp, 10.0_dp)
+            k2 = frame_decimals(svg, outer=.true.)
         end select
     end subroutine contract_case
 
@@ -235,6 +285,60 @@ contains
         end do
         print "(a, i0, a, i0)", "contract checks: ", NCASE, " broken calls, failures = ", nfail
     end subroutine contract_check
+
+    subroutine flat_open(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: width, height
+        integer, intent(in), optional :: bg_rgb(3)
+        real(dp), intent(in), optional :: bg_alpha, x0, y0
+    end subroutine flat_open
+
+    subroutine flat_close(self)
+        class(flat_renderer_t), intent(inout) :: self
+    end subroutine flat_close
+
+    subroutine flat_path(self, x, y, verbs, n_verb, paint)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+    end subroutine flat_path
+
+    subroutine flat_rect(self, x, y, w, h, paint, radius)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in), optional :: radius
+    end subroutine flat_rect
+
+    subroutine flat_circle(self, cx, cy, r, paint)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: cx, cy, r
+        type(paint_t), intent(in) :: paint
+    end subroutine flat_circle
+
+    subroutine flat_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:), mx(:), my(:)
+        integer, intent(in) :: mverbs(:), n_mverb
+        type(paint_t), intent(in) :: paint
+    end subroutine flat_markers
+
+    subroutine flat_glyphs(self, x, y, run, paint, angle)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y
+        type(glyphrun_t), intent(in) :: run
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: angle
+    end subroutine flat_glyphs
+
+    subroutine flat_image(self, x, y, w, h, rgba, nx, ny, paint)
+        class(flat_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(:, :, :)
+        type(paint_t), intent(in) :: paint
+    end subroutine flat_image
 
     function itoa(i) result(s)
         integer, intent(in) :: i

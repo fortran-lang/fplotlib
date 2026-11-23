@@ -15,13 +15,19 @@ module fplotlib_backend_svg
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
-                         builder_get, fmt_num, xml_escape_to
+                         builder_get, fmt_num, matrix_decimals, xml_escape_to
     use fplotlib_png, only: png_encode
     use fplotlib_glyphs, only: NGLYPH, glyph_outline, glyph_inked
     implicit none
     private
 
     public :: svg_renderer_t
+
+    ! A group id written, and for a name, the next suffix to try.
+    type :: svg_id_t
+        character(len=:), allocatable :: s
+        integer :: next = 2
+    end type svg_id_t
 
     type, extends(encoded_renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
@@ -37,6 +43,13 @@ module fplotlib_backend_svg
         ! The glyphs already defined in a <defs>, each of which every later
         ! string that uses it refers back to.
         logical, allocatable :: glyph_defined(:)
+        ! Whether each open frame, the innermost last, opened a clip group
+        ! of its own that end_frame has to close.
+        logical, allocatable :: frame_clipped(:)
+        ! The group ids written so far: a frame placed twice repeats its
+        ! groups, whose ids must stay unique.
+        type(svg_id_t), allocatable :: ids(:)
+        integer :: n_ids = 0
     contains
         procedure :: open_canvas_impl => svg_open_canvas
         procedure :: close_canvas_impl => svg_close_canvas
@@ -49,6 +62,8 @@ module fplotlib_backend_svg
         procedure :: draw_image_impl => svg_draw_image
         procedure :: begin_group_impl => svg_begin_group
         procedure :: end_group_impl => svg_end_group
+        procedure :: begin_frame_impl => svg_begin_frame
+        procedure :: end_frame_impl => svg_end_frame
     end type svg_renderer_t
 
 contains
@@ -59,12 +74,19 @@ contains
         call builder_append(self%b, s)
     end subroutine put
 
-    subroutine put_num(self, x)
+    ! A number in the coordinates of the frames open now, to a millionth of
+    ! a point on the page, or to as many decimals as given.
+    subroutine put_num(self, x, decimals)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        if (present(decimals)) then
+            call fmt_num(x, s, n, decimals)
+        else
+            call fmt_num(x, s, n, frame_decimals(self))
+        end if
         call builder_append(self%b, s(1:n))
     end subroutine put_num
 
@@ -188,29 +210,36 @@ contains
         end if
 
         if (c%on) then
-            self%n_clip = self%n_clip + 1
-            self%cur_clip_id = self%n_clip
-            call put(self, '<defs><clipPath id="clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, '"><rect x="')
-            call put_num(self, c%x)
-            call put(self, '" y="')
-            call put_num(self, c%y)
-            call put(self, '" width="')
-            call put_num(self, c%w)
-            call put(self, '" height="')
-            call put_num(self, c%h)
-            call put(self, '"/></clipPath></defs>')
-            call put_eol(self)
-            call put(self, '<g clip-path="url(#clip')
-            call put_int(self, self%cur_clip_id)
-            call put(self, ')">')
-            call put_eol(self)
+            call open_clip_group(self, c)
             self%in_clip = .true.
         end if
 
         self%cur_clip = c
     end subroutine sync_clip
+
+    subroutine open_clip_group(self, c)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t), intent(in) :: c
+
+        self%n_clip = self%n_clip + 1
+        self%cur_clip_id = self%n_clip
+        call put(self, '<defs><clipPath id="clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, '"><rect x="')
+        call put_num(self, c%x)
+        call put(self, '" y="')
+        call put_num(self, c%y)
+        call put(self, '" width="')
+        call put_num(self, c%w)
+        call put(self, '" height="')
+        call put_num(self, c%h)
+        call put(self, '"/></clipPath></defs>')
+        call put_eol(self)
+        call put(self, '<g clip-path="url(#clip')
+        call put_int(self, self%cur_clip_id)
+        call put(self, ')">')
+        call put_eol(self)
+    end subroutine open_clip_group
 
     subroutine svg_open_canvas(self, width, height, bg_rgb, bg_alpha, x0, y0)
         class(svg_renderer_t), intent(inout) :: self
@@ -222,6 +251,7 @@ contains
 
         self%n_marker = 0
         self%n_clip = 0
+        self%n_ids = 0
         self%cur_clip_id = 0
         self%cur_clip = clip_t()
         self%in_clip = .false.
@@ -599,10 +629,27 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
+        integer :: j
+        character(len=12) :: suffix
+        character(len=:), allocatable :: id
 
         call sync_clip(self, none)
+        ! A name used before becomes name-2, name-3, ...: the first of those
+        ! no group on the canvas has used, a name given as such included.
+        ! Each name remembers the next suffix to try.
+        id = name
+        j = find_id(self, name)
+        if (j > 0) then
+            do
+                write (suffix, "(i0)") self%ids(j)%next
+                self%ids(j)%next = self%ids(j)%next + 1
+                id = name//"-"//trim(suffix)
+                if (find_id(self, id) == 0) exit
+            end do
+        end if
+        call add_id(self, id)
         call put(self, '<g id="')
-        call put(self, name)
+        call put(self, id)
         call put(self, '">')
         call put_eol(self)
     end subroutine svg_begin_group
@@ -616,5 +663,77 @@ contains
         call put(self, "</g>")
         call put_eol(self)
     end subroutine svg_end_group
+
+    integer function find_id(self, id) result(j)
+        class(svg_renderer_t), intent(in) :: self
+        character(len=*), intent(in) :: id
+        do j = 1, self%n_ids
+            if (self%ids(j)%s == id) return
+        end do
+        j = 0
+    end function find_id
+
+    subroutine add_id(self, id)
+        class(svg_renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: id
+        type(svg_id_t), allocatable :: grown(:)
+        integer :: j
+        if (.not. allocated(self%ids)) allocate (self%ids(16))
+        if (self%n_ids == size(self%ids)) then
+            allocate (grown(2*self%n_ids))
+            do j = 1, self%n_ids
+                call move_alloc(self%ids(j)%s, grown(j)%s)
+                grown(j)%next = self%ids(j)%next
+            end do
+            call move_alloc(grown, self%ids)
+        end if
+        self%n_ids = self%n_ids + 1
+        self%ids(self%n_ids)%s = id
+        self%ids(self%n_ids)%next = 2
+    end subroutine add_id
+
+    ! A frame is a group with a transform, and when clipped a clip group
+    ! inside it; renderer_t has checked the call and counted the frame.
+    subroutine svg_begin_frame(self, matrix, clip)
+        class(svg_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        type(clip_t) :: none
+        logical, allocatable :: grown(:)
+        integer :: i
+
+        if (.not. allocated(self%frame_clipped)) allocate (self%frame_clipped(8))
+        if (self%n_frame > size(self%frame_clipped)) then
+            allocate (grown(2*size(self%frame_clipped)))
+            grown(1:size(self%frame_clipped)) = self%frame_clipped
+            call move_alloc(grown, self%frame_clipped)
+        end if
+        self%frame_clipped(self%n_frame) = clip%on
+        call sync_clip(self, none)
+        call put(self, '<g transform="matrix(')
+        ! In the coordinates of the frames around it, with fifteen
+        ! significant digits of each factor.
+        do i = 1, 6
+            if (i > 1) call put(self, " ")
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
+                                              matrix_decimals(matrix(i))))
+        end do
+        call put(self, ')">')
+        call put_eol(self)
+        if (clip%on) call open_clip_group(self, clip)
+    end subroutine svg_begin_frame
+
+    subroutine svg_end_frame(self)
+        class(svg_renderer_t), intent(inout) :: self
+        type(clip_t) :: none
+
+        call sync_clip(self, none)
+        if (self%frame_clipped(self%n_frame)) then
+            call put(self, "</g>")
+            call put_eol(self)
+        end if
+        call put(self, "</g>")
+        call put_eol(self)
+    end subroutine svg_end_frame
 
 end module fplotlib_backend_svg

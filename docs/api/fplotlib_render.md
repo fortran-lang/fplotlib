@@ -25,5 +25,30 @@ The `*_impl` bindings are public only so that a backend in another module
 can implement them; code that draws calls the methods without the suffix,
 since calling an `*_impl` directly skips the checks.
 
+`begin_frame(matrix, clip)` and `end_frame()` scope an affine transform and a
+rectangular clip: `matrix` is `[a,b,c,d,e,f]`, mapping a point of the frame
+to `(a*x+c*y+e, b*x+d*y+f)` in its parent, and `clip`, when on, is in the
+frame's coordinates. Like the other methods they are checked once, in
+`renderer_t`: the canvas must be open, the matrix finite and within
+`MAX_COORD`, and the clip a box of nonnegative size. Frames and groups nest:
+each must end inside whatever began after it, and none may be open at
+`close_canvas`. SVG, PDF and EPS implement `begin_frame_impl` and
+`end_frame_impl`. A target that does not, PNG for now among them, accepts
+only the identity transform without a clip, and stops on any other rather
+than ignoring it.
+
+SVG, PDF and EPS write a frame's matrix with fifteen significant digits of
+each factor, and the numbers inside it with one more decimal than six for
+each power of ten the frames open magnify by (bounded by
+`sqrt(|A|_1 |A|_inf)` of each matrix, so a frame that only moves adds
+none), up to forty and to seventeen significant digits: a frame that scales
+by 4e-7 keeps its scale, and one that magnifies a million times still
+writes what it holds to a millionth of a point on the page, as far as the
+viewer computes that finely; many PDF and PostScript readers work in single
+precision. `frame_decimals(r)` gives that count for the frames open now,
+and `frame_decimals(r, outer=.true.)` for those around the innermost, for a
+custom encoder to use the same; the cap at seventeen significant digits is
+`fmt_num`'s, which a custom formatter applies itself.
+
 ```{f:module} fplotlib_render
 ```
