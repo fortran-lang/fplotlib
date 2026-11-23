@@ -591,12 +591,11 @@ contains
     ! comes after.
     recursive function parse_list(state, s, alph) result(head)
         type(math_context_t), intent(inout) :: state
-        ! What a parse returns, kept here before it is stored: the call
-        ! may move the arrays it is stored into.
-        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: alph
-        integer :: head, tail, cur, i, j, k, code, nb, sl, n, code2
+        ! got: what a parse returns, kept before it is stored, as the
+        ! parse may move the arrays it is stored into.
+        integer :: head, tail, cur, i, j, k, code, nb, sl, n, code2, got
         integer :: num, infix, cls, lv, sup_head
         character(len=24) :: name
         character :: last
@@ -902,11 +901,10 @@ contains
     ! the closing at pend(k)) made one automatic \left...\right.
     recursive function pair_build(state, arr, pend, lo, hi) result(head)
         type(math_context_t), intent(inout) :: state
-        ! What a parse returns, kept here before it is stored: the call
-        ! may move the arrays it is stored into.
-        integer :: got
         integer, intent(in) :: arr(:), pend(:), lo, hi
-        integer :: head, tail, p, k
+        ! got: what a parse returns, kept before it is stored, as the
+        ! parse may move the arrays it is stored into.
+        integer :: head, tail, p, k, got
         head = 0
         tail = 0
         p = lo
@@ -984,13 +982,12 @@ contains
     ! matching \right, the left delimiter is an ordinary opening.
     recursive subroutine parse_left(state, s, i, alph, k, j)
         type(math_context_t), intent(inout) :: state
-        ! What a parse returns, kept here before it is stored: the call
-        ! may move the arrays it is stored into.
-        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: i, alph
         integer, intent(out) :: k, j
-        integer :: code, p, q, depth, code2, jr
+        ! got: what a parse returns, kept before it is stored, as the
+        ! parse may move the arrays it is stored into.
+        integer :: code, p, q, depth, code2, jr, got
         character(len=24) :: name
 
         call read_delim(s, i + 5, code, p)
@@ -1107,12 +1104,11 @@ contains
     ! One command, as a noad; 0 when it makes nothing.
     recursive function parse_command(state, s, alph) result(k)
         type(math_context_t), intent(inout) :: state
-        ! What a parse returns, kept here before it is stored: the call
-        ! may move the arrays it is stored into.
-        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: alph
-        integer :: k, j, code, cls, a0, a1, b0, b1, o0, o1, ac
+        ! got: what a parse returns, kept before it is stored, as the
+        ! parse may move the arrays it is stored into.
+        integer :: k, j, code, cls, a0, a1, b0, b1, o0, o1, ac, got
         character(len=24) :: name
         logical :: wide
 
@@ -1220,7 +1216,10 @@ contains
         case ("sqrt")
             k = new_noad(state, K_RAD, CL_ORD)
             call opt_arg(s, o0, o1)
-            if (o1 >= o0) state%noads(k)%b = parse_list(state, s(o0:o1), alph)
+            if (o1 >= o0) then
+                got = parse_list(state, s(o0:o1), alph)
+                state%noads(k)%b = got
+            end if
             call cmd_arg(s, 1, a0, a1)
             got = parse_list(state, s(a0:a1), alph)
             state%noads(k)%a = got

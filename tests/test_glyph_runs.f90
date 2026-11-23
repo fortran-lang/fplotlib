@@ -217,39 +217,55 @@ contains
     ! Formulas long enough that parsing a part of one adds more noads than
     ! there is room for, while the noad the part belongs to is being
     ! stored into: under the sanitizer job, a part stored straight from the
-    ! parse into the array the parse has moved is a use after free.
+    ! parse into the array the parse has moved is a use after free. Each
+    ! of the stores is reached: the parts of \frac, \binom and \cfrac, a
+    ! root's radicand and index, \overline, an accent, \left...\right,
+    ! and, as their place in the array depends on how full it is, \over,
+    ! automatic parentheses and a cube root after 1 to 140 atoms.
     subroutine long_formulas(nfail)
         integer, intent(inout) :: nfail
-        character(len=:), allocatable :: many
-        character(len=:), allocatable :: tex(:)
-        type(glyphrun_t) :: run
-        type(mrules_t) :: rules
-        real(dp) :: w, h, d
-        integer :: k
+        character(len=:), allocatable :: many, tex
+        character(len=*), parameter :: cbrt = achar(226)//achar(136)//achar(155)
+        integer :: k, m
         logical :: ok
 
         many = ""
         do k = 1, 150
             many = many//"a "
         end do
-        allocate (character(len=8*len(many) + 64) :: tex(8))
-        tex = [character(len=8*len(many) + 64) :: &
-               "\frac{"//many//"}{"//many//"}", &
-               "\binom{"//many//"}{"//many//"}", &
-               "\sqrt{"//many//"}", &
-               "\overline{"//many//"}", &
-               "\left("//many//"\right)", &
-               "{"//many//"\over "//many//"}", &
-               "("//many//"("//many//")"//many//")", &
-               achar(226)//achar(136)//achar(156)//"{"//many//"}"]
+        call lays_out("\frac{"//many//"}{"//many//"}", "\frac")
+        call lays_out("\binom{"//many//"}{"//many//"}", "\binom")
+        call lays_out("\cfrac{"//many//"}{"//many//"}", "\cfrac")
+        call lays_out("\sqrt{"//many//"}", "\sqrt")
+        call lays_out("\sqrt["//many//"]{x}", "\sqrt[...]")
+        call lays_out("\overline{"//many//"}", "\overline")
+        call lays_out("\hat{"//many//"}", "an accent")
+        call lays_out("\left("//many//"\right)", "\left...\right")
+        call lays_out(cbrt//"{"//many//"}", "a cube root")
         ok = .true.
-        do k = 1, size(tex)
-            run%n = 0
-            rules%n = 0
-            call math_formula(trim(tex(k)), 10.0_dp, .false., run, rules, w, h, d)
-            ok = ok .and. run%n >= 150 .and. w > 0.0_dp
+        do m = 1, 140
+            tex = "("//repeat("a ", m)//") \over b"
+            ok = ok .and. formula_ok(tex)
+            tex = "("//repeat("a ", m)//"(b))"
+            ok = ok .and. formula_ok(tex)
+            tex = repeat("a ", m)//cbrt//"x"
+            ok = ok .and. formula_ok(tex)
         end do
-        call check(ok, "long formulas lay out whole", nfail)
+        call check(ok, "formulas with \over, parentheses and a cube root after 1 to 140 atoms lay out", nfail)
+    contains
+        subroutine lays_out(tex, what)
+            character(len=*), intent(in) :: tex, what
+            call check(formula_ok(tex), "a long formula with "//what//" lays out whole", nfail)
+        end subroutine lays_out
+
+        logical function formula_ok(tex)
+            character(len=*), intent(in) :: tex
+            type(glyphrun_t) :: run
+            type(mrules_t) :: rules
+            real(dp) :: w, h, d
+            call math_formula(tex, 10.0_dp, .false., run, rules, w, h, d)
+            formula_ok = run%n >= 1 .and. w > 0.0_dp
+        end function formula_ok
     end subroutine long_formulas
 
     subroutine pdf_text_check(nfail)
