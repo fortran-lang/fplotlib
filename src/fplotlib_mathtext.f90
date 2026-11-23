@@ -462,8 +462,11 @@ contains
         if (.not. all4) then
             if (rules%n > 0) call contract_error("mathtext: rule list arrays shorter than its count")
             allocate (rules%x(4), rules%y(4), rules%w(4), rules%h(4))
-        else if (min(size(rules%x), size(rules%y), size(rules%w), size(rules%h)) < rules%n) then
-            call contract_error("mathtext: rule list arrays shorter than its count")
+        else
+            if (any([lbound(rules%x, 1), lbound(rules%y, 1), lbound(rules%w, 1), lbound(rules%h, 1)] /= 1)) &
+                call contract_error("mathtext: rule list arrays must start at index 1")
+            if (min(size(rules%x), size(rules%y), size(rules%w), size(rules%h)) < rules%n) &
+                call contract_error("mathtext: rule list arrays shorter than its count")
         end if
         if (rules%n >= min(size(rules%x), size(rules%y), size(rules%w), size(rules%h))) then
             cap = max(4, 2*(rules%n + 1))

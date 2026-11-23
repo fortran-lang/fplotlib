@@ -22,7 +22,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 48
+    integer, parameter :: NCASE = 50
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -85,13 +85,15 @@ module test_contract
         "fplotlib: pdf: new_page inside a frame or group", &
         "fplotlib: mathtext: rule list count must be nonnegative", &
         "fplotlib: mathtext: a rule list needs x, y, w and h", &
-        "fplotlib: mathtext: rule list arrays shorter than its count"]
+        "fplotlib: mathtext: rule list arrays shorter than its count", &
+        "fplotlib: text: glyph run arrays must start at index 1", &
+        "fplotlib: mathtext: rule list arrays must start at index 1"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 contains
 
@@ -269,6 +271,15 @@ contains
         case (48)
             allocate (rules%x(1), rules%y(1), rules%w(1), rules%h(1))
             rules%n = 5
+            call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
+        ! Arrays that start anywhere but 1.
+        case (49)
+            allocate (run%gid(0:3), run%x(0:3), run%y(0:3), run%size(0:3))
+            run%n = 3
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (50)
+            allocate (rules%x(0:3), rules%y(0:3), rules%w(0:3), rules%h(0:3))
+            rules%n = 3
             call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
         end select
     end subroutine contract_case

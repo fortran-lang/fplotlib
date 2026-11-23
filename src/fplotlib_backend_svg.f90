@@ -508,7 +508,7 @@ contains
 
         call put(self, "<g")
         if (allocated(run%text)) then
-            allocate (character(len=6*len(run%text)) :: esc)
+            allocate (character(len=8*len(run%text)) :: esc)
             call xml_escape_to(run%text, esc, en)
             call put(self, ' aria-label="')
             call put(self, esc(1:en))
@@ -629,33 +629,39 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
-        integer :: j
+        integer :: j, n
         character(len=12) :: suffix
-        character(len=:), allocatable :: id
+        character(len=:), allocatable :: id, base
 
         call sync_clip(self, none)
-        ! A name used before becomes name-2, name-3, ...: the first of those
-        ! no group on the canvas has used, a name given as such included.
-        ! Each name remembers the next suffix to try. A name like the ids
-        ! of clips, markers and glyphs (clip3, m1, g40) counts as used, so
-        ! that it can never take one of theirs.
-        id = name
-        j = find_id(self, name)
-        if (j == 0 .and. internal_id(name)) then
-            call add_id(self, name)
-            j = find_id(self, name)
+        ! Ids are compared as written, escaped, which is one form for each
+        ! value a reader can take: two names a reader would read the same,
+        ! by bytes that decode alike or characters that both become U+FFFD,
+        ! are the same id. A name used before becomes name-2, name-3, ...:
+        ! the first of those no group on the canvas has used, a name given
+        ! as such included. Each name remembers the next suffix to try. A
+        ! name like the ids of clips, markers and glyphs (clip3, m1, g40)
+        ! counts as used, so that it can never take one of theirs.
+        allocate (character(len=8*len(name)) :: base)
+        call xml_escape_to(name, base, n, whole=.true.)
+        base = base(1:n)
+        id = base
+        j = find_id(self, base)
+        if (j == 0 .and. internal_id(base)) then
+            call add_id(self, base)
+            j = find_id(self, base)
         end if
         if (j > 0) then
             do
                 write (suffix, "(i0)") self%ids(j)%next
                 self%ids(j)%next = self%ids(j)%next + 1
-                id = name//"-"//trim(suffix)
+                id = base//"-"//trim(suffix)
                 if (find_id(self, id) == 0) exit
             end do
         end if
         call add_id(self, id)
         call put(self, '<g id="')
-        call put_escaped(self, id)
+        call put(self, id)
         call put(self, '">')
         call put_eol(self)
     end subroutine svg_begin_group
@@ -686,22 +692,14 @@ contains
         end if
     end function internal_id
 
-    ! Text in an attribute, escaped as XML needs it.
-    subroutine put_escaped(self, s)
-        class(svg_renderer_t), intent(inout) :: self
-        character(len=*), intent(in) :: s
-        character(len=:), allocatable :: buf
-        integer :: n
-        allocate (character(len=10*len(s) + 1) :: buf)
-        call xml_escape_to(s, buf, n)
-        call put(self, buf(1:n))
-    end subroutine put_escaped
-
     integer function find_id(self, id) result(j)
         class(svg_renderer_t), intent(in) :: self
         character(len=*), intent(in) :: id
+        ! Exactly: Fortran's == would pad the shorter with blanks.
         do j = 1, self%n_ids
-            if (self%ids(j)%s == id) return
+            if (len(self%ids(j)%s) == len(id)) then
+                if (self%ids(j)%s == id) return
+            end if
         end do
         j = 0
     end function find_id

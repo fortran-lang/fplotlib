@@ -162,64 +162,58 @@ contains
             d = max(6, min(40, 15 - floor(log10(abs(x)))))
     end function matrix_decimals
 
-    subroutine xml_escape_to(s, out, n)
+    ! s as XML character data or an attribute value, in out(1:n); out needs
+    ! eight characters for each of s. Every code point has one written
+    ! form, so two strings are written the same exactly when a reader reads
+    ! them the same: printable ASCII as itself, & < > " as entities, tab,
+    ! newline and return as themselves, any other code point XML 1.0 can
+    ! hold as a decimal reference, as every reader takes it the same way
+    ! whatever it believes the encoding to be, and the rest (other control
+    ! characters, surrogates, U+FFFE, U+FFFF, and anything past U+10FFFF)
+    ! as U+FFFD. Bytes that decode to ASCII are written as that character.
+    ! Trailing blanks are dropped, unless whole is given and true.
+    subroutine xml_escape_to(s, out, n, whole)
         character(len=*), intent(in) :: s
         character(len=*), intent(out) :: out
         integer, intent(out) :: n
-        integer :: i, m, code, nb, digits
-        character(len=1) :: c
-        character(len=7) :: ref
+        logical, intent(in), optional :: whole
+        integer :: i, m, code, nb, lp
+        character(len=12) :: piece
 
         n = 0
         m = len_trim(s)
-        i = 0
-        do while (i < m)
-            i = i + 1
-            c = s(i:i)
-            select case (c)
-            case ("&")
-                if (n + 5 > len(out)) exit
-                out(n+1:n+5) = "&amp;"
-                n = n + 5
-            case ("<")
-                if (n + 4 > len(out)) exit
-                out(n+1:n+4) = "&lt;"
-                n = n + 4
-            case (">")
-                if (n + 4 > len(out)) exit
-                out(n+1:n+4) = "&gt;"
-                n = n + 4
-            case ('"')
-                if (n + 6 > len(out)) exit
-                out(n+1:n+6) = "&quot;"
-                n = n + 6
+        if (present(whole)) then
+            if (whole) m = len(s)
+        end if
+        i = 1
+        do while (i <= m)
+            call utf8_next(s, i, code, nb)
+            i = i + max(1, nb)
+            select case (code)
+            case (38)
+                piece = "&amp;"
+                lp = 5
+            case (60)
+                piece = "&lt;"
+                lp = 4
+            case (62)
+                piece = "&gt;"
+                lp = 4
+            case (34)
+                piece = "&quot;"
+                lp = 6
+            case (9, 10, 13, 32:33, 35:37, 39:59, 61, 63:126)
+                piece = achar(code)
+                lp = 1
             case default
-                ! Anything past ASCII is a code point in its own right: a
-                ! degree sign, a greek letter out of mathtext, an emoji.
-                ! It goes out as a character reference, which every reader
-                ! takes the same way whatever it believes the encoding to
-                ! be. A control character, a surrogate or U+FFFE/U+FFFF,
-                ! which no XML 1.0 file may hold, is U+FFFD instead.
-                if (iachar(c) > 126 .or. (iachar(c) < 32 .and. index(achar(9)//achar(10)//achar(13), c) == 0)) then
-                    if (iachar(c) > 126) then
-                        call utf8_next(s, i, code, nb)
-                        i = i + nb - 1
-                    else
-                        code = 65533
-                    end if
-                    if (code < 32 .or. (code >= 55296 .and. code <= 57343) .or. &
-                        code == 65534 .or. code == 65535 .or. code > 1114111) code = 65533
-                    write (ref, "(I0)") code
-                    digits = len_trim(ref)
-                    if (n + digits + 3 > len(out)) exit
-                    out(n+1:n+digits+3) = "&#"//ref(1:digits)//";"
-                    n = n + digits + 3
-                else
-                    if (n + 1 > len(out)) exit
-                    n = n + 1
-                    out(n:n) = c
-                end if
+                if (code < 32 .or. (code >= 55296 .and. code <= 57343) .or. &
+                    code == 65534 .or. code == 65535 .or. code > 1114111) code = 65533
+                write (piece, "(a,i0,a)") "&#", code, ";"
+                lp = len_trim(piece)
             end select
+            if (n + lp > len(out)) exit
+            out(n + 1:n + lp) = piece(1:lp)
+            n = n + lp
         end do
     end subroutine xml_escape_to
 

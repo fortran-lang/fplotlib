@@ -90,31 +90,73 @@ contains
 
     ! SVG text goes out as character references for anything past ASCII,
     ! of six and seven digits too, as an emoji or a math italic letter
-    ! needs; what XML 1.0 cannot hold at all is U+FFFD. Group names are
-    ! escaped, and one shaped like an id the backend makes itself is
-    ! renamed rather than taking that id.
+    ! needs, and what XML 1.0 cannot hold at all as U+FFFD: one written form
+    ! for each code point. Group names are escaped, compared as written, and
+    ! never take an id the backend makes itself.
     subroutine svg_text_check(nfail)
         integer, intent(inout) :: nfail
         character(len=200) :: out
         character(len=:), allocatable :: b
         type(svg_renderer_t) :: svg
+        type(paint_t) :: paint
+        type(glyphrun_t) :: run
         integer :: n
 
-        ! "A", U+1F600, U+1D465 (math italic x), U+0001, a tab.
+        ! "A", U+1F600, U+1D465 (math italic x), U+10FFFD, U+0001, a tab.
         call xml_escape_to("A"//achar(240)//achar(159)//achar(152)//achar(128) &
-                           //achar(240)//achar(157)//achar(145)//achar(165)//achar(1)//achar(9), out, n)
-        call check(out(1:n) == "A&#128512;&#119909;&#65533;"//achar(9), &
-                   "SVG escapes code points of six digits and control characters", nfail)
+                           //achar(240)//achar(157)//achar(145)//achar(165) &
+                           //achar(244)//achar(143)//achar(191)//achar(189)//achar(1)//achar(9), out, n)
+        call check(out(1:n) == "A&#128512;&#119909;&#1114109;&#65533;"//achar(9), &
+                   "SVG escapes code points of six and seven digits, and control characters", nfail)
+        ! A surrogate, U+FFFE, and a code past U+10FFFF: none is XML.
+        call xml_escape_to(achar(237)//achar(160)//achar(128)//achar(239)//achar(191)//achar(190) &
+                           //achar(244)//achar(144)//achar(128)//achar(128), out, n)
+        call check(out(1:n) == "&#65533;&#65533;&#65533;", "SVG writes what XML cannot hold as U+FFFD", nfail)
+        ! An overlong "c" is written as "c"; trailing blanks stay when asked.
+        call xml_escape_to(achar(193)//achar(163)//"d ", out, n)
+        call check(out(1:n) == "cd", "SVG writes bytes that decode to ASCII as that character", nfail)
+        call xml_escape_to("d ", out, n, whole=.true.)
+        call check(out(1:n) == "d ", "SVG keeps trailing blanks when asked", nfail)
+
+        paint%filled = .true.
+        paint%clip%on = .true.
+        paint%clip%w = 5.0_dp
+        paint%clip%h = 5.0_dp
         call svg%open_canvas(10.0_dp, 10.0_dp)
+        ! The backend's own clip1.
+        call svg%draw_rect(0.0_dp, 0.0_dp, 1.0_dp, 1.0_dp, paint)
         call svg%begin_group('a"b')
         call svg%end_group()
         call svg%begin_group("clip1")
         call svg%end_group()
+        call svg%begin_group(achar(193)//achar(163)//"lip1")
+        call svg%end_group()
+        call svg%begin_group("clip1 ")
+        call svg%end_group()
+        call svg%begin_group(achar(1)//"x")
+        call svg%end_group()
+        call svg%begin_group(achar(2)//"x")
+        call svg%end_group()
+        ! Text whose control characters each take eight bytes written.
+        run%n = 1
+        allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
+        run%gid = glyph_cmap(FACE_REGULAR, 65)
+        run%x = 0.0_dp
+        run%y = 5.0_dp
+        run%size = 10.0_dp
+        run%text = "a"//repeat(achar(1), 6)//"Z"
+        paint%clip%on = .false.
+        call svg%draw_glyphs(0.0_dp, 0.0_dp, run, paint, 0.0_dp)
         call svg%close_canvas()
         b = svg%bytes()
         call check(index(b, 'id="a&quot;b"') > 0, "SVG escapes group names", nfail)
-        call check(index(b, 'id="clip1"') == 0 .and. index(b, 'id="clip1-2"') > 0, &
-                   "SVG group names never take the backend's own ids", nfail)
+        call check(occurrences(b, 'id="clip1"') == 1 .and. index(b, 'id="clip1-2"') > 0 .and. &
+                   index(b, 'id="clip1-3"') > 0, "SVG group names never take the backend's own ids", nfail)
+        call check(index(b, 'id="clip1 "') > 0, "SVG keeps a group name's trailing blank", nfail)
+        call check(index(b, 'id="&#65533;x"') > 0 .and. index(b, 'id="&#65533;x-2"') > 0, &
+                   "SVG group names that read alike are different ids", nfail)
+        call check(index(b, 'aria-label="a'//repeat("&#65533;", 6)//'Z"') > 0, &
+                   "SVG writes all of a label's text", nfail)
     end subroutine svg_text_check
 
     ! A rule list built by hand with x longer than y, w and h grows by its
