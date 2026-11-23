@@ -217,7 +217,7 @@ module fplotlib_render
         integer :: n_frame = 0             ! frames begun and not yet ended
         ! For each open frame, outermost first, log10 of a bound on how
         ! much it and the frames around it magnify: see frame_decimals.
-        real(dp), allocatable :: frame_log_zoom(:)
+        real(dp), allocatable, private :: frame_log_zoom(:)
         ! The open groups (G) and frames (F), innermost last: each must end
         ! inside whatever began after it.
         character(len=:), allocatable :: scopes
@@ -589,10 +589,11 @@ contains
         call self%begin_frame_impl(matrix, clip)
     end subroutine begin_frame
 
-    ! The frame's magnification, bounded by the Frobenius norm of its
-    ! matrix, which is at least the most it stretches, times that of the
-    ! frames around it; kept as a logarithm, which deep nesting cannot
-    ! overflow.
+    ! The frame's magnification, bounded by sqrt(|A|_1 |A|_inf) of the
+    ! 2 by 2 part of its matrix, which is at least the most it stretches
+    ! and exactly 1 for a frame that only moves, times that of the frames
+    ! around it: both norms bound a product by the product. Kept as a
+    ! logarithm, which deep nesting cannot overflow.
     subroutine push_zoom(self, matrix)
         class(renderer_t), intent(inout) :: self
         real(dp), intent(in) :: matrix(6)
@@ -607,17 +608,29 @@ contains
         end if
         outer = 0.0_dp
         if (self%n_frame > 1) outer = self%frame_log_zoom(self%n_frame - 1)
-        self%frame_log_zoom(self%n_frame) = outer + &
-            log10(max(sqrt(sum(matrix(1:4)**2)), tiny(1.0_dp)))
+        self%frame_log_zoom(self%n_frame) = outer + 0.5_dp*( &
+            log10(max(abs(matrix(1)) + abs(matrix(2)), abs(matrix(3)) + abs(matrix(4)), tiny(1.0_dp))) + &
+            log10(max(abs(matrix(1)) + abs(matrix(3)), abs(matrix(2)) + abs(matrix(4)), tiny(1.0_dp))))
     end subroutine push_zoom
 
     ! How many decimals a vector encoder writes a number with, inside the
-    ! frames open at level (0 for none), to place it within a millionth of
-    ! a point on the page: six, and one more for each power of ten those
-    ! frames magnify by, up to forty.
-    pure integer function frame_decimals(r, level) result(d)
+    ! frames open now, to place it within a millionth of a point on the
+    ! page: six, and one more for each power of ten those frames magnify
+    ! by, up to forty. With outer, inside the frames around the innermost,
+    ! for the numbers of its own matrix, from begin_frame_impl: a contract
+    ! error with no frame open.
+    integer function frame_decimals(r, outer) result(d)
         class(renderer_t), intent(in) :: r
-        integer, intent(in) :: level
+        logical, intent(in), optional :: outer
+        integer :: level
+
+        level = r%n_frame
+        if (present(outer)) then
+            if (outer) then
+                if (r%n_frame == 0) call contract_error("renderer: frame_decimals(outer) with no frame open")
+                level = r%n_frame - 1
+            end if
+        end if
         d = 6
         if (level > 0) d = 6 + max(0, ceiling(min(34.0_dp, r%frame_log_zoom(level))))
     end function frame_decimals

@@ -85,7 +85,7 @@ contains
         if (present(decimals)) then
             call fmt_num(x, s, n, decimals)
         else
-            call fmt_num(x, s, n, frame_decimals(self, self%n_frame))
+            call fmt_num(x, s, n, frame_decimals(self))
         end if
         call builder_append(self%b, s(1:n))
     end subroutine put_num
@@ -715,7 +715,7 @@ contains
         ! significant digits of each factor.
         do i = 1, 6
             if (i > 1) call put(self, " ")
-            call put_num(self, matrix(i), max(frame_decimals(self, self%n_frame - 1), &
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
                                               matrix_decimals(matrix(i))))
         end do
         call put(self, ')">')

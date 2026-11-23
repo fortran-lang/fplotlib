@@ -111,7 +111,7 @@ contains
         if (present(decimals)) then
             call fmt_num(x, s, n, decimals)
         else
-            call fmt_num(x, s, n, frame_decimals(self, self%n_frame))
+            call fmt_num(x, s, n, frame_decimals(self))
         end if
         call builder_append(self%c, s(1:n))
         call builder_append(self%c, " ")
@@ -219,7 +219,7 @@ contains
                 do i = 1, p%n_dash
                     call put_num(self, p%dash(i))
                 end do
-                call put(self, "] "//num_str(p%dash_offset, frame_decimals(self, self%n_frame))//" d"//new_line("a"))
+                call put(self, "] "//num_str(p%dash_offset, frame_decimals(self))//" d"//new_line("a"))
             else
                 call put(self, "[] 0 d"//new_line("a"))
             end if
@@ -363,7 +363,7 @@ contains
         ! In the coordinates of the frames around it, with fifteen
         ! significant digits of each factor.
         do i = 1, 6
-            call put_num(self, matrix(i), max(frame_decimals(self, self%n_frame - 1), &
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
                                               matrix_decimals(matrix(i))))
         end do
         call put(self, "cm"//new_line("a"))
@@ -520,7 +520,7 @@ contains
             end if
             if (.not. open) then
                 if (font /= cur_font .or. run%size(i) /= cur_size) then
-                    call put(self, "/T"//int_str(font)//" "//num_str(run%size(i), frame_decimals(self, self%n_frame)) &
+                    call put(self, "/T"//int_str(font)//" "//num_str(run%size(i), frame_decimals(self)) &
                              //" Tf"//eol)
                     cur_font = font
                     cur_size = run%size(i)

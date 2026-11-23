@@ -106,9 +106,16 @@ contains
         ! The renderer contract keeps every coordinate and size within 1e15
         ! (MAX_COORD), which the field holds. The clamp is a last guard so
         ! that nothing can ever come out as asterisks.
+        ! No more than seventeen significant digits, all a double holds:
+        ! more would only write out its binary expansion.
+        if (d > 6) d = max(6, min(d, 16 - floor(log10(abs(x)))))
         w = 18 + d
-        write (form, "(a,i0,a,i0,a)") "(F", w, ".", d, ")"
-        write (tmp, form) max(-1.0e15_dp, min(1.0e15_dp, x))
+        if (d == 6) then
+            write (tmp, "(F24.6)") max(-1.0e15_dp, min(1.0e15_dp, x))
+        else
+            write (form, "(a,i0,a,i0,a)") "(F", w, ".", d, ")"
+            write (tmp, form) max(-1.0e15_dp, min(1.0e15_dp, x))
+        end if
         ! left-trim spaces
         j = 1
         do while (j < w .and. tmp(j:j) == " ")

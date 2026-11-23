@@ -38,11 +38,15 @@ transform without a clip, and stops on any other rather than ignoring it.
 
 SVG, PDF and EPS write a frame's matrix with fifteen significant digits of
 each factor, and the numbers inside it with one more decimal than six for
-each power of ten the frames open magnify by, up to forty, so that a frame
-that scales by 4e-7 keeps its scale and one that magnifies a million times
-still places what it holds to a millionth of a point on the page.
-`frame_decimals(r, level)` gives that count for the frames open at `level`
-(0 for none), for a custom encoder to use the same.
+each power of ten the frames open magnify by (bounded by
+`sqrt(|A|_1 |A|_inf)` of each matrix, so a frame that only moves adds
+none), up to forty and to seventeen significant digits: a frame that scales
+by 4e-7 keeps its scale, and one that magnifies a million times still
+writes what it holds to a millionth of a point on the page, as far as the
+viewer computes that finely; many PDF and PostScript readers work in single
+precision. `frame_decimals(r)` gives that count for the frames open now,
+and `frame_decimals(r, outer=.true.)` for those around the innermost, for a
+custom encoder to use the same.
 
 The PNG backend draws a frame's content transformed and clipped exactly; a
 paint clip inside a clipped frame is cut as geometry, so its edges are

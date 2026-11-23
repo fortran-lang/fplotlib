@@ -80,7 +80,7 @@ contains
         if (present(decimals)) then
             call fmt_num(x, s, n, decimals)
         else
-            call fmt_num(x, s, n, frame_decimals(self, self%n_frame))
+            call fmt_num(x, s, n, frame_decimals(self))
         end if
         call builder_append(self%c, s(1:n))
         call builder_append(self%c, " ")
@@ -165,7 +165,7 @@ contains
             do i = 1, p%n_dash
                 call put_num(self, p%dash(i))
             end do
-            call put(self, "] "//num_str(p%dash_offset, frame_decimals(self, self%n_frame))//" setdash"//new_line("a"))
+            call put(self, "] "//num_str(p%dash_offset, frame_decimals(self))//" setdash"//new_line("a"))
         end if
     end subroutine begin_paint
 
@@ -238,7 +238,7 @@ contains
         ! In the coordinates of the frames around it, with fifteen
         ! significant digits of each factor.
         do i = 1, 6
-            call put_num(self, matrix(i), max(frame_decimals(self, self%n_frame - 1), &
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
                                               matrix_decimals(matrix(i))))
         end do
         call put(self, "] concat"//new_line("a"))
@@ -365,7 +365,7 @@ contains
         character(len=1) :: eol
 
         eol = new_line("a")
-        fd = frame_decimals(self, self%n_frame)
+        fd = frame_decimals(self)
         call put(self, "gsave"//eol)
         if (paint%clip%on) then
             call put_num(self, paint%clip%x)

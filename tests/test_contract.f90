@@ -21,7 +21,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 41
+    integer, parameter :: NCASE = 42
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -77,13 +77,14 @@ module test_contract
         "fplotlib: renderer: begin_frame without end_frame at close_canvas", &
         "fplotlib: frame: nonfinite or out-of-range transform", &
         "fplotlib: renderer: this target cannot transform or clip a frame", &
-        "fplotlib: pdf: new_page inside a frame or group"]
+        "fplotlib: pdf: new_page inside a frame or group", &
+        "fplotlib: renderer: frame_decimals(outer) with no frame open"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1]
+        1, 1]
 
 contains
 
@@ -91,6 +92,7 @@ contains
     subroutine contract_case(k)
         integer, intent(in) :: k
         type(svg_renderer_t) :: svg
+        integer :: k2
         type(png_renderer_t) :: png
         type(pdf_renderer_t) :: pdf
         type(eps_renderer_t) :: eps
@@ -231,6 +233,9 @@ contains
             call pdf%open_canvas(10.0_dp, 10.0_dp)
             call pdf%begin_frame(unit, none)
             call pdf%new_page()
+        case (42)
+            call svg%open_canvas(10.0_dp, 10.0_dp)
+            k2 = frame_decimals(svg, outer=.true.)
         end select
     end subroutine contract_case
 
