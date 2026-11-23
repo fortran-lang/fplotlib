@@ -17,7 +17,9 @@ document without pages, or, exporting PNG, a `dpi` that is not finite and
 positive is a bug in the caller and stops the program. So is a PNG page
 with more than `MAX_PNG_PIXELS` pixels: a page's size is known before it
 is exported (`page_size`, and `png_pixels` in `fplotlib_backend_png` to
-count it at a dpi), unlike a figure cropped tight by `savefig`.
+count it at a dpi), unlike a figure cropped tight by `savefig`. A page may
+be of no size, as the frame of a formula of negative space alone is: it is
+written as such, which some PDF viewers decline to show.
 
 The exporters do not lay out text or math. Glyph source mappings
 are preserved in frames; ordinary PDF text carries `ActualText`, while

@@ -61,7 +61,10 @@ contains
     end subroutine check_font
 
     ! Append s, set in face at size, to run, starting with the pen at
-    ! (x0, y0). xend is where the pen is left.
+    ! (x0, y0). xend is where the pen is left. s is appended to run%text
+    ! too, which each glyph's source range points into: a caller does not
+    ! set run%text itself. A run built by hand needs gid, x, y and size at
+    ! least n long; its glyphs' fonts and source ranges may be left out.
     subroutine text_layout(s, size, face, x0, y0, run, xend)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size, x0, y0
@@ -191,10 +194,17 @@ contains
             allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
                       run%x(16), run%y(16), run%size(16))
         else
+            if (.not. (allocated(run%x) .and. allocated(run%y) .and. allocated(run%size))) &
+                call contract_error("text: a glyph run needs gid, x, y and size")
+            if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < run%n) &
+                call contract_error("text: glyph run arrays shorter than its count")
             call fill_mapping(run)
         end if
-        if (run%n >= size(run%gid)) then
-            cap = max(16, 2*size(run%gid))
+        ! Grown when its shortest array is full: a run built by hand may
+        ! have them of different lengths.
+        if (run%n >= min(size(run%gid), size(run%x), size(run%y), size(run%size), &
+                         size(run%font), size(run%first), size(run%last))) then
+            cap = max(16, 2*(run%n + 1))
             allocate (ti(cap))
             ti(1:run%n) = run%gid(1:run%n)
             call move_alloc(ti, run%gid)

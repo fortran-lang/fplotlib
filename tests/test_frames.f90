@@ -57,6 +57,13 @@ contains
         call math_frame("\!", 10.0_dp, .false., frame)
         call frame%metrics(w, h)
         call check(w == 0.0_dp .and. h >= 0.0_dp, "negative space alone makes an empty frame", nfail)
+        ! Rules narrower than nothing, which a label draws, are drawn too.
+        call math_frame("\frac{\!}{\!}", 10.0_dp, .false., frame)
+        call math_frame("\cfrac{\!}{\!}", 10.0_dp, .true., frame)
+        call math_frame("\sqrt{\!\!\!\!\!\!}", 10.0_dp, .false., frame)
+        call math_frame("\overline{\!\!\!\!}", 10.0_dp, .false., frame)
+        call math_frame("\underline{\!\!\!\!}", 10.0_dp, .false., frame)
+        call check(.true., "formulas with rules of negative width make frames", nfail)
     end subroutine bare_runs_and_formulas
 
     subroutine check(ok, message, nfail)

@@ -416,8 +416,13 @@ contains
         ! its frame is empty, and the glyphs stay where they are.
         call recorder%open_canvas(max(0.0_dp, w), max(0.0_dp, h + d))
         call recorder%draw_glyphs(0.0_dp, h, run, ink, 0.0_dp)
+        ! A rule negative space makes narrower than nothing, as in
+        ! \frac{\!}{\!}, covers the same box drawn the other way round, as
+        ! a label draws it.
         do k = 1, rules%n
-            call recorder%draw_rect(rules%x(k), h + rules%y(k), rules%w(k), rules%h(k), ink)
+            call recorder%draw_rect(min(rules%x(k), rules%x(k) + rules%w(k)), &
+                                    h + min(rules%y(k), rules%y(k) + rules%h(k)), &
+                                    abs(rules%w(k)), abs(rules%h(k)), ink)
         end do
         call recorder%close_canvas()
         call recorder%take(frame)
