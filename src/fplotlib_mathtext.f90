@@ -1019,6 +1019,9 @@ contains
     ! gathered.
     recursive subroutine parse_env(state, s, i, alph, k, j)
         type(math_context_t), intent(inout) :: state
+        ! What a parse returns, kept here before it is stored: the call
+        ! may move the arrays it is stored into.
+        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: i, alph
         integer, intent(out) :: k, j
@@ -1149,7 +1152,8 @@ contains
                 if (len_trim(cell) == 0) then
                     state%cells(n0 + (r - 1)*nc + c) = 0
                 else
-                    state%cells(n0 + (r - 1)*nc + c) = parse_list(state, cell, alph)
+                    got = parse_list(state, cell, alph)
+                    state%cells(n0 + (r - 1)*nc + c) = got
                 end if
             end do
         end do
@@ -1261,7 +1265,6 @@ contains
     end function cell_text
 
     subroutine ar_reserve(state, ncells)
-
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: ncells
         integer, allocatable :: ti(:)
@@ -1428,7 +1431,6 @@ contains
     end subroutine make_array
 
     recursive subroutine parse_left(state, s, i, alph, k, j)
-
         type(math_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         integer, intent(in) :: i, alph

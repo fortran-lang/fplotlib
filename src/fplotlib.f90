@@ -7535,6 +7535,7 @@ contains
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
         type(doc_t) :: doc
+        call check_typeset_args(filename, dpi)
         call md_parse(text, doc)
         call doc_typeset(doc)
         call write_pages(filename, dpi, status)
@@ -7570,18 +7571,8 @@ contains
         real(dp) :: w, h, res
         integer :: p, col, bg(3)
 
-        select case (file_ext(filename))
-        case ("svg", "pdf", "eps", "png")
-        case default
-            call contract_error("typeset: supported formats are .svg, .pdf, .eps and .png, not ." &
-                                //file_ext(filename))
-        end select
         res = 150.0_dp
-        if (present(dpi)) then
-            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
-                call contract_error("typeset: dpi must be finite and positive")
-            res = dpi
-        end if
+        if (present(dpi)) res = dpi
         call ts_page_size(w, h, col)
         bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
         do p = 1, max(1, ts_page_count())
@@ -7592,9 +7583,30 @@ contains
             call document%add_page(page)
         end do
         call save_document(document, filename, local, res)
-        if (present(status)) status = local
-        if (.not. local%ok()) call fail_run("typeset", local%code, trim(local%message), status)
+        if (.not. local%ok()) then
+            call fail_run("typeset", local%code, trim(local%message), status)
+        else if (present(status)) then
+            status = local
+        end if
     end subroutine write_pages
+
+    ! The file's format and the resolution, checked before the document is
+    ! set: a broken one is the caller's bug, found without the work.
+    subroutine check_typeset_args(filename, dpi)
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+
+        select case (file_ext(filename))
+        case ("svg", "pdf", "eps", "png")
+        case default
+            call contract_error("typeset: supported formats are .svg, .pdf, .eps and .png, not ." &
+                                //file_ext(filename))
+        end select
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("typeset: dpi must be finite and positive")
+        end if
+    end subroutine check_typeset_args
 
     ! A failure a correct program can meet at run time: returned in status
     ! when the caller passed one, and otherwise the end of the program, with

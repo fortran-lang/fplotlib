@@ -348,7 +348,8 @@ instead, through a `status_t` from `fplotlib_status`. Today that is an
 output file that cannot be written, or a PNG cropped with
 `bbox_inches="tight"` to more pixels than it can hold. `savefig`,
 `save_animation` and the `render_*` functions return it in their optional
-`status`, and without one stop with the message and exit code 2:
+`status`, and without one stop with the message and exit code 2; so does
+`typeset`, for the files of a document:
 
 ```fortran
 use fplotlib
