@@ -28,6 +28,7 @@ module fplotlib_draw
     use fplotlib_dates
     use fplotlib_state
     use fplotlib_artist
+    use fplotlib_scene, only: frame_t, recording_renderer_t
     implicit none
     public
 
@@ -4903,6 +4904,19 @@ contains
         real(dp), intent(in) :: vw, vh, dpi
         png_fits = png_pixels(vw, vh, dpi) <= MAX_PNG_PIXELS
     end function png_fits
+
+    ! The current figure recorded as a frame, which owns what it holds and
+    ! can be placed, transformed and clipped, into other frames and pages.
+    subroutine render_frame(frame, facecolor, transparent, bbox_inches, pad_inches)
+        type(frame_t), intent(out) :: frame
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        type(recording_renderer_t) :: recorder
+        call check_pad_arg("render_frame", "pad_inches", pad_inches)
+        call render_figure(recorder, facecolor, transparent, bbox_inches, pad_inches)
+        call recorder%take(frame)
+    end subroutine render_frame
 
     function render_svg(facecolor, transparent, bbox_inches, pad_inches, status) result(svg)
         character(len=*), intent(in), optional :: facecolor, bbox_inches

@@ -2,8 +2,8 @@
 
 `renderer_t` is the format-independent drawing contract. Drawing does not
 require a file, an encoded format, or a `bytes` method. `encoded_renderer_t`
-extends it with `bytes` for PDF/SVG/PNG/EPS output; other targets can
-implement drawing alone.
+extends it with `bytes` for PDF/SVG/PNG/EPS output; recording and interactive
+targets can implement drawing alone.
 
 The built-in text family has size, weight and slant styles. There is no
 serif/monospace family selector that silently substitutes the sans font.
@@ -32,10 +32,9 @@ frame's coordinates. Like the other methods they are checked once, in
 `renderer_t`: the canvas must be open, the matrix finite and within
 `MAX_COORD`, and the clip a box of nonnegative size. Frames and groups nest:
 each must end inside whatever began after it, and none may be open at
-`close_canvas`. SVG, PDF and EPS implement `begin_frame_impl` and
-`end_frame_impl`. A target that does not, PNG for now among them, accepts
-only the identity transform without a clip, and stops on any other rather
-than ignoring it.
+`close_canvas`. Every built-in backend implements `begin_frame_impl` and
+`end_frame_impl`. A custom target that does not accepts only the identity
+transform without a clip, and stops on any other rather than ignoring it.
 
 SVG, PDF and EPS write a frame's matrix with fifteen significant digits of
 each factor, and the numbers inside it with one more decimal than six for
@@ -49,6 +48,23 @@ precision. `frame_decimals(r)` gives that count for the frames open now,
 and `frame_decimals(r, outer=.true.)` for those around the innermost, for a
 custom encoder to use the same; the cap at seventeen significant digits is
 `fmt_num`'s, which a custom formatter applies itself.
+
+The PNG backend draws a frame's content transformed and clipped exactly; a
+paint clip inside a clipped frame is cut as geometry, so its edges are
+antialiased rather than whole pixels. A dashed stroke is built in the
+frame's coordinates, but what the rasterizer may skip of it is decided by
+the canvas: a segment is walked only where the matrix maps it into the
+canvas, widened on each side by the pen as the matrix stretches that axis,
+and only over the dashes whose place along the line falls within the
+canvas's span along it, and a cap's length beyond. A segment whose dashes
+cross the canvas as stripes less than half a pixel apart is drawn solid at
+the pattern's cover, the approximation
+[`fplotlib_status`](fplotlib_status.md) describes; that bounds every walk
+by the canvas, however the frame shrinks, shears or stretches. Everywhere
+else the dashes are what walking every one of them draws.
+
+Pages are not part of `renderer_t`: `pdf_renderer_t%new_page` starts the
+next page of a PDF, and the other formats write one page each.
 
 ```{f:module} fplotlib_render
 ```

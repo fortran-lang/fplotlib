@@ -86,10 +86,17 @@ The PNG backend draws one thing approximately: a dash pattern shorter
 than half a pixel, whose dashes cannot be told apart, is drawn as a solid
 line at the share of the line the pattern would cover (more where round
 or square ends close the gaps). Walking such a pattern dash by dash could
-take without end. Everything else it draws as the full walk of every dash
-would, up to the rounding of where along a very long segment the pattern
-stands, which the walk works out by adding dash after dash and the
-shortcuts by division.
+take without end. In a frame (see [`fplotlib_render`](fplotlib_render.md))
+the same holds segment by segment, for a segment whose dashes cross the
+canvas as stripes less than half a pixel apart. A frame that squeezes
+across a line can make them so even where each dash is long along it, as
+the stripes then lie almost along the line. Everything else it draws as the full walk of every dash would, up to the
+rounding of where along a very long segment the pattern stands, which the
+walk works out by adding dash after dash and the shortcuts by division. In
+a PNG, a frame whose matrix, taken together with those of the frames
+around it, stretches or moves by more than 1e100 places nothing it holds,
+nor do the frames inside it, as a shape whose place on the canvas is past
+the largest double is left out.
 
 ```{f:module} fplotlib_status
 ```

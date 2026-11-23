@@ -40,7 +40,8 @@
 ! dollar sign written \$ is a dollar sign, in text and in math.
 module fplotlib_mathtext
     use fplotlib_style, only: dp, utf8_next
-    use fplotlib_render, only: glyphrun_t
+    use fplotlib_render, only: glyphrun_t, paint_t
+    use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_text, only: text_layout, run_add, run_map, check_font
     use fplotlib_mathsym, only: sym_lookup, sym_class, CL_ORD, CL_OP, CL_BIN, &
                                 CL_REL, CL_OPEN, CL_CLOSE, CL_PUNCT, CL_INNER
@@ -88,7 +89,7 @@ module fplotlib_mathtext
     private
 
     public :: math_is, math_width, math_layout, math_formula, mrules_t
-    public :: math_context_t
+    public :: math_context_t, math_frame
 
     ! Rules, in the same frame as the glyphs of a run: (x, y) is the top
     ! left corner, y down, w and h the width and height.
@@ -391,6 +392,42 @@ contains
         h = box%h
         d = box%d
     end subroutine math_formula_impl
+
+    ! An owned frame of one formula, without dollar signs. Its baseline
+    ! is measured from the top; the default paint is filled black.
+    subroutine math_frame(s, size, display, frame, paint, context)
+        character(len=*), intent(in) :: s
+        real(dp), intent(in) :: size
+        logical, intent(in) :: display
+        type(frame_t), intent(out) :: frame
+        type(paint_t), intent(in), optional :: paint
+        type(math_context_t), intent(inout), optional :: context
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        type(recording_renderer_t) :: recorder
+        type(paint_t) :: ink
+        real(dp) :: w, h, d
+        integer :: k
+
+        ink%filled = .true.
+        if (present(paint)) ink = paint
+        call math_formula(s, size, display, run, rules, w, h, d, context=context)
+        ! A formula of negative space, \! say, is narrower than nothing:
+        ! its frame is empty, and the glyphs stay where they are.
+        call recorder%open_canvas(max(0.0_dp, w), max(0.0_dp, h + d))
+        call recorder%draw_glyphs(0.0_dp, h, run, ink, 0.0_dp)
+        ! A rule negative space makes narrower than nothing, as in
+        ! \frac{\!}{\!}, covers the same box drawn the other way round, as
+        ! a label draws it.
+        do k = 1, rules%n
+            call recorder%draw_rect(min(rules%x(k), rules%x(k) + rules%w(k)), &
+                                    h + min(rules%y(k), rules%y(k) + rules%h(k)), &
+                                    abs(rules%w(k)), abs(rules%h(k)), ink)
+        end do
+        call recorder%close_canvas()
+        call recorder%take(frame)
+        call frame%set_baseline(h)
+    end subroutine math_frame
 
     ! The dollar sign that closes a formula opened before i, skipping
     ! the ones written \$; len(s) + 1 when there is none.
