@@ -181,14 +181,21 @@ contains
         real(dp), intent(in) :: x, y, fs
         integer, allocatable :: ti(:)
         real(dp), allocatable :: t(:)
-        integer :: cap
+        integer :: cap, g
         logical :: some, all4
+        real(dp) :: gx, gy, gs
 
-        if (gid < 0 .or. gid > NGLYPH) call contract_error("text: invalid glyph ID")
-        if (.not. ieee_is_finite(x) .or. .not. ieee_is_finite(y)) then
+        ! The glyph is read before the run may grow: a caller may pass
+        ! elements of the run itself, which growing it would free.
+        g = gid
+        gx = x
+        gy = y
+        gs = fs
+        if (g < 0 .or. g > NGLYPH) call contract_error("text: invalid glyph ID")
+        if (.not. ieee_is_finite(gx) .or. .not. ieee_is_finite(gy)) then
             call contract_error("text: nonfinite glyph position")
         end if
-        if (.not. ieee_is_finite(fs) .or. fs < 0.0_dp) then
+        if (.not. ieee_is_finite(gs) .or. gs < 0.0_dp) then
             call contract_error("text: font size must be finite and nonnegative")
         end if
         ! A run is empty, with none of gid, x, y and size, or has all four
@@ -239,13 +246,13 @@ contains
             call move_alloc(t, run%size)
         end if
         run%n = run%n + 1
-        run%gid(run%n) = gid
-        run%font(run%n) = glyph_face(gid)
+        run%gid(run%n) = g
+        run%font(run%n) = glyph_face(g)
         run%first(run%n) = 0
         run%last(run%n) = 0
-        run%x(run%n) = x
-        run%y(run%n) = y
-        run%size(run%n) = fs
+        run%x(run%n) = gx
+        run%y(run%n) = gy
+        run%size(run%n) = gs
     end subroutine run_add
 
     ! A run built by hand may leave out each glyph's font and source range,

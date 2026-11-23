@@ -866,11 +866,16 @@ contains
         r = px >= x0 .and. px <= x1 .and. py >= y0 .and. py <= y1
     end function near_box
 
+    ! Appends (px, py), read before ox and oy may grow, so that a caller may
+    ! pass one of their own elements.
     subroutine push_xy(ox, oy, m, px, py)
         real(dp), allocatable, intent(inout) :: ox(:), oy(:)
         integer, intent(inout) :: m
         real(dp), intent(in) :: px, py
         real(dp), allocatable :: t(:)
+        real(dp) :: x, y
+        x = px
+        y = py
         if (m + 1 > size(ox)) then
             allocate (t(2*(m + 1)))
             t(1:m) = ox(1:m)
@@ -880,8 +885,8 @@ contains
             call move_alloc(t, oy)
         end if
         m = m + 1
-        ox(m) = px
-        oy(m) = py
+        ox(m) = x
+        oy(m) = y
     end subroutine push_xy
 
     ! The part of the segment from (x0, y0) to (x1, y1) inside the box,

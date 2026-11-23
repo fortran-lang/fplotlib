@@ -4,7 +4,7 @@
 module test_glyph_runs
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t, paint_t
-    use fplotlib_text, only: text_layout
+    use fplotlib_text, only: text_layout, run_add
     use fplotlib_glyphs, only: glyph_cmap, FACE_REGULAR
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_svg, only: svg_renderer_t
@@ -24,6 +24,7 @@ contains
         call pdf_text_check(nfail)
         call svg_text_check(nfail)
         call hand_built_rules(nfail)
+        call own_glyph(nfail)
         print "(a,i0)", "glyph runs: failures = ", nfail
     end subroutine glyph_runs_check
 
@@ -196,6 +197,21 @@ contains
         call check(rules%n >= 3 .and. size(rules%y) >= rules%n .and. size(rules%h) >= rules%n, &
                    "a rule list with arrays of different lengths grows by the shortest", nfail)
     end subroutine hand_built_rules
+
+    ! run_add given a glyph of the run it adds to, when the run is full:
+    ! the glyph is read before the run grows, which would free it.
+    subroutine own_glyph(nfail)
+        integer, intent(inout) :: nfail
+        type(glyphrun_t) :: run
+        real(dp) :: advance
+        integer :: k
+
+        call text_layout(repeat("A", 16), 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, advance)
+        k = run%n
+        call run_add(run, run%gid(1), run%x(1), run%y(1), run%size(1))
+        call check(run%n == k + 1 .and. run%gid(run%n) == run%gid(1) .and. &
+                   run%x(run%n) == run%x(1), "run_add takes a glyph of the run it grows", nfail)
+    end subroutine own_glyph
 
     subroutine pdf_text_check(nfail)
         integer, intent(inout) :: nfail
