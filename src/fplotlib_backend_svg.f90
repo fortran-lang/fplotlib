@@ -23,6 +23,12 @@ module fplotlib_backend_svg
 
     public :: svg_renderer_t
 
+    ! A group id written, and for a name, the next suffix to try.
+    type :: svg_id_t
+        character(len=:), allocatable :: s
+        integer :: next = 2
+    end type svg_id_t
+
     type, extends(encoded_renderer_t) :: svg_renderer_t
         type(svg_builder) :: b
         ! Serial numbers for the ids that <use> and clip-path refer to.
@@ -40,9 +46,10 @@ module fplotlib_backend_svg
         ! Whether each open frame, the innermost last, opened a clip group
         ! of its own that end_frame has to close.
         logical, allocatable :: frame_clipped(:)
-        ! The group names used so far, each followed by a new line: a frame
-        ! placed twice repeats its groups, whose ids must stay unique.
-        character(len=:), allocatable :: group_names
+        ! The group ids written so far: a frame placed twice repeats its
+        ! groups, whose ids must stay unique.
+        type(svg_id_t), allocatable :: ids(:)
+        integer :: n_ids = 0
     contains
         procedure :: open_canvas_impl => svg_open_canvas
         procedure :: close_canvas_impl => svg_close_canvas
@@ -237,7 +244,7 @@ contains
 
         self%n_marker = 0
         self%n_clip = 0
-        self%group_names = new_line("a")
+        self%n_ids = 0
         self%cur_clip_id = 0
         self%cur_clip = clip_t()
         self%in_clip = .false.
@@ -615,21 +622,25 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
-        integer :: k
+        integer :: j
         character(len=12) :: suffix
         character(len=:), allocatable :: id
 
         call sync_clip(self, none)
         ! A name used before becomes name-2, name-3, ...: the first of those
         ! no group on the canvas has used, a name given as such included.
+        ! Each name remembers the next suffix to try.
         id = name
-        k = 1
-        do while (index(self%group_names, new_line("a")//id//new_line("a")) > 0)
-            k = k + 1
-            write (suffix, "(i0)") k
-            id = name//"-"//trim(suffix)
-        end do
-        self%group_names = self%group_names//id//new_line("a")
+        j = find_id(self, name)
+        if (j > 0) then
+            do
+                write (suffix, "(i0)") self%ids(j)%next
+                self%ids(j)%next = self%ids(j)%next + 1
+                id = name//"-"//trim(suffix)
+                if (find_id(self, id) == 0) exit
+            end do
+        end if
+        call add_id(self, id)
         call put(self, '<g id="')
         call put(self, id)
         call put(self, '">')
@@ -645,6 +656,34 @@ contains
         call put(self, "</g>")
         call put_eol(self)
     end subroutine svg_end_group
+
+    integer function find_id(self, id) result(j)
+        class(svg_renderer_t), intent(in) :: self
+        character(len=*), intent(in) :: id
+        do j = 1, self%n_ids
+            if (self%ids(j)%s == id) return
+        end do
+        j = 0
+    end function find_id
+
+    subroutine add_id(self, id)
+        class(svg_renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: id
+        type(svg_id_t), allocatable :: grown(:)
+        integer :: j
+        if (.not. allocated(self%ids)) allocate (self%ids(16))
+        if (self%n_ids == size(self%ids)) then
+            allocate (grown(2*self%n_ids))
+            do j = 1, self%n_ids
+                call move_alloc(self%ids(j)%s, grown(j)%s)
+                grown(j)%next = self%ids(j)%next
+            end do
+            call move_alloc(grown, self%ids)
+        end if
+        self%n_ids = self%n_ids + 1
+        self%ids(self%n_ids)%s = id
+        self%ids(self%n_ids)%next = 2
+    end subroutine add_id
 
     ! A frame is a group with a transform, and when clipped a clip group
     ! inside it; renderer_t has checked the call and counted the frame.

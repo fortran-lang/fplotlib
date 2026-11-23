@@ -262,17 +262,22 @@ contains
     subroutine png_dash_frames_check(nfail)
         integer, intent(inout) :: nfail
         real(dp), parameter :: c30 = 0.8660254037844386_dp, s30 = 0.5_dp
-        real(dp), parameter :: mats(6, 7) = reshape([ &
+        real(dp), parameter :: mats(6, 9) = reshape([ &
             0.1_dp, 0.0_dp, 0.0_dp, 0.1_dp, 10.0_dp, 10.0_dp, &
             10.0_dp, 0.0_dp, 0.0_dp, 10.0_dp, -500.0_dp, -300.0_dp, &
             c30, s30, -s30, c30, 50.0_dp, 0.0_dp, &
             1.0_dp, 0.0_dp, 0.7_dp, 1.0_dp, 0.0_dp, 0.0_dp, &
             5.0_dp, 0.0_dp, 0.0_dp, 0.05_dp, 0.0_dp, 50.0_dp, &
             1.0e-4_dp, 0.0_dp, 0.0_dp, 1.0e-4_dp, 100.0_dp, 75.0_dp, &
-            3.0_dp*c30, 3.0_dp*s30, -0.02_dp*s30, 0.02_dp*c30, 100.0_dp, 75.0_dp], [6, 7])
+            3.0_dp*c30, 3.0_dp*s30, -0.02_dp*s30, 0.02_dp*c30, 100.0_dp, 75.0_dp, &
+            ! Turned 45 degrees and stretched 1e4 across the line, which
+            ! makes a thin pen a sliver across the canvas; and a plain move.
+            0.7071067811865476_dp, 0.7071067811865476_dp, -7071.067811865476_dp, 7071.067811865476_dp, &
+            100.0_dp, 75.0_dp, &
+            1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 10.0_dp, 0.0_dp], [6, 9])
         real(dp), parameter :: px(4) = [-1.0e5_dp, 1.0e5_dp, 50.0_dp, 80.0_dp]
         real(dp), parameter :: py(4) = [-1.0e4_dp, 2.0e4_dp, 60.0_dp, 20.0_dp]
-        real(dp), parameter :: widths(3) = [1.0_dp, 8.0_dp, 500.0_dp]
+        real(dp), parameter :: widths(4) = [1.0_dp, 2.0_dp, 500.0_dp, 1.0e4_dp]
         integer, parameter :: caps(3) = [CAP_BUTT, CAP_ROUND, CAP_SQUARE]
         type(paint_t) :: paint
         character(len=:), allocatable :: quick, full
@@ -280,6 +285,7 @@ contains
         logical :: same
         ! The PNG backend's resolution, which the rasterizer's rule counts.
         real(dp), parameter :: DPI = 100.0_dp
+        real :: t0, t1
 
         same = .true.
         paint%stroked = .true.
@@ -323,10 +329,12 @@ contains
             end do
         end do
         call expect(same, "PNG dashes in transformed frames match the full walk", nfail)
-        ! Reaching the next line is the check: each of these used to run
-        ! for minutes or out of memory.
+        ! Each of these used to run for minutes or out of memory; together
+        ! they take well under a second.
+        call cpu_time(t0)
         call degenerate_frames()
-        call expect(.true., "PNG dashes in degenerate frames finish", nfail)
+        call cpu_time(t1)
+        call expect(t1 - t0 < 20.0_dp, "PNG dashes in degenerate frames finish in time", nfail)
     contains
         ! Whether some segment of the path is too fine to walk in a frame
         ! of matrix a, by the rasterizer's rule: its pattern, period canvas

@@ -88,15 +88,17 @@ line at the share of the line the pattern would cover (more where round
 or square ends close the gaps). Walking such a pattern dash by dash could
 take without end. In a frame (see [`fplotlib_render`](fplotlib_render.md))
 the same holds segment by segment, half a pixel measured on the canvas; and
-a segment whose visible piece holds more periods than twice the canvas's
-width and height in pixels, which only a frame that stretches the pen far
-more than the line can make, is drawn the same way, since each pixel the
-pen sweeps then sees that many dashes. Everything else it draws as the full
-walk of every dash would, up to the rounding of where along a very long
-segment the pattern stands, which the walk works out by adding dash after
-dash and the shortcuts by division. Frames nested so that together they
-stretch or move by more than 1e100 place nothing they hold in a PNG, as a
-shape whose place on the canvas is past the largest double is left out.
+a segment with more periods whose dashes can reach the canvas than twice
+the canvas's width and height in pixels, and a thousand, is drawn the same
+way: those dashes cross the canvas as stripes less than about half a pixel
+apart, which only a frame that turns the pen far along the line can make.
+Everything else it draws as the full walk of every dash would, up to the
+rounding of where along a very long segment the pattern stands, which the
+walk works out by adding dash after dash and the shortcuts by division. In
+a PNG, a frame whose matrix, taken together with those of the frames
+around it, stretches or moves by more than 1e100 places nothing it holds,
+nor do the frames inside it, as a shape whose place on the canvas is past
+the largest double is left out.
 
 ```{f:module} fplotlib_status
 ```

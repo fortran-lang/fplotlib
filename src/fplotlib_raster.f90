@@ -1226,7 +1226,7 @@ contains
         type(pathbuf_t), intent(inout), optional :: solid
         ! The pen's reach in the frame's coordinates.
         real(dp), intent(in), optional :: reach
-        real(dp) :: period_px, ca, cb
+        real(dp) :: period_px, ca, cb, ext
         real(dp), allocatable :: zx(:), zy(:)
         integer :: nz
         logical :: framed
@@ -1267,13 +1267,33 @@ contains
             if (l <= 0.0_dp) cycle
             if (framed) then
                 call frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, reach, ca, cb)
+                ! Narrowed further to the dashes that can reach the canvas
+                ! at all: those whose place along the line falls within the
+                ! canvas's span along it, as its corners project onto the
+                ! line, and a cap's length and two pixels beyond. A pen at
+                ! any angle to the line reaches no further along it.
+                if (.not. full_walk) then
+                    ux = (qx - sx)/l
+                    uy = (qy - sy)/l
+                    p0 = huge(1.0_dp)
+                    p1 = -huge(1.0_dp)
+                    do c = 1, 4
+                        pk = (kx(c) - sx)*ux + (ky(c) - sy)*uy
+                        p0 = min(p0, pk)
+                        p1 = max(p1, pk)
+                    end do
+                    ext = margin
+                    if (paint%cap /= CAP_BUTT) ext = ext + hw
+                    ca = max(ca, (p0 - ext)/l)
+                    cb = min(cb, (p1 + ext)/l)
+                end if
                 ! Solid, ending any dash under way here as a cut does: a
                 ! segment whose pattern is finer than half a pixel on the
-                ! canvas, and one whose visible piece holds more periods
-                ! than the canvas has pixels around it twice over. Only a
-                ! frame that stretches the pen far more than the line makes
-                ! the second, and then each pixel the pen sweeps sees that
-                ! many dashes, whose pattern it shows as its cover.
+                ! canvas, and one with more periods able to reach the canvas
+                ! than twice its width and height in pixels. Those dashes
+                ! cross the canvas as stripes less than about half a pixel
+                ! apart, which only a frame that turns the pen far along
+                ! the line makes, and which show as the pattern's cover.
                 if (.not. full_walk .and. (period_px*hypot(matrix(1)*(qx - sx) + matrix(3)*(qy - sy), &
                                                            matrix(2)*(qx - sx) + matrix(4)*(qy - sy))/l < 0.5_dp &
                                            .or. (min(cb, 1.0_dp) - max(ca, 0.0_dp))*l > &
@@ -1825,11 +1845,14 @@ contains
             do ix = px0, px1
                 dx = real(ix, dp) - 0.5_dp - m(5)
                 dy = real(iy, dp) - 0.5_dp - m(6)
-                lx = (m(4)*dx - m(3)*dy)/(det*cv%scale)
-                ly = (m(1)*dy - m(2)*dx)/(det*cv%scale)
+                ! Divided by det, then by the scale: their product can
+                ! underflow where neither does.
+                lx = (m(4)*dx - m(3)*dy)/det/cv%scale
+                ly = (m(1)*dy - m(2)*dx)/det/cv%scale
                 u = (lx - x)/w
                 v = (ly - y)/h
-                if (u < 0.0_dp .or. u >= 1.0_dp .or. v < 0.0_dp .or. v >= 1.0_dp) cycle
+                ! Written so that a NaN, from 0/0 say, fails it too.
+                if (.not. (u >= 0.0_dp .and. u < 1.0_dp .and. v >= 0.0_dp .and. v < 1.0_dp)) cycle
                 if (clip%on) then
                     if (lx < clip%x .or. lx >= clip%x + clip%w .or. &
                         ly < clip%y .or. ly >= clip%y + clip%h) cycle
