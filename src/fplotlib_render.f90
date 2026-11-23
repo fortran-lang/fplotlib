@@ -192,8 +192,12 @@ module fplotlib_render
     type :: glyphrun_t
         integer :: n = 0
         integer, allocatable :: gid(:)
+        integer, allocatable :: font(:), first(:), last(:)
         real(dp), allocatable :: x(:), y(:), size(:)
         character(len=:), allocatable :: text
+        ! first:last are inclusive UTF-8 byte ranges, zero when unmapped.
+        ! Math source is TeX, not a Unicode replacement for the painted formula.
+        logical :: source_math = .false.
     end type glyphrun_t
 
     type, abstract :: renderer_t
@@ -674,6 +678,17 @@ contains
         call check_finite(run%y(1:n), "glyphs: nonfinite or out-of-range glyph position")
         call check_finite(run%size(1:n), "glyphs: nonfinite or out-of-range font size")
         if (any(run%size(1:n) < 0.0_dp)) call contract_error("glyphs: negative font size")
+        if (allocated(run%font)) then
+            if (size(run%font) < n) call contract_error("glyphs: font array is shorter than the glyph count")
+        end if
+        if (allocated(run%first) .neqv. allocated(run%last)) then
+            call contract_error("glyphs: incomplete source mapping")
+        end if
+        if (allocated(run%first)) then
+            if (min(size(run%first), size(run%last)) < n) then
+                call contract_error("glyphs: source mapping is shorter than the glyph count")
+            end if
+        end if
     end subroutine check_glyphs
 
 end module fplotlib_render

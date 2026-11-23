@@ -21,7 +21,7 @@
 ! exactly what PNG and SVG show, and a ToUnicode map keeps the text
 ! selectable and searchable. Only the glyphs the page uses are embedded.
 module fplotlib_backend_pdf
-    use fplotlib_style, only: dp
+    use fplotlib_style, only: dp, utf8_next
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num
@@ -362,7 +362,7 @@ contains
         type(paint_t) :: pp
         real(dp) :: ca, sa, rad, cur_size, cur_y, expect, adj
         integer :: i, font, code, cur_font
-        logical :: open
+        logical :: open, actual_text
         character(len=1) :: eol
 
         eol = new_line("a")
@@ -370,6 +370,9 @@ contains
         pp%stroked = .false.
         pp%filled = .true.
         call begin_paint(self, pp)
+        actual_text = .false.
+        if (allocated(run%text)) actual_text = len(run%text) > 0 .and. .not. run%source_math
+        if (actual_text) call put_actual_text(self, run%text)
         call put(self, "BT"//eol)
         ! The page flip would leave text mirrored, so the text matrix flips
         ! back; the rotation is folded into the same matrix.
@@ -421,8 +424,33 @@ contains
         end do
         if (open) call put(self, ">] TJ"//eol)
         call put(self, "ET"//eol)
+        if (actual_text) call put(self, "EMC"//eol)
         call put(self, "Q"//eol)
     end subroutine pdf_draw_glyphs
+
+    subroutine put_actual_text(self, text)
+        class(pdf_renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: text
+        integer :: i, code, nb, hi, lo
+
+        call put(self, "/Span << /ActualText <FEFF")
+        i = 1
+        do while (i <= len(text))
+            call utf8_next(text, i, code, nb)
+            if (code > 1114111 .or. (code >= 55296 .and. code <= 57343)) code = 65533
+            if (code < 65536) then
+                call put(self, hex2(code/256)//hex2(mod(code, 256)))
+            else
+                code = code - 65536
+                hi = 55296 + code/1024
+                lo = 56320 + mod(code, 1024)
+                call put(self, hex2(hi/256)//hex2(mod(hi, 256)) &
+                         //hex2(lo/256)//hex2(mod(lo, 256)))
+            end if
+            i = i + nb
+        end do
+        call put(self, "> >> BDC"//new_line("a"))
+    end subroutine put_actual_text
 
     pure elemental function hex2(v) result(s)
         integer, intent(in) :: v

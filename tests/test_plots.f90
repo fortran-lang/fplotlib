@@ -4,8 +4,10 @@ program test_plots
     use test_mathref, only: math_ref_check, delim_ref_check, face_check
     use test_missing, only: missing_data_check
     use test_contract, only: contract_case, contract_check
+    use test_glyph_runs, only: glyph_runs_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nmissing, ncontract
+    integer :: nglyph
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1592,6 +1594,8 @@ program test_plots
     call missing_data_check(nmissing)
     ! Broken preconditions stop with the rule they broke.
     call contract_check(ncontract)
+    ! Glyph runs and their source; see test_glyph_runs.f90.
+    call glyph_runs_check(nglyph)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1601,6 +1605,7 @@ program test_plots
     if (nface > 0) error stop "text around math lost its face"
     if (nmissing > 0) error stop "missing data reached the output"
     if (ncontract > 0) error stop "a broken precondition did not stop as expected"
+    if (nglyph > 0) error stop "glyph runs failed"
 
 contains
 
