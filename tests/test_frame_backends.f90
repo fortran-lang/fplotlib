@@ -5,7 +5,7 @@ module test_frame_backends
     use fplotlib_backend_eps, only: eps_renderer_t
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
-                               JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
+                               JOIN_MITER, JOIN_ROUND, JOIN_BEVEL, FILL_NONZERO, FILL_EVENODD
     use fplotlib_raster, only: full_walk
     use fplotlib_backend_png, only: png_renderer_t
     implicit none
@@ -25,6 +25,7 @@ contains
         call png_dash_frames_check(nfail)
         call png_dash_joins_check(nfail)
         call png_far_frame_check(nfail)
+        call png_evenodd_check(nfail)
         call pdf_resources_check(nfail)
         call pdf_pages_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
@@ -578,6 +579,204 @@ contains
             rgb = png%rgb
         end function moved
     end subroutine png_far_frame_check
+
+    ! The even-odd rule in PNG, as SVG, PDF and EPS have it: the hole of a
+    ! ring whose two contours turn the same way, and the middle of a
+    ! pentagram, where the winding is 2, are left empty, and nonzero fills
+    ! them. In a frame clipped through the hole, the clip's edge leaves no
+    ! line there, as two contours cut along it would give.
+    subroutine png_evenodd_check(nfail)
+        integer, intent(inout) :: nfail
+        ! CLOSE takes no vertex: four corners a contour.
+        real(dp), parameter :: ring_x(8) = [10.0_dp, 50.0_dp, 50.0_dp, 10.0_dp, &
+                                            20.0_dp, 40.0_dp, 40.0_dp, 20.0_dp]
+        real(dp), parameter :: ring_y(8) = [10.0_dp, 10.0_dp, 50.0_dp, 50.0_dp, &
+                                            20.0_dp, 20.0_dp, 40.0_dp, 40.0_dp]
+        integer, parameter :: ring_v(10) = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE, &
+                                            VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE]
+        real(dp) :: star_x(5), star_y(5), a
+        integer :: star_v(6), k, rule, g
+        type(paint_t) :: paint
+        type(clip_t) :: half
+        character(len=16) :: name
+
+        paint%filled = .true.
+        paint%fill_rgb = [0, 0, 0]
+        ! A pentagram about (30, 30): every second point of a pentagon.
+        do k = 1, 5
+            a = -0.5_dp*acos(-1.0_dp) + real(2*(k - 1), dp)*0.4_dp*acos(-1.0_dp)
+            star_x(k) = 30.0_dp + 25.0_dp*cos(a)
+            star_y(k) = 30.0_dp + 25.0_dp*sin(a)
+        end do
+        star_v = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE]
+        do rule = FILL_NONZERO, FILL_EVENODD
+            paint%fill_rule = rule
+            name = merge("even-odd", "nonzero ", rule == FILL_EVENODD)
+            ! Black where nonzero fills, white where even-odd leaves it.
+            k = merge(255, 0, rule == FILL_EVENODD)
+            block
+                type(png_renderer_t) :: png
+                png%keep_pixels = .true.
+                call png%set_dpi(72.0_dp)
+                call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+                call png%draw_path(ring_x, ring_y, ring_v, 10, paint)
+                call png%close_canvas()
+                call expect_pixel(png, 30, 30, [k, k, k], trim(name)//" ring hole", nfail)
+                call expect_pixel(png, 15, 30, [0, 0, 0], trim(name)//" ring", nfail)
+            end block
+            block
+                type(png_renderer_t) :: png
+                png%keep_pixels = .true.
+                call png%set_dpi(72.0_dp)
+                call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+                call png%draw_path(star_x, star_y, star_v, 6, paint)
+                call png%close_canvas()
+                call expect_pixel(png, 30, 31, [k, k, k], trim(name)//" pentagram middle", nfail)
+            end block
+        end do
+        ! Clipped at x = 29.5, through the hole, by a frame.
+        paint%fill_rule = FILL_EVENODD
+        half = clip_t(.true., 0.0_dp, 0.0_dp, 29.5_dp, 60.0_dp)
+        block
+            type(png_renderer_t) :: png
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp], half)
+            call png%draw_path(ring_x, ring_y, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 30, 30, [255, 255, 255], "even-odd ring hole at a frame's clip", nfail)
+            call expect_pixel(png, 15, 30, [0, 0, 0], "even-odd ring in a clipped frame", nfail)
+            call expect_pixel(png, 31, 15, [255, 255, 255], "even-odd ring past a frame's clip", nfail)
+            ! Half the pixel the clip cuts through the ring.
+            g = iachar(png%rgb(3*((15 - 1)*png%pw + 30 - 1) + 1:3*((15 - 1)*png%pw + 30 - 1) + 1))
+            call expect(abs(g - 128) <= 1, "even-odd ring half covered at a frame's clip", nfail)
+        end block
+        ! Ring markers in the clipped frame: the clip runs through the
+        ! first one's hole, which keeps no line there, and the second is
+        ! past the clip.
+        block
+            type(png_renderer_t) :: png
+            real(dp), parameter :: mx(8) = [-8.0_dp, 8.0_dp, 8.0_dp, -8.0_dp, -3.0_dp, 3.0_dp, 3.0_dp, -3.0_dp]
+            real(dp), parameter :: my(8) = [-8.0_dp, -8.0_dp, 8.0_dp, 8.0_dp, -3.0_dp, -3.0_dp, 3.0_dp, 3.0_dp]
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp], half)
+            call png%draw_markers([29.5_dp, 50.0_dp], [15.0_dp, 15.0_dp], mx, my, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 30, 15, [255, 255, 255], "even-odd ring marker hole at a frame's clip", nfail)
+            call expect_pixel(png, 24, 15, [0, 0, 0], "even-odd ring marker in a clipped frame", nfail)
+            call expect_pixel(png, 50, 10, [255, 255, 255], "even-odd ring marker past a frame's clip", nfail)
+        end block
+        ! Clips that change between fills on one canvas: a second frame
+        ! clipped to the other side, and a paint clip inside a clipped frame.
+        block
+            type(png_renderer_t) :: png
+            type(paint_t) :: low
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp], half)
+            call png%draw_path(ring_x, ring_y, ring_v, 10, paint)
+            call png%end_frame()
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp], &
+                                 clip_t(.true., 31.0_dp, 0.0_dp, 29.0_dp, 60.0_dp))
+            call png%draw_path(ring_x, ring_y, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 15, 30, [0, 0, 0], "even-odd ring under a first frame's clip", nfail)
+            call expect_pixel(png, 45, 30, [0, 0, 0], "even-odd ring under a second frame's clip", nfail)
+            call expect_pixel(png, 31, 15, [255, 255, 255], "even-odd ring between two frames' clips", nfail)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            low = paint
+            low%clip = clip_t(.true., 0.0_dp, 0.0_dp, 60.0_dp, 20.0_dp)
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp], half)
+            call png%draw_path(ring_x, ring_y, ring_v, 10, low)
+            call png%draw_path(ring_x + 1.0_dp, ring_y + 25.0_dp, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 15, 15, [0, 0, 0], "even-odd ring under a paint clip in a clipped frame", nfail)
+            call expect_pixel(png, 15, 25, [255, 255, 255], "even-odd ring past a paint clip in a clipped frame", nfail)
+            call expect_pixel(png, 16, 55, [0, 0, 0], "even-odd ring after a paint clip, in a clipped frame", nfail)
+        end block
+        ! Partial coverage: the hole's edge at x = 20.5, half ring and half
+        ! hole, is half covered, which a fold without its mirror would fill;
+        ! and in a clipped frame, a square whose top and bottom fall at
+        ! y = 10.5 and 49.5 keeps half its first and last rows, which a band
+        ! of rows a row short would drop. A square far below the canvas
+        ! draws nothing. A frame moved by a quarter point keeps the paths
+        ! from being snapped to whole pixels, as unmoved ones are.
+        block
+            type(png_renderer_t) :: png
+            real(dp), parameter :: moved(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.25_dp, 0.25_dp]
+            real(dp), parameter :: hx(8) = [10.0_dp, 50.0_dp, 50.0_dp, 10.0_dp, &
+                                            20.25_dp, 39.25_dp, 39.25_dp, 20.25_dp]
+            real(dp), parameter :: hy(8) = [10.0_dp, 10.0_dp, 50.0_dp, 50.0_dp, &
+                                            20.0_dp, 20.0_dp, 40.0_dp, 40.0_dp]
+            real(dp), parameter :: sx(4) = [5.0_dp, 25.0_dp, 25.0_dp, 5.0_dp]
+            real(dp), parameter :: sy(4) = [10.25_dp, 10.25_dp, 49.25_dp, 49.25_dp]
+            integer, parameter :: sv(5) = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_CLOSE]
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            call png%begin_frame(moved, clip_t(.false., 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp))
+            call png%draw_path(hx, hy, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect(abs(grey(png, 21, 30) - 128) <= 1, "even-odd ring half covered at its hole's edge", nfail)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            call png%begin_frame(moved, half)
+            call png%draw_path(sx, sy, sv, 5, paint)
+            call png%draw_path(sx, sy + 1.0e10_dp, sv, 5, paint)
+            call png%draw_path(sx, sy - 1.0e10_dp, sv, 5, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect(abs(grey(png, 15, 11) - 128) <= 1 .and. abs(grey(png, 15, 50) - 128) <= 1, &
+                        "even-odd fill in a clipped frame keeps its first and last rows", nfail)
+            call expect_pixel(png, 15, 30, [0, 0, 0], "even-odd square in a clipped frame", nfail)
+        end block
+        ! An even-odd ring over the whole canvas in a clipped frame reaches
+        ! its first and last rows, which the band of rows must keep; and
+        ! with no frame, a paint clip at x = 29.5 cuts it to whole pixels,
+        ! as every fill outside a transformed frame is cut.
+        block
+            type(png_renderer_t) :: png
+            type(paint_t) :: clipped
+            real(dp), parameter :: moved(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.25_dp, 0.25_dp]
+            real(dp), parameter :: bx(8) = [-10.0_dp, 70.0_dp, 70.0_dp, -10.0_dp, &
+                                            20.0_dp, 40.0_dp, 40.0_dp, 20.0_dp]
+            real(dp), parameter :: by(8) = [-10.0_dp, -10.0_dp, 70.0_dp, 70.0_dp, &
+                                            20.0_dp, 20.0_dp, 40.0_dp, 40.0_dp]
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            ! Clipped at x = 29.5, and past the canvas above and below.
+            call png%begin_frame(moved, clip_t(.true., 0.0_dp, -5.0_dp, 29.5_dp, 70.0_dp))
+            call png%draw_path(bx, by, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 10, 1, [0, 0, 0], "even-odd fill in a clipped frame on the canvas's first row", nfail)
+            call expect_pixel(png, 10, 60, [0, 0, 0], "even-odd fill in a clipped frame on the canvas's last row", nfail)
+            call expect_pixel(png, 30, 30, [255, 255, 255], "even-odd hole in a clipped frame across the canvas", nfail)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            clipped = paint
+            clipped%clip = clip_t(.true., 0.0_dp, 0.0_dp, 29.5_dp, 60.0_dp)
+            call png%draw_path(bx, by, ring_v, 10, clipped)
+            call png%close_canvas()
+            call expect(grey(png, 30, 10) == 0 .or. grey(png, 30, 10) == 255, &
+                        "even-odd fill under a paint clip outside a frame is cut to whole pixels", nfail)
+            call expect_pixel(png, 10, 10, [0, 0, 0], "even-odd fill under a paint clip outside a frame", nfail)
+        end block
+    contains
+        integer function grey(png, x, y)
+            type(png_renderer_t), intent(in) :: png
+            integer, intent(in) :: x, y
+            grey = iachar(png%rgb(3*((y - 1)*png%pw + x - 1) + 1:3*((y - 1)*png%pw + x - 1) + 1))
+        end function grey
+    end subroutine png_evenodd_check
 
     subroutine expect_pixel(png, x, y, expected, label, nfail)
         type(png_renderer_t), intent(in) :: png

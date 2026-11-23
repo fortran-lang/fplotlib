@@ -16,8 +16,26 @@
 ! crossing lists. Overlapping contours of the same orientation saturate to one
 ! and opposite orientations cancel, which is exactly nonzero.
 !
-! The catch, and the reason to say so plainly: this gives nonzero only. Even-odd
-! would need a different accumulator. fplotlib never asks for it.
+! Even-odd needs no other accumulator: the running sum is the winding number,
+! and even-odd keeps its parity, folding |w| into [0, 1] as a triangle wave
+! (w mod 2, mirrored past 1) where nonzero clamps it at 1, as Vello does. Both
+! are exact where a pixel is wholly inside or outside every edge. At a pixel
+! that edges cross, each takes the sum of their signed areas for the area of
+! what they cover: under nonzero, overlapping contours there can saturate a
+! pixel only partly covered; under even-odd, two contours along the same line
+! sum to a whole winding where neither covers more than part of the pixel.
+!
+! That is why an even-odd fill is never clipped as geometry, as nonzero is in
+! a frame: cut to a clip, every contour gains an edge along the clip's
+! border, and under even-odd two of them there would draw a solid line. An
+! even-odd fill under a clip in a frame (a frame's clip, or a paint clip in a
+! transformed frame) is filled whole and its coverage multiplied by the
+! clip's, an antialiased mask over the rows the fill reaches. The product
+! is exact inside the clip and where only one of the two edges crosses a
+! pixel; where both cross the same pixel it can be off by up to a quarter
+! of the pixel either way: a quarter for two halves that coincide, where a
+! half is covered, and a quarter for a shape that ends just where the clip
+! begins, where nothing is.
 !
 ! Everything else reduces to filling a path. Strokes are converted to outlines
 ! and filled; text is glyph outlines and filled; markers are a shape filled once
@@ -572,26 +590,46 @@ contains
     ! renderer closes it implicitly.
     ! ------------------------------------------------------------------
 
-    subroutine fill_path_buf(cv, pb, rgb, alpha, clip)
+    ! Fill pb with the nonzero rule, or with even-odd when evenodd is given
+    ! and true.
+    subroutine fill_path_buf(cv, pb, rgb, alpha, clip, evenodd)
         type(canvas_t), intent(inout) :: cv
         type(pathbuf_t), intent(in) :: pb
         integer, intent(in) :: rgb(3)
         real(dp), intent(in) :: alpha
         type(clip_t), intent(in) :: clip
-        integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b, m
+        logical, intent(in), optional :: evenodd
+        integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b, m, j, ylo, yhi
         real(dp) :: run, cov, sa, sr, sg, sb_, ia
-        real(dp), allocatable :: cx(:), cy(:)
-        logical :: scoped
+        real(dp), allocatable :: cx(:), cy(:), mask(:, :)
+        logical :: scoped, odd, masked, empty
 
         if (pb%ns == 0 .or. alpha <= 0.0_dp) return
+        odd = .false.
+        if (present(evenodd)) odd = evenodd
 
         scoped = .not. cv%identity_transform .or. cv%n_clip > 0
+        masked = .false.
+        if (scoped .and. odd) then
+            masked = clip%on
+            do j = 1, cv%n_frame
+                if (cv%frames(j)%clipped) masked = .true.
+            end do
+        end if
+        if (masked) then
+            ! The clip's coverage over the rows the fill can reach.
+            call path_rows(cv, pb, ylo, yhi)
+            if (yhi < ylo) return
+            call clip_mask(cv, clip, ylo, yhi, mask, empty)
+            if (empty) return
+        end if
         y0b = cv%h + 1
         y1b = 0
         if (scoped) then
             ! In a transformed or clipped frame: mapped to the canvas, cut
-            ! to the frames' clips, and only then accumulated.
-            call acc_transformed_path(cv, pb, clip, y0b, y1b)
+            ! to the frames' clips, and only then accumulated; or, for an
+            ! even-odd fill under a clip, accumulated whole for the mask.
+            call acc_transformed_path(cv, pb, clip, y0b, y1b, unclipped=masked)
         else
             do s = 1, pb%ns
                 b = pb%sub_beg(s)
@@ -632,7 +670,24 @@ contains
                 run = run + cv%acc(x - 1, y)
                 cv%acc(x - 1, y) = 0.0_dp
                 if (y < cy0 .or. y > cy1 .or. x < cx0 .or. x > cx1) cycle
-                cov = min(1.0_dp, abs(run))
+                if (odd) then
+                    ! |run| folded into [0, 1], worked out past 1 only:
+                    ! a pixel at a winding of 0 or 1 is as nonzero has it.
+                    cov = abs(run)
+                    if (cov > 1.0_dp) then
+                        cov = cov - 2.0_dp*aint(0.5_dp*cov)
+                        if (cov > 1.0_dp) cov = 2.0_dp - cov
+                    end if
+                    if (masked) then
+                        if (y < ylo .or. y > yhi) then
+                            cov = 0.0_dp
+                        else
+                            cov = cov*mask(x, y)
+                        end if
+                    end if
+                else
+                    cov = min(1.0_dp, abs(run))
+                end if
                 if (cov <= 0.0_dp) cycle
                 sa = cov*alpha
                 ia = 1.0_dp - sa
@@ -921,14 +976,98 @@ contains
         ipix = nint(max(-2.0_dp, min(real(n + 2, dp), v)))
     end function ipix
 
-    subroutine acc_transformed_path(cv, pb, clip, y0b, y1b)
+    ! The rows ylo to yhi the fill of pb can reach once mapped onto the
+    ! canvas: those its points span, within the canvas.
+    subroutine path_rows(cv, pb, ylo, yhi)
+        type(canvas_t), intent(in) :: cv
+        type(pathbuf_t), intent(in) :: pb
+        integer, intent(out) :: ylo, yhi
+        real(dp) :: ymin, ymax, yy
+        integer :: s, i
+
+        ymin = huge(1.0_dp)
+        ymax = -huge(1.0_dp)
+        do s = 1, pb%ns
+            ! Fewer than three points fill nothing, as the fill skips them.
+            if (pb%sub_len(s) < 3) cycle
+            do i = pb%sub_beg(s), pb%sub_beg(s) + pb%sub_len(s) - 1
+                yy = cv%matrix(2)*pb%x(i) + cv%matrix(4)*pb%y(i) + cv%matrix(6)
+                ymin = min(ymin, yy)
+                ymax = max(ymax, yy)
+            end do
+        end do
+        ylo = 1
+        yhi = 0
+        ! A path wholly above or below the canvas reaches no row of it; the
+        ! rest is clamped to the canvas before it becomes an integer.
+        if (ymax < ymin .or. ymax <= 0.0_dp .or. ymin >= real(cv%h, dp)) return
+        ylo = max(1, floor(max(0.0_dp, ymin)) + 1)
+        yhi = min(cv%h, ceiling(min(real(cv%h, dp), ymax)))
+    end subroutine path_rows
+
+    ! The coverage, from 0 to 1, of the region every clip open now leaves
+    ! visible, the frames' clips and clip, as an antialiased mask over the
+    ! rows ylo to yhi: mask(x, y) for y in ylo..yhi. The region is cut to
+    ! those rows first, so that the mask costs no more than the fill.
+    ! empty when nothing there is visible.
+    subroutine clip_mask(cv, clip, ylo, yhi, mask, empty)
+        type(canvas_t), intent(inout) :: cv
+        type(clip_t), intent(in) :: clip
+        integer, intent(in) :: ylo, yhi
+        real(dp), allocatable, intent(out) :: mask(:, :)
+        logical, intent(out) :: empty
+        real(dp), allocatable :: x(:), y(:)
+        real(dp) :: qx(4), qy(4), run
+        integer :: n, i, j, y0b, y1b, px, py
+
+        allocate (mask(cv%w, ylo:yhi))
+        mask = 0.0_dp
+        empty = .true.
+        allocate (x(4), y(4))
+        x = [-2.0_dp, real(cv%w + 2, dp), real(cv%w + 2, dp), -2.0_dp]
+        y = [real(ylo - 1, dp), real(ylo - 1, dp), real(yhi, dp), real(yhi, dp)]
+        n = 4
+        do j = 1, cv%n_frame
+            if (.not. cv%frames(j)%clipped) cycle
+            call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
+            if (n < 3) return
+        end do
+        if (clip%on) then
+            call transformed_rect(cv, clip, qx, qy)
+            call clip_polygon(x, y, n, qx, qy)
+        end if
+        if (n < 3) return
+        empty = .false.
+        y0b = cv%h + 1
+        y1b = 0
+        do i = 1, n
+            call acc_edge(cv, x(i), y(i), x(mod(i, n) + 1), y(mod(i, n) + 1), y0b, y1b)
+        end do
+        do py = max(1, y0b), min(cv%h, y1b)
+            run = 0.0_dp
+            do px = 1, cv%w
+                run = run + cv%acc(px - 1, py)
+                cv%acc(px - 1, py) = 0.0_dp
+                if (py >= ylo .and. py <= yhi) mask(px, py) = min(1.0_dp, abs(run))
+            end do
+            cv%acc(cv%w, py) = 0.0_dp
+        end do
+    end subroutine clip_mask
+
+    ! With unclipped, the frames' clips and clip are left to the caller.
+    subroutine acc_transformed_path(cv, pb, clip, y0b, y1b, unclipped)
         type(canvas_t), intent(inout) :: cv
         type(pathbuf_t), intent(in) :: pb
         type(clip_t), intent(in) :: clip
         integer, intent(inout) :: y0b, y1b
+        logical, intent(in), optional :: unclipped
         real(dp), allocatable :: x(:), y(:), cx(:), cy(:)
         real(dp) :: qx(4), qy(4)
         integer :: s, b, n, i, j
+        logical :: cut
+
+        cut = .true.
+        if (present(unclipped)) cut = .not. unclipped
 
         if (cv%matrix(1)*cv%matrix(4) - cv%matrix(2)*cv%matrix(3) == 0.0_dp) return
         if (clip%on) call transformed_rect(cv, clip, qx, qy)
@@ -949,12 +1088,14 @@ contains
                     cycle
                 end if
             end if
-            do j = 1, cv%n_frame
-                if (.not. cv%frames(j)%clipped) cycle
-                call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
-                if (n < 3) exit
-            end do
-            if (clip%on) call clip_polygon(x, y, n, qx, qy)
+            if (cut) then
+                do j = 1, cv%n_frame
+                    if (.not. cv%frames(j)%clipped) cycle
+                    call clip_polygon(x, y, n, cv%frames(j)%clip_x, cv%frames(j)%clip_y)
+                    if (n < 3) exit
+                end do
+                if (clip%on .and. n >= 3) call clip_polygon(x, y, n, qx, qy)
+            end if
             if (n >= 3) then
                 do i = 1, n - 1
                     call acc_edge(cv, x(i), y(i), x(i + 1), y(i + 1), y0b, y1b)

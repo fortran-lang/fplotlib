@@ -25,6 +25,19 @@ The `*_impl` bindings are public only so that a backend in another module
 can implement them; code that draws calls the methods without the suffix,
 since calling an `*_impl` directly skips the checks.
 
+A filled paint fills with its `fill_rule`, `FILL_NONZERO` by default or
+`FILL_EVENODD`, the same in every backend: SVG and PDF name the rule, EPS
+uses `eofill`, and PNG takes the parity of the winding number its
+rasterizer sums, where nonzero clamps it. At a pixel that edges cross, PNG
+takes the sum of their signed areas for the area they cover, for either
+rule, which can overstate it where contours overlap there. Under a frame's
+clip, or a paint clip in a transformed frame, an even-odd fill is filled
+whole and its coverage multiplied by the clip's: exact inside the clip, and off by up to a quarter of a pixel
+either way where the shape's edge and the clip's cross the same pixel, a
+quarter too little for two halves that coincide and a quarter too much
+for a shape that ends just where the clip begins. Strokes and glyphs
+always fill nonzero.
+
 `begin_frame(matrix, clip)` and `end_frame()` scope an affine transform and a
 rectangular clip: `matrix` is `[a,b,c,d,e,f]`, mapping a point of the frame
 to `(a*x+c*y+e, b*x+d*y+f)` in its parent, and `clip`, when on, is in the
@@ -49,10 +62,13 @@ and `frame_decimals(r, outer=.true.)` for those around the innermost, for a
 custom encoder to use the same; the cap at seventeen significant digits is
 `fmt_num`'s, which a custom formatter applies itself.
 
-The PNG backend draws a frame's content transformed and clipped exactly; a
-paint clip inside a clipped frame is cut as geometry, so its edges are
-antialiased rather than whole pixels. A dashed stroke is built in the
-frame's coordinates, but what the rasterizer may skip of it is decided by
+The PNG backend draws a frame's content transformed and clipped; a paint
+clip inside a clipped frame is cut as geometry, or for an even-odd fill
+applied as the mask above, so its edges are antialiased rather than whole
+pixels. Contours that overlap where a clip cuts them can saturate a pixel
+there that they cover only in part, as overlapping contours can anywhere.
+A dashed stroke is built in the frame's coordinates, but what the
+rasterizer may skip of it is decided by
 the canvas: a segment is walked only where the matrix maps it into the
 canvas, widened on each side by the pen as the matrix stretches that axis,
 and only over the dashes whose place along the line falls within the

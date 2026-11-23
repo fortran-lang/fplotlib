@@ -266,7 +266,8 @@ contains
         p = paint
         p%clip = shifted_clip(self, paint%clip)
         if (paint%filled) then
-            call fill_path_buf(self%cv, self%pb, paint%fill_rgb, paint%fill_alpha, p%clip)
+            call fill_path_buf(self%cv, self%pb, paint%fill_rgb, paint%fill_alpha, p%clip, &
+                               evenodd=paint%fill_rule == FILL_EVENODD)
         end if
         if (paint%stroked) call stroke_path_buf(self%cv, self%pb, p)
     end subroutine paint_buf
