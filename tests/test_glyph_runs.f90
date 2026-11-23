@@ -25,6 +25,7 @@ contains
         call svg_text_check(nfail)
         call hand_built_rules(nfail)
         call own_glyph(nfail)
+        call long_formulas(nfail)
         print "(a,i0)", "glyph runs: failures = ", nfail
     end subroutine glyph_runs_check
 
@@ -212,6 +213,44 @@ contains
         call check(run%n == k + 1 .and. run%gid(run%n) == run%gid(1) .and. &
                    run%x(run%n) == run%x(1), "run_add takes a glyph of the run it grows", nfail)
     end subroutine own_glyph
+
+    ! Formulas long enough that parsing a part of one adds more noads than
+    ! there is room for, while the noad the part belongs to is being
+    ! stored into: under the sanitizer job, a part stored straight from the
+    ! parse into the array the parse has moved is a use after free.
+    subroutine long_formulas(nfail)
+        integer, intent(inout) :: nfail
+        character(len=:), allocatable :: many
+        character(len=:), allocatable :: tex(:)
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        real(dp) :: w, h, d
+        integer :: k
+        logical :: ok
+
+        many = ""
+        do k = 1, 150
+            many = many//"a "
+        end do
+        allocate (character(len=8*len(many) + 64) :: tex(8))
+        tex = [character(len=8*len(many) + 64) :: &
+               "\frac{"//many//"}{"//many//"}", &
+               "\binom{"//many//"}{"//many//"}", &
+               "\sqrt{"//many//"}", &
+               "\overline{"//many//"}", &
+               "\left("//many//"\right)", &
+               "{"//many//"\over "//many//"}", &
+               "("//many//"("//many//")"//many//")", &
+               achar(226)//achar(136)//achar(156)//"{"//many//"}"]
+        ok = .true.
+        do k = 1, size(tex)
+            run%n = 0
+            rules%n = 0
+            call math_formula(trim(tex(k)), 10.0_dp, .false., run, rules, w, h, d)
+            ok = ok .and. run%n >= 150 .and. w > 0.0_dp
+        end do
+        call check(ok, "long formulas lay out whole", nfail)
+    end subroutine long_formulas
 
     subroutine pdf_text_check(nfail)
         integer, intent(inout) :: nfail

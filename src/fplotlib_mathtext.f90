@@ -591,6 +591,9 @@ contains
     ! comes after.
     recursive function parse_list(state, s, alph) result(head)
         type(math_context_t), intent(inout) :: state
+        ! What a parse returns, kept here before it is stored: the call
+        ! may move the arrays it is stored into.
+        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: alph
         integer :: head, tail, cur, i, j, k, code, nb, sl, n, code2
@@ -768,9 +771,11 @@ contains
                     end do
                     call unit_end(s, n, j)
                     k = new_noad(state, K_RAD, CL_ORD)
-                    state%noads(k)%b = char_noad(state, merge(iachar("3"), iachar("4"), code == 8731), &
-                                               ALPH_MATH)
-                    state%noads(k)%a = parse_arg(state, s(n:j), alph)
+                    got = char_noad(state, merge(iachar("3"), iachar("4"), code == 8731), &
+                                    ALPH_MATH)
+                    state%noads(k)%b = got
+                    got = parse_arg(state, s(n:j), alph)
+                    state%noads(k)%a = got
                     call append(state, head, tail, k)
                     cur = k
                     i = j + 1
@@ -786,7 +791,8 @@ contains
         head = auto_pair(state, head)
         if (infix > 0) then
             k = new_noad(state, K_FRAC, CL_INNER)
-            state%noads(k)%a = auto_pair(state, num)
+            got = auto_pair(state, num)
+            state%noads(k)%a = got
             state%noads(k)%b = head
             state%noads(k)%rule = infix == 1
             if (infix == 3) then
@@ -896,6 +902,9 @@ contains
     ! the closing at pend(k)) made one automatic \left...\right.
     recursive function pair_build(state, arr, pend, lo, hi) result(head)
         type(math_context_t), intent(inout) :: state
+        ! What a parse returns, kept here before it is stored: the call
+        ! may move the arrays it is stored into.
+        integer :: got
         integer, intent(in) :: arr(:), pend(:), lo, hi
         integer :: head, tail, p, k
         head = 0
@@ -909,7 +918,8 @@ contains
                 state%noads(k)%lc = arr(pend(p))
                 state%noads(k)%dl = state%noads(arr(p))%cp
                 state%noads(k)%dr = state%noads(arr(pend(p)))%cp
-                state%noads(k)%a = pair_build(state, arr, pend, p + 1, pend(p) - 1)
+                got = pair_build(state, arr, pend, p + 1, pend(p) - 1)
+                state%noads(k)%a = got
                 p = pend(p) + 1
             else
                 k = arr(p)
@@ -974,6 +984,9 @@ contains
     ! matching \right, the left delimiter is an ordinary opening.
     recursive subroutine parse_left(state, s, i, alph, k, j)
         type(math_context_t), intent(inout) :: state
+        ! What a parse returns, kept here before it is stored: the call
+        ! may move the arrays it is stored into.
+        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: i, alph
         integer, intent(out) :: k, j
@@ -1009,7 +1022,8 @@ contains
         end if
         call read_delim(s, q + 6, code2, j)
         k = new_noad(state, K_LR, CL_INNER)
-        state%noads(k)%a = parse_list(state, s(p + 1:q - 1), alph)
+        got = parse_list(state, s(p + 1:q - 1), alph)
+        state%noads(k)%a = got
         state%noads(k)%dl = code
         state%noads(k)%dr = code2
     end subroutine parse_left
@@ -1093,6 +1107,9 @@ contains
     ! One command, as a noad; 0 when it makes nothing.
     recursive function parse_command(state, s, alph) result(k)
         type(math_context_t), intent(inout) :: state
+        ! What a parse returns, kept here before it is stored: the call
+        ! may move the arrays it is stored into.
+        integer :: got
         character(len=*), intent(in) :: s
         integer, intent(in) :: alph
         integer :: k, j, code, cls, a0, a1, b0, b1, o0, o1, ac
@@ -1164,8 +1181,10 @@ contains
             end select
         case ("frac", "dfrac", "tfrac")
             k = new_noad(state, K_FRAC, CL_INNER)
-            state%noads(k)%a = parse_list(state, s(a0:a1), alph)
-            state%noads(k)%b = parse_list(state, s(b0:b1), alph)
+            got = parse_list(state, s(a0:a1), alph)
+            state%noads(k)%a = got
+            got = parse_list(state, s(b0:b1), alph)
+            state%noads(k)%b = got
             if (name(1:1) == "d") state%noads(k)%style = ST_D
             if (name(1:1) == "t") state%noads(k)%style = ST_T
             ! LaTeX's \frac is {a\over b}, and amsmath's \genfrac sets the
@@ -1177,8 +1196,10 @@ contains
             ! by \fontdimen 20 and 21, which under XeTeX are unrelated
             ! MATH constants.)
             k = new_noad(state, K_FRAC, CL_INNER)
-            state%noads(k)%a = parse_list(state, s(a0:a1), alph)
-            state%noads(k)%b = parse_list(state, s(b0:b1), alph)
+            got = parse_list(state, s(a0:a1), alph)
+            state%noads(k)%a = got
+            got = parse_list(state, s(b0:b1), alph)
+            state%noads(k)%b = got
             state%noads(k)%rule = .false.
             state%noads(k)%dl = iachar("(")
             state%noads(k)%dr = iachar(")")
@@ -1189,8 +1210,10 @@ contains
             ! amsmath: {\displaystyle\frac{\strut a}{b}}, and then the
             ! null delimiter's space taken back (by parse_list).
             k = new_noad(state, K_FRAC, CL_INNER)
-            state%noads(k)%a = parse_list(state, s(a0:a1), alph)
-            state%noads(k)%b = parse_list(state, s(b0:b1), alph)
+            got = parse_list(state, s(a0:a1), alph)
+            state%noads(k)%a = got
+            got = parse_list(state, s(b0:b1), alph)
+            state%noads(k)%b = got
             state%noads(k)%style = ST_D
             state%noads(k)%strut = .true.
             k = list_noad(state, k, CL_ORD)
@@ -1199,10 +1222,12 @@ contains
             call opt_arg(s, o0, o1)
             if (o1 >= o0) state%noads(k)%b = parse_list(state, s(o0:o1), alph)
             call cmd_arg(s, 1, a0, a1)
-            state%noads(k)%a = parse_list(state, s(a0:a1), alph)
+            got = parse_list(state, s(a0:a1), alph)
+            state%noads(k)%a = got
         case ("overline", "underline")
             k = new_noad(state, merge(K_OVER, K_UNDER, name == "overline"), CL_ORD)
-            state%noads(k)%a = parse_list(state, s(a0:a1), alph)
+            got = parse_list(state, s(a0:a1), alph)
+            state%noads(k)%a = got
         case ("mathrm", "mathup", "mathnormal", "mathit", "mathbf", "mathbb", &
               "mathcal", "mathscr", "mathsf")
             k = list_noad(state, parse_list(state, s(a0:a1), alphabet_of(name)), CL_ORD)
@@ -1217,7 +1242,8 @@ contains
                 k = new_noad(state, K_ACC, CL_ORD)
                 state%noads(k)%cp = ac
                 state%noads(k)%wide = wide
-                state%noads(k)%a = parse_list(state, s(a0:a1), alph)
+                got = parse_list(state, s(a0:a1), alph)
+                state%noads(k)%a = got
                 return
             end if
             call math_sym(trim(name), code, cls)
