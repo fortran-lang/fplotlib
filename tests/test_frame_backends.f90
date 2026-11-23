@@ -1,7 +1,7 @@
 module test_frame_backends
     use fplotlib_style, only: dp
     use fplotlib_render, only: paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
-                               CAP_BUTT, CAP_ROUND, CAP_SQUARE
+                               CAP_BUTT, CAP_ROUND, CAP_SQUARE, JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
     use fplotlib_raster, only: full_walk
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_png, only: png_renderer_t
@@ -23,6 +23,7 @@ contains
         call png_frames_check(nfail)
         call png_image_check(nfail)
         call png_dash_frames_check(nfail)
+        call png_dash_joins_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
     end subroutine frame_backend_check
 
@@ -262,7 +263,7 @@ contains
     subroutine png_dash_frames_check(nfail)
         integer, intent(inout) :: nfail
         real(dp), parameter :: c30 = 0.8660254037844386_dp, s30 = 0.5_dp
-        real(dp), parameter :: mats(6, 9) = reshape([ &
+        real(dp), parameter :: mats(6, 10) = reshape([ &
             0.1_dp, 0.0_dp, 0.0_dp, 0.1_dp, 10.0_dp, 10.0_dp, &
             10.0_dp, 0.0_dp, 0.0_dp, 10.0_dp, -500.0_dp, -300.0_dp, &
             c30, s30, -s30, c30, 50.0_dp, 0.0_dp, &
@@ -274,7 +275,10 @@ contains
             ! makes a thin pen a sliver across the canvas; and a plain move.
             0.7071067811865476_dp, 0.7071067811865476_dp, -7071.067811865476_dp, 7071.067811865476_dp, &
             100.0_dp, 75.0_dp, &
-            1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 10.0_dp, 0.0_dp], [6, 9])
+            1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 10.0_dp, 0.0_dp, &
+            ! Squeezed 5000 times across the line, not turned: a wide pen
+            ! a thin band, each dash of which reaches only so far along.
+            1.0_dp, 0.0_dp, 0.0_dp, 2.0e-4_dp, 0.0_dp, 75.0_dp], [6, 10])
         real(dp), parameter :: px(4) = [-1.0e5_dp, 1.0e5_dp, 50.0_dp, 80.0_dp]
         real(dp), parameter :: py(4) = [-1.0e4_dp, 2.0e4_dp, 60.0_dp, 20.0_dp]
         real(dp), parameter :: widths(4) = [1.0_dp, 2.0_dp, 500.0_dp, 1.0e4_dp]
@@ -306,10 +310,12 @@ contains
                         if (paint%cap /= CAP_BUTT .and. paint%line_width > 100.0_dp*sum(paint%dash(1:paint%n_dash))) cycle
                         full_walk = .false.
                         quick = dashed_frame(mats(:, m), paint)
-                        ! A segment whose pattern is finer than half a pixel
-                        ! on the canvas is drawn solid, the one documented
-                        ! approximation, which the full walk is not; such a
-                        ! path is only drawn, which has to finish.
+                        ! A segment whose dashes cross the canvas as stripes
+                        ! less than half a pixel apart is drawn solid, a
+                        ! documented approximation, which the full walk is
+                        ! not; such a path is only drawn, which has to
+                        ! finish. The rasterizer's guard on the periods
+                        ! walked must never apply to the rest.
                         if (any_solid(mats(:, m), sum(paint%dash(1:paint%n_dash))*DPI/72.0_dp &
                                       *merge(2.0_dp, 1.0_dp, mod(paint%n_dash, 2) == 1))) cycle
                         full_walk = .true.
@@ -339,7 +345,7 @@ contains
         ! Whether some segment of the path is too fine to walk in a frame
         ! of matrix a, by the rasterizer's rule: its pattern, period canvas
         ! pixels long before the frame (an odd count of lengths doubled),
-        ! under half a pixel on the canvas.
+        ! makes stripes on the canvas under half a pixel apart.
         pure logical function any_solid(a, period) result(r)
             real(dp), intent(in) :: a(6), period
             integer :: i
@@ -348,7 +354,9 @@ contains
             do i = 1, size(px) - 1
                 dx = px(i + 1) - px(i)
                 dy = py(i + 1) - py(i)
-                if (period*hypot(a(1)*dx + a(3)*dy, a(2)*dx + a(4)*dy)/hypot(dx, dy) < 0.5_dp) r = .true.
+                ! Stripes less than half a pixel apart across them.
+                if (period*abs(a(1)*a(4) - a(2)*a(3))*hypot(dx, dy) &
+                    < 0.5_dp*hypot(a(3)*dx - a(1)*dy, a(4)*dx - a(2)*dy)) r = .true.
             end do
         end function any_solid
 
@@ -421,6 +429,123 @@ contains
             bytes = png%rgb
         end function dashed_frame
     end subroutine png_dash_frames_check
+
+    ! Where a walked segment meets one drawn solid, the join at their
+    ! corner is drawn as the full walk draws it: the frame makes one
+    ! segment's pattern sub-pixel and leaves the other's. Compared outside
+    ! the solid segment's own pen, which the approximation draws at its
+    ! cover. The dash phase at the corner stays clear of a dash ending
+    ! exactly there, where rounding decides whether it reaches on.
+    subroutine png_dash_joins_check(nfail)
+        integer, intent(inout) :: nfail
+        real(dp), parameter :: m(6) = [1.0_dp, 0.0_dp, 0.0_dp, 0.05_dp, 0.0_dp, 50.0_dp]
+        real(dp), parameter :: squeezed(6) = [1.0_dp, 0.0_dp, 0.0_dp, 2.0e-4_dp, 0.0_dp, 75.0_dp]
+        integer, parameter :: caps(3) = [CAP_BUTT, CAP_ROUND, CAP_SQUARE]
+        integer, parameter :: joins(3) = [JOIN_MITER, JOIN_ROUND, JOIN_BEVEL]
+        ! A paint as declared, with every default.
+        type(paint_t) :: paint, bare, fresh
+        real(dp) :: x(3), y(3)
+        character(len=:), allocatable :: quick, full, mask
+        integer :: order, c, j, k, i, worst
+        logical :: same
+
+        same = .true.
+        do order = 1, 2
+            if (order == 1) then
+                x = [10.0_dp, 96.0_dp, 96.0_dp]
+                y = [0.0_dp, 0.0_dp, 2000.0_dp]
+            else
+                x = [96.0_dp, 96.0_dp, 10.0_dp]
+                y = [2000.0_dp, 0.0_dp, 0.0_dp]
+            end if
+            do c = 1, 3
+                do j = 1, 3
+                    do k = 0, 5
+                        paint = fresh
+                        paint%stroked = .true.
+                        paint%cap = caps(c)
+                        paint%join = joins(j)
+                        paint%line_width = merge(20.0_dp, 2.0_dp, caps(c) == CAP_BUTT)
+                        paint%n_dash = 2
+                        paint%dash(1:2) = [4.0_dp, 2.0_dp]
+                        paint%dash_offset = k + 0.37_dp
+                        bare = paint
+                        bare%n_dash = 0
+                        bare%cap = CAP_BUTT
+                        full_walk = .false.
+                        quick = draw_in_frame(m, x, y, 3, paint)
+                        ! The solid segment alone: the second, or the first.
+                        if (order == 1) then
+                            mask = draw_in_frame(m, x(2:3), y(2:3), 2, bare)
+                        else
+                            mask = draw_in_frame(m, x(1:2), y(1:2), 2, bare)
+                        end if
+                        full_walk = .true.
+                        full = draw_in_frame(m, x, y, 3, paint)
+                        full_walk = .false.
+                        worst = 0
+                        do i = 1, len(quick)
+                            if (mask(i:i) == achar(255)) &
+                                worst = max(worst, abs(iachar(quick(i:i)) - iachar(full(i:i))))
+                        end do
+                        if (worst > 1) then
+                            same = .false.
+                            print "(a, 4(i0, 1x))", "  dash join differs: order, cap, join, phase, worst ", &
+                                order, c, j, k, worst
+                        end if
+                    end do
+                end do
+            end do
+        end do
+        call expect(same, "PNG dash joins between walked and solid segments match the full walk", nfail)
+
+        ! A line along a frame squeezed 5000 times across it, with a pen
+        ! 10000 points wide: a band 2.8 pixels tall of dashes 4 pixels long,
+        ! whose period the frame leaves as it is, however many of them the
+        ! pen's width would have reach the canvas before the frame.
+        same = .true.
+        do c = 1, 3
+            paint = fresh
+            paint%stroked = .true.
+            paint%cap = caps(c)
+            paint%line_width = merge(1.0e4_dp, 500.0_dp, caps(c) == CAP_BUTT)
+            paint%n_dash = 2
+            paint%dash(1:2) = [3.0_dp, 3.0_dp]
+            full_walk = .false.
+            quick = draw_in_frame(squeezed, [-1.0e5_dp, 1.0e5_dp], [0.0_dp, 0.0_dp], 2, paint)
+            full_walk = .true.
+            full = draw_in_frame(squeezed, [-1.0e5_dp, 1.0e5_dp], [0.0_dp, 0.0_dp], 2, paint)
+            full_walk = .false.
+            worst = 0
+            do i = 1, len(quick)
+                worst = max(worst, abs(iachar(quick(i:i)) - iachar(full(i:i))))
+            end do
+            if (worst > 1) then
+                same = .false.
+                print "(a, 2(i0, 1x))", "  squeezed dashes differ: cap, worst ", c, worst
+            end if
+        end do
+        call expect(same, "PNG dashes along a squeezed frame match the full walk", nfail)
+    contains
+        function draw_in_frame(m, x, y, n, paint) result(rgb)
+            real(dp), intent(in) :: m(6), x(:), y(:)
+            integer, intent(in) :: n
+            type(paint_t), intent(in) :: paint
+            character(len=:), allocatable :: rgb
+            type(png_renderer_t) :: png
+            type(clip_t) :: none
+            integer :: verbs(3)
+
+            verbs = [VERB_MOVE, VERB_LINE, VERB_LINE]
+            png%keep_pixels = .true.
+            call png%open_canvas(200.0_dp, 150.0_dp, bg_rgb=[255, 255, 255])
+            call png%begin_frame(m, none)
+            call png%draw_path(x(1:n), y(1:n), verbs(1:n), n, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            rgb = png%rgb
+        end function draw_in_frame
+    end subroutine png_dash_joins_check
 
     subroutine expect(ok, label, nfail)
         logical, intent(in) :: ok

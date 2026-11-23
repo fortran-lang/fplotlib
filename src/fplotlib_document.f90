@@ -37,7 +37,8 @@ contains
         integer :: p, n
         n = document%page_count()
         if (n == 0) call contract_error("export_document: no pages")
-        resolution = 150.0_dp
+        ! The resolution savefig and the PNG backend take by default.
+        resolution = 100.0_dp
         if (present(dpi)) resolution = dpi
         select case (format)
         case ("pdf")

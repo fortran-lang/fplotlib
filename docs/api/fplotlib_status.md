@@ -87,12 +87,10 @@ than half a pixel, whose dashes cannot be told apart, is drawn as a solid
 line at the share of the line the pattern would cover (more where round
 or square ends close the gaps). Walking such a pattern dash by dash could
 take without end. In a frame (see [`fplotlib_render`](fplotlib_render.md))
-the same holds segment by segment, half a pixel measured on the canvas; and
-a segment with more periods whose dashes can reach the canvas than twice
-the canvas's width and height in pixels, and a thousand, is drawn the same
-way: those dashes cross the canvas as stripes less than about half a pixel
-apart, which only a frame that turns the pen far along the line can make.
-Everything else it draws as the full walk of every dash would, up to the
+the same holds segment by segment, for a segment whose dashes cross the
+canvas as stripes less than half a pixel apart. A frame that squeezes
+across a line can make them so even where each dash is long along it, as
+the stripes then lie almost along the line. Everything else it draws as the full walk of every dash would, up to the
 rounding of where along a very long segment the pattern stands, which the
 walk works out by adding dash after dash and the shortcuts by division. In
 a PNG, a frame whose matrix, taken together with those of the frames

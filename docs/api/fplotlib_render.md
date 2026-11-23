@@ -43,10 +43,9 @@ frame's coordinates, but what the rasterizer may skip of it is decided by
 the canvas: a segment is walked only where the matrix maps it into the
 canvas, widened on each side by the pen as the matrix stretches that axis,
 and only over the dashes whose place along the line falls within the
-canvas's span along it, and a cap's length beyond. A segment whose pattern
-is finer than half a pixel on the canvas, or with so many dashes able to
-reach the canvas that they cross it as stripes less than about half a pixel
-apart, is drawn solid at the pattern's cover, the approximation
+canvas's span along it, and a cap's length beyond. A segment whose dashes
+cross the canvas as stripes less than half a pixel apart is drawn solid at
+the pattern's cover, the approximation
 [`fplotlib_status`](fplotlib_status.md) describes; that bounds every walk
 by the canvas, however the frame shrinks, shears or stretches. Everywhere
 else the dashes are what walking every one of them draws.

@@ -189,34 +189,26 @@ contains
         cv%curve_scale = max(1.0_dp, sqrt(0.5_dp*(u + v + hypot(u - v, 2.0_dp*dot))))
     end subroutine set_transform
 
-    ! The canvas's corners in the coordinates of the current frame, which
-    ! its matrix maps onto the canvas, and two canvas pixels in those
-    ! coordinates at the least, along the direction the matrix shrinks
-    ! most. False for a matrix that maps everything onto a line or a point,
-    ! where nothing drawn can be seen.
-    logical function local_canvas(cv, kx, ky, margin) result(ok)
+    ! The corners of the canvas widened by two pixels on every side, in the
+    ! coordinates of the current frame, which its matrix maps onto the
+    ! canvas: a point outside them touches no pixel. False for a matrix that
+    ! maps everything onto a line or a point, where nothing drawn can be
+    ! seen. Corners too far off for a double are left infinite.
+    logical function local_canvas(cv, kx, ky) result(ok)
         type(canvas_t), intent(in) :: cv
-        real(dp), intent(out) :: kx(4), ky(4), margin
-        real(dp) :: m(6), det, dx(4), dy(4), u, v, dot, smax
+        real(dp), intent(out) :: kx(4), ky(4)
+        real(dp) :: m(6), det, dx(4), dy(4)
 
         m = cv%matrix
         det = m(1)*m(4) - m(2)*m(3)
         ok = det /= 0.0_dp
         kx = 0.0_dp
         ky = 0.0_dp
-        margin = 0.0_dp
         if (.not. ok) return
-        dx = [0.0_dp, real(cv%w, dp), real(cv%w, dp), 0.0_dp] - m(5)
-        dy = [0.0_dp, 0.0_dp, real(cv%h, dp), real(cv%h, dp)] - m(6)
+        dx = [-2.0_dp, cv%w + 2.0_dp, cv%w + 2.0_dp, -2.0_dp] - m(5)
+        dy = [-2.0_dp, -2.0_dp, cv%h + 2.0_dp, cv%h + 2.0_dp] - m(6)
         kx = (m(4)*dx - m(3)*dy)/det
         ky = (m(1)*dy - m(2)*dx)/det
-        ! The smallest singular value of the 2 by 2 part is |det| over the
-        ! largest.
-        u = m(1)**2 + m(2)**2
-        v = m(3)**2 + m(4)**2
-        dot = m(1)*m(3) + m(2)*m(4)
-        smax = sqrt(0.5_dp*(u + v + hypot(u - v, 2.0_dp*dot)))
-        margin = 2.0_dp*smax/abs(det)
     end function local_canvas
 
     ! The most matrix stretches a length by: the larger singular value of
@@ -1079,9 +1071,10 @@ contains
             ! frame's matrix maps onto the canvas. The box is the canvas, two
             ! pixels out, on the canvas; stroke_dashed widens each of its
             ! sides by the pen as the matrix stretches that axis. kx, ky are
-            ! the canvas's corners and margin two canvas pixels, in frame
-            ! coordinates.
-            if (.not. local_canvas(cv, kx, ky, margin)) return
+            ! the same box's corners in frame coordinates, which hold every
+            ! point that touches a pixel: no margin is added to them.
+            if (.not. local_canvas(cv, kx, ky)) return
+            margin = 0.0_dp
             stretch = max_stretch(cv%matrix)
             bx0 = -2.0_dp
             bx1 = real(cv%w, dp) + 2.0_dp
@@ -1269,10 +1262,12 @@ contains
                 call frame_cut(matrix, sx, sy, qx, qy, bx0, bx1, by0, by1, reach, ca, cb)
                 ! Narrowed further to the dashes that can reach the canvas
                 ! at all: those whose place along the line falls within the
-                ! canvas's span along it, as its corners project onto the
-                ! line, and a cap's length and two pixels beyond. A pen at
-                ! any angle to the line reaches no further along it.
-                if (.not. full_walk) then
+                ! span of the widened canvas's corners along it, and a cap's
+                ! length beyond. Every point a dash covers has its dash's
+                ! place along the line, whatever the pen and the matrix do
+                ! across it, and a point that touches a pixel lies within
+                ! those corners. Left as cut where they are too far off.
+                if (.not. full_walk .and. all(ieee_is_finite(kx)) .and. all(ieee_is_finite(ky))) then
                     ux = (qx - sx)/l
                     uy = (qy - sy)/l
                     p0 = huge(1.0_dp)
@@ -1282,24 +1277,40 @@ contains
                         p0 = min(p0, pk)
                         p1 = max(p1, pk)
                     end do
-                    ext = margin
-                    if (paint%cap /= CAP_BUTT) ext = ext + hw
+                    ext = 0.0_dp
+                    if (paint%cap /= CAP_BUTT) ext = hw
                     ca = max(ca, (p0 - ext)/l)
                     cb = min(cb, (p1 + ext)/l)
                 end if
                 ! Solid, ending any dash under way here as a cut does: a
-                ! segment whose pattern is finer than half a pixel on the
-                ! canvas, and one with more periods able to reach the canvas
-                ! than twice its width and height in pixels. Those dashes
-                ! cross the canvas as stripes less than about half a pixel
-                ! apart, which only a frame that turns the pen far along
-                ! the line makes, and which show as the pattern's cover.
-                if (.not. full_walk .and. (period_px*hypot(matrix(1)*(qx - sx) + matrix(3)*(qy - sy), &
-                                                           matrix(2)*(qx - sx) + matrix(4)*(qy - sy))/l < 0.5_dp &
+                ! segment whose dashes cross the canvas as stripes less than
+                ! half a pixel apart. The stripes are where the pattern
+                ! stands still, the segment's normal n as the matrix maps
+                ! it, a period apart along the segment: |det| over |M n|
+                ! of a period apart across. Never more than along the
+                ! segment, |M u| a period, and the same without a frame.
+                ! Stripes at least half a pixel apart cross the canvas,
+                ! two pixels wider all round, at most 2(W + H + 8) + 2
+                ! times, and a cap reaches at most 100 periods further at
+                ! either end: so the count of periods walked, the second
+                ! test, is only a guard, which no such segment exceeds.
+                if (.not. full_walk .and. (period_px*abs(matrix(1)*matrix(4) - matrix(2)*matrix(3))*l &
+                                           < 0.5_dp*hypot(matrix(3)*(qx - sx) - matrix(1)*(qy - sy), &
+                                                          matrix(4)*(qx - sx) - matrix(2)*(qy - sy)) &
                                            .or. (min(cb, 1.0_dp) - max(ca, 0.0_dp))*l > &
                                            (2.0_dp*(bx1 - bx0 + by1 - by0) + 1000.0_dp)*period_px)) then
-                    if (on .and. nr > 1) call stroke_run(out, rx, ry, nr, hw, paint, .false., &
-                                                         bare0=bare, bare1=.true.)
+                    ! A dash under way through the segment's first point
+                    ! ends there with the join, as at a cut: a step along
+                    ! this segment, without a cap. After a solid segment the
+                    ! solid run already holds the join, and the stub begun
+                    ! for a walk that did not come is dropped.
+                    if (on .and. nr > 0 .and. nz == 0) then
+                        call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        nr = nr + 1
+                        rx(nr) = px(i) + stub_at(px(i), py(i))*vx
+                        ry(nr) = py(i) + stub_at(px(i), py(i))*vy
+                        call stroke_run(out, rx, ry, nr, hw, paint, .false., bare0=bare, bare1=.true.)
+                    end if
                     nr = 0
                     bare = .false.
                     if (nz == 0) then
@@ -1311,6 +1322,18 @@ contains
                     zx(nz) = qx
                     zy(nz) = qy
                     call dash_advance(min(l, huge(1.0_dp)), paint, scale, di, rem, on)
+                    ! And a dash running on through its last point into a
+                    ! segment that is walked starts there with the join: a
+                    ! capless stub a step back along this segment.
+                    if (on .and. i < n - 1 .and. paint%dash(di)*scale - rem > 1.0e-12_dp) then
+                        call unit_dir(px(i), py(i), px(i + 1), py(i + 1), vx, vy)
+                        rx(1) = px(i + 1) - stub_at(px(i + 1), py(i + 1))*vx
+                        ry(1) = py(i + 1) - stub_at(px(i + 1), py(i + 1))*vy
+                        rx(2) = px(i + 1)
+                        ry(2) = py(i + 1)
+                        nr = 2
+                        bare = .true.
+                    end if
                     cycle
                 end if
                 if (nz > 1) call stroke_run(solid, zx, zy, nz, hw, paint, .false.)

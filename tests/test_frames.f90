@@ -3,7 +3,7 @@
 ! a frame.
 module test_frames
     use fplotlib_style, only: dp
-    use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY
+    use fplotlib_scene, only: frame_t, paged_document_t, recording_renderer_t, IDENTITY_MATRIX
     use fplotlib_document, only: document_asset_t, export_document
     use fplotlib_render, only: glyphrun_t, paint_t
     use fplotlib_text, only: text_layout
@@ -68,7 +68,7 @@ contains
         call parent%init(160.0_dp, 60.0_dp)
         call parent%import_frame(child, handle)
         call parent%place(handle)
-        matrix = IDENTITY
+        matrix = IDENTITY_MATRIX
         matrix(5:6) = [80.0_dp, 30.0_dp]
         call parent%place(handle, matrix)
         call document%add_page(parent)

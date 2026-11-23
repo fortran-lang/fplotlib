@@ -10,16 +10,17 @@ module fplotlib_scene
     implicit none
     private
 
-    public :: frame_t, paged_document_t, recording_renderer_t, IDENTITY
+    public :: frame_t, paged_document_t, recording_renderer_t, IDENTITY_MATRIX
 
-    real(dp), parameter :: IDENTITY(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
+    ! The matrix of a frame placed as it is.
+    real(dp), parameter :: IDENTITY_MATRIX(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
     integer, parameter :: PATH = 1, RECT = 2, CIRCLE = 3, MARKERS = 4, GLYPHS = 5, &
                           IMAGE = 6, GROUP = 7
 
     type :: item_t
         integer :: kind = 0, next = 0, child = 0, nv = 0
         real(dp) :: x = 0, y = 0, w = 0, h = 0, radius = 0, angle = 0
-        real(dp) :: matrix(6) = IDENTITY
+        real(dp) :: matrix(6) = IDENTITY_MATRIX
         type(paint_t) :: paint
         type(clip_t) :: clip
         type(glyphrun_t) :: run
@@ -341,7 +342,7 @@ contains
                 case (GROUP)
                     named = .false.
                     if (allocated(p%name)) named = len(p%name) > 0
-                    scoped = p%clip%on .or. any(p%matrix /= IDENTITY)
+                    scoped = p%clip%on .or. any(p%matrix /= IDENTITY_MATRIX)
                     if (named) then
                         call renderer%begin_group(p%name)
                     end if
@@ -500,7 +501,7 @@ contains
             call record_rect(self, 0.0_dp, 0.0_dp, width, height, paint)
         end if
         ! The crop is a frame, not a rewrite of every recorded coordinate.
-        matrix = IDENTITY
+        matrix = IDENTITY_MATRIX
         matrix(5:6) = [-ox, -oy]
         call record_frame(self, matrix, clip)
     end subroutine record_open
@@ -675,7 +676,7 @@ contains
         character(len=*), intent(in) :: name
         type(clip_t) :: clip
 
-        call record_frame(self, IDENTITY, clip)
+        call record_frame(self, IDENTITY_MATRIX, clip)
         self%scene%items(self%scene%ni)%name = name
     end subroutine record_group
 
