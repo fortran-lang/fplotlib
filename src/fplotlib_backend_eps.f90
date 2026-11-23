@@ -31,7 +31,7 @@ module fplotlib_backend_eps
     use fplotlib_type3, only: t3set_t, t3_reset, t3_code, t3_font_name, &
                               t3_glyph_ops, t3_width, t3_box
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
-                         builder_get, fmt_num
+                         builder_get, fmt_num, matrix_decimals
     implicit none
     private
 
@@ -56,6 +56,8 @@ module fplotlib_backend_eps
         procedure :: draw_markers_impl => eps_draw_markers
         procedure :: draw_glyphs_impl => eps_draw_glyphs
         procedure :: draw_image_impl => eps_draw_image
+        procedure :: begin_frame_impl => eps_begin_frame
+        procedure :: end_frame_impl => eps_end_frame
     end type eps_renderer_t
 
 
@@ -67,22 +69,31 @@ contains
         call builder_append(self%c, s)
     end subroutine put
 
-    subroutine put_num(self, x)
+    ! A number in the coordinates of the frames open now, to a millionth of
+    ! a point on the page, or to as many decimals as given.
+    subroutine put_num(self, x, decimals)
         class(eps_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        if (present(decimals)) then
+            call fmt_num(x, s, n, decimals)
+        else
+            call fmt_num(x, s, n, frame_decimals(self))
+        end if
         call builder_append(self%c, s(1:n))
         call builder_append(self%c, " ")
     end subroutine put_num
 
-    function num_str(x) result(t)
+    ! A number to six decimals, or as many as given.
+    function num_str(x, decimals) result(t)
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=:), allocatable :: t
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        call fmt_num(x, s, n, decimals)
         t = s(1:n)
     end function num_str
 
@@ -154,7 +165,7 @@ contains
             do i = 1, p%n_dash
                 call put_num(self, p%dash(i))
             end do
-            call put(self, "] "//num_str(p%dash_offset)//" setdash"//new_line("a"))
+            call put(self, "] "//num_str(p%dash_offset, frame_decimals(self))//" setdash"//new_line("a"))
         end if
     end subroutine begin_paint
 
@@ -196,6 +207,8 @@ contains
         self%y0 = 0.0_dp
         if (present(x0)) self%x0 = x0
         if (present(y0)) self%y0 = y0
+        self%page_rgb = [255, 255, 255]
+        if (allocated(self%out)) deallocate (self%out)
         call t3_reset(self%t3)
         call builder_init(self%c)
 
@@ -213,6 +226,36 @@ contains
             call eps_draw_rect(self, self%x0, self%y0, width, height, p)
         end if
     end subroutine eps_open_canvas
+
+    subroutine eps_begin_frame(self, matrix, clip)
+        class(eps_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        integer :: i
+
+        ! renderer_t has checked the call and counts the frame.
+        call put(self, "gsave"//new_line("a")//"[")
+        ! In the coordinates of the frames around it, with fifteen
+        ! significant digits of each factor.
+        do i = 1, 6
+            call put_num(self, matrix(i), max(frame_decimals(self, outer=.true.), &
+                                              matrix_decimals(matrix(i))))
+        end do
+        call put(self, "] concat"//new_line("a"))
+        if (clip%on) then
+            call put_num(self, clip%x)
+            call put_num(self, clip%y)
+            call put_num(self, clip%w)
+            call put_num(self, clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
+    end subroutine eps_begin_frame
+
+    subroutine eps_end_frame(self)
+        class(eps_renderer_t), intent(inout) :: self
+
+        call put(self, "grestore"//new_line("a"))
+    end subroutine eps_end_frame
 
     subroutine emit_path(self, x, y, verbs, n_verb)
         class(eps_renderer_t), intent(inout) :: self
@@ -318,10 +361,11 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
         real(dp) :: ca, sa, rad
-        integer :: i, j, k, font, code, font_j, code_j
+        integer :: i, j, k, font, code, font_j, code_j, fd
         character(len=1) :: eol
 
         eol = new_line("a")
+        fd = frame_decimals(self)
         call put(self, "gsave"//eol)
         if (paint%clip%on) then
             call put_num(self, paint%clip%x)
@@ -346,12 +390,12 @@ contains
                     .or. abs(run%y(j + 1) - run%y(i)) > 1.0e-9_dp) exit
                 j = j + 1
             end do
-            call put(self, "gsave ["//num_str(ca)//" "//num_str(sa)//" " &
-                     //num_str(sa)//" "//num_str(-ca)//" " &
-                     //num_str(x + run%x(i)*ca - run%y(i)*sa)//" " &
-                     //num_str(y + run%x(i)*sa + run%y(i)*ca)//"] concat"//eol)
+            call put(self, "gsave ["//num_str(ca, fd)//" "//num_str(sa, fd)//" " &
+                     //num_str(sa, fd)//" "//num_str(-ca, fd)//" " &
+                     //num_str(x + run%x(i)*ca - run%y(i)*sa, fd)//" " &
+                     //num_str(y + run%x(i)*sa + run%y(i)*ca, fd)//"] concat"//eol)
             call put(self, "/"//t3_font_name(self%t3, font)//" findfont " &
-                     //num_str(run%size(i))//" scalefont setfont"//eol)
+                     //num_str(run%size(i), fd)//" scalefont setfont"//eol)
             call put(self, "0 0 moveto <")
             do k = i, j
                 call t3_code(self%t3, run%gid(k), font_j, code_j)
@@ -388,6 +432,13 @@ contains
         character(len=1) :: buf(6)
 
         call put(self, "gsave"//new_line("a"))
+        if (paint%clip%on) then
+            call put_num(self, paint%clip%x)
+            call put_num(self, paint%clip%y)
+            call put_num(self, paint%clip%w)
+            call put_num(self, paint%clip%h)
+            call put(self, "rectclip"//new_line("a"))
+        end if
         call put_num(self, x)
         call put_num(self, y + h)
         call put(self, "translate"//new_line("a"))
