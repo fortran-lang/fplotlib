@@ -25,6 +25,8 @@ contains
         call png_dash_frames_check(nfail)
         call png_dash_joins_check(nfail)
         call png_far_frame_check(nfail)
+        call pdf_resources_check(nfail)
+        call pdf_pages_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
     end subroutine frame_backend_check
 
@@ -604,5 +606,98 @@ contains
         nfail = nfail + 1
         print "(a,a,a,3(i0,1x),a,3(i0,1x))", "  FAIL ", label, ": got ", actual, "expected ", expected
     end subroutine expect_pixel
+
+    subroutine pdf_resources_check(nfail)
+        integer, intent(inout) :: nfail
+        integer, parameter :: NIMAGE = 20, NALPHA = 80
+        type(pdf_renderer_t) :: pdf
+        type(paint_t) :: paint
+        integer :: i, rgba(4, 1, 1), pos, ios
+        real(dp) :: alpha
+        character(len=16) :: id
+        character(len=:), allocatable :: document, key
+        logical :: images_present, alphas_present
+
+        call pdf%open_canvas(100.0_dp, 100.0_dp)
+        do i = 1, NIMAGE
+            rgba(:, 1, 1) = [7*i, 255 - 5*i, 3*i, 255]
+            if (mod(i, 3) == 0) rgba(4, 1, 1) = 128
+            call pdf%draw_image(real(4*i, dp), 0.0_dp, 3.0_dp, 3.0_dp, rgba, 1, 1, paint)
+        end do
+        paint%filled = .true.
+        do i = 1, NALPHA
+            paint%fill_alpha = real(i, dp)/100.0_dp
+            call pdf%draw_rect(real(i, dp), 10.0_dp, 1.0_dp, 20.0_dp, paint)
+        end do
+        call pdf%close_canvas()
+        document = pdf%bytes()
+
+        images_present = .true.
+        do i = 1, NIMAGE
+            write (id, "(i0)") i
+            if (occurrences(document, "/Im"//trim(id)//" Do") /= 1) images_present = .false.
+        end do
+        call expect(images_present, "PDF retains every image draw past image 16", nfail)
+        call expect(occurrences(document, "/ColorSpace /DeviceRGB") == NIMAGE, &
+                    "PDF emits every RGB image XObject", nfail)
+        call expect(occurrences(document, "/ColorSpace /DeviceGray") == NIMAGE/3, &
+                    "PDF retains image soft masks after resource growth", nfail)
+
+        alphas_present = .true.
+        do i = 1, NALPHA
+            write (id, "(i0)") i
+            if (occurrences(document, "/GS"//trim(id)//" gs") /= 1) alphas_present = .false.
+            key = "/GS"//trim(id)//" << /Type /ExtGState /ca "
+            if (occurrences(document, key) /= 1) alphas_present = .false.
+            pos = index(document, key)
+            if (pos == 0) cycle
+            read (document(pos + len(key):), *, iostat=ios) alpha
+            if (ios /= 0) then
+                alphas_present = .false.
+            else if (abs(alpha - real(i, dp)/100.0_dp) > 1.0e-12_dp) then
+                alphas_present = .false.
+            end if
+        end do
+        call expect(alphas_present, "PDF defines and uses every alpha state past state 64", nfail)
+    end subroutine pdf_resources_check
+
+    subroutine pdf_pages_check(nfail)
+        integer, intent(inout) :: nfail
+        type(pdf_renderer_t) :: pdf
+        character(len=:), allocatable :: document
+
+        call pdf%open_canvas(100.0_dp, 80.0_dp, [255, 255, 255])
+        call pdf%new_page(width=160.0_dp, height=120.0_dp, bg_rgb=[0, 0, 0], bg_alpha=0.5_dp)
+        call pdf%new_page()
+        call pdf%close_canvas()
+        document = pdf%bytes()
+
+        call expect(occurrences(document, "/Type /Page ") == 3, "PDF keeps all three pages", nfail)
+        call expect(occurrences(document, "/MediaBox [0 0 100 80]") == 1 .and. &
+                    occurrences(document, "/MediaBox [0 0 160 120]") == 2, &
+                    "PDF preserves earlier page sizes and inherits the current size", nfail)
+        call expect(index(document, "/MediaBox [0 0 100 80]") < index(document, "/MediaBox [0 0 160 120]"), &
+                    "PDF preserves page order when sizes change", nfail)
+        call expect(occurrences(document, "0 0 100 80 re") == 1 .and. &
+                    occurrences(document, "0 0 160 120 re") == 2, &
+                    "PDF backgrounds use their own page dimensions", nfail)
+        call expect(occurrences(document, "/GS1 gs") == 2 .and. &
+                    occurrences(document, "0 0 0 rg") == 2, &
+                    "PDF no-argument new_page inherits background color and alpha", nfail)
+    end subroutine pdf_pages_check
+
+    integer function occurrences(text, token) result(n)
+        character(len=*), intent(in) :: text, token
+        integer :: offset, found
+
+        n = 0
+        offset = 1
+        do while (offset <= len(text))
+            found = index(text(offset:), token)
+            if (found == 0) exit
+            n = n + 1
+            offset = offset + found - 1 + len(token)
+        end do
+    end function occurrences
 
 end module test_frame_backends

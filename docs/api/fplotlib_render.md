@@ -2,8 +2,8 @@
 
 `renderer_t` is the format-independent drawing contract. Drawing does not
 require a file, an encoded format, or a `bytes` method. `encoded_renderer_t`
-extends it with `bytes` for PDF/SVG/PNG/EPS output; other targets can
-implement drawing alone.
+extends it with `bytes` for PDF/SVG/PNG/EPS output; recording and interactive
+targets can implement drawing alone.
 
 The built-in text family has size, weight and slant styles. There is no
 serif/monospace family selector that silently substitutes the sans font.
@@ -62,6 +62,9 @@ the pattern's cover, the approximation
 [`fplotlib_status`](fplotlib_status.md) describes; that bounds every walk
 by the canvas, however the frame shrinks, shears or stretches. Everywhere
 else the dashes are what walking every one of them draws.
+
+Pages are not part of `renderer_t`: `pdf_renderer_t%new_page` starts the
+next page of a PDF, and the other formats write one page each.
 
 ```{f:module} fplotlib_render
 ```

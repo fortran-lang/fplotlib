@@ -13,6 +13,7 @@ fplotlib_cmap
 fplotlib_colors
 fplotlib_contour
 fplotlib_dates
+fplotlib_document
 fplotlib_draw
 fplotlib_gif
 fplotlib_glyphs
@@ -25,6 +26,7 @@ fplotlib_proj3d
 fplotlib_raster
 fplotlib_render
 fplotlib_scale
+fplotlib_scene
 fplotlib_state
 fplotlib_status
 fplotlib_style

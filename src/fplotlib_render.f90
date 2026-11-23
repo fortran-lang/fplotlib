@@ -1,6 +1,6 @@
 ! fplotlib_render — the backend rendering API.
 !
-! One abstract drawing target that SVG, PNG, PDF and EPS each implement. The plotting
+! One abstract drawing target that SVG, PNG, PDF, EPS and recorders implement. The plotting
 ! code above it never learns which one it is talking to, so a new output format
 ! is a new module here and nothing else.
 !
@@ -254,8 +254,8 @@ module fplotlib_render
         procedure :: end_frame_impl
     end type renderer_t
 
-    ! Encoding is separate from drawing: a target that only draws, such as an
-    ! interactive one, need not invent a file format or a bytes method.
+    ! Encoding is separate from drawing: a recorder or an interactive target
+    ! need not invent a file format or implement a meaningless bytes method.
     type, abstract, extends(renderer_t) :: encoded_renderer_t
     contains
         procedure, non_overridable :: bytes
