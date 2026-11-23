@@ -187,8 +187,10 @@ call suptitle("figure title")
   `\widehat`, ...), `\overline` and `\underline`; the alphabets `\mathrm`,
   `\mathit`, `\mathbf`, `\mathsf`, `\mathbb` and `\mathcal`; `\text` in
   Lato; the four styles (`\displaystyle`, ...) and TeX's spaces (`\,`,
-  `\quad`, ...). `tests/math_refs.txt` holds where XeTeX puts every glyph
-  and rule of 83 test formulas, and the layout is checked against it
+  `\quad`, ...); and the alignments `matrix`, `pmatrix`, `bmatrix`,
+  `Bmatrix`, `vmatrix`, `Vmatrix`, `cases`, `array`, `aligned` and
+  `gathered`. `tests/math_refs.txt` holds where XeTeX puts every glyph
+  and rule of 92 test formulas, and the layout is checked against it
 - Automatic delimiters, as Typst has them: matched `( )`, `[ ]`, `\{ \}`,
   `| |`, `\| \|`, `\langle \rangle`, `\lfloor \rfloor` and `\lceil \rceil`
   grow to fit what they enclose, so `$(\frac{a}{b})$` needs no `\left` and
@@ -278,7 +280,8 @@ instead, through a `status_t` from `fplotlib_status`. Today that is an
 output file that cannot be written, or a PNG cropped with
 `bbox_inches="tight"` to more pixels than it can hold. `savefig`,
 `save_animation` and the `render_*` functions return it in their optional
-`status`, and without one stop with the message and exit code 2:
+`status`, and without one stop with the message and exit code 2; so does
+`typeset`, for the files of a document:
 
 ```fortran
 use fplotlib
@@ -462,7 +465,7 @@ attaches its own ids and metadata.
 Math is the exception: matplotlib's mathtext is its own approximation of TeX,
 and fplotlib follows TeX itself, so the formulas are checked against XeTeX
 instead. `tests/math_refs.txt` holds where XeTeX (Tectonic, with
-unicode-math and the same font files) puts every glyph and rule of 83
+unicode-math and the same font files) puts every glyph and rule of 92
 formulas, and `fpm test` requires fplotlib to put each within 0.02 pt of it.
 The automatic delimiters, which TeX does not have, are checked against
 Typst's in `tests/delim_refs.txt`. Both files are regenerated with pixi,
