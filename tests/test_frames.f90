@@ -57,13 +57,38 @@ contains
         call math_frame("\!", 10.0_dp, .false., frame)
         call frame%metrics(w, h)
         call check(w == 0.0_dp .and. h >= 0.0_dp, "negative space alone makes an empty frame", nfail)
-        ! Rules narrower than nothing, which a label draws, are drawn too.
-        call math_frame("\frac{\!}{\!}", 10.0_dp, .false., frame)
-        call math_frame("\cfrac{\!}{\!}", 10.0_dp, .true., frame)
-        call math_frame("\sqrt{\!\!\!\!\!\!}", 10.0_dp, .false., frame)
-        call math_frame("\overline{\!\!\!\!}", 10.0_dp, .false., frame)
-        call math_frame("\underline{\!\!\!\!}", 10.0_dp, .false., frame)
-        call check(.true., "formulas with rules of negative width make frames", nfail)
+        ! Rules narrower than nothing, which a label draws, are drawn too:
+        ! each of these frames holds ink, its rule if nothing else.
+        call rule_inked("\frac{\!}{\!}", .false.)
+        call rule_inked("\cfrac{\!}{\!}", .true.)
+        call rule_inked("\sqrt{\!\!\!\!\!\!}", .false.)
+        call rule_inked("\overline{\!\!\!\!}", .false.)
+        call rule_inked("\underline{\!\!\!\!}", .false.)
+
+        ! A run built by hand with gid longer than x, y and size grows by
+        ! its shortest array, not by gid.
+        deallocate (run%gid, run%x, run%y, run%size, run%font, run%first, run%last)
+        allocate (run%gid(8), run%x(1), run%y(1), run%size(1))
+        run%gid = 1
+        run%x = 0.0_dp
+        run%y = 0.0_dp
+        run%size = 10.0_dp
+        run%n = 1
+        call text_layout("BCDEFG", 10.0_dp, FACE_REGULAR, 5.0_dp, 0.0_dp, run, advance)
+        call check(run%n == 7 .and. size(run%x) >= 7 .and. size(run%size) >= 7, &
+                   "a run with arrays of different lengths grows by the shortest", nfail)
+    contains
+        subroutine rule_inked(tex, display)
+            character(len=*), intent(in) :: tex
+            logical, intent(in) :: display
+            type(frame_t) :: f
+            real(dp) :: bounds(4)
+            logical :: ink
+            call math_frame(tex, 10.0_dp, display, f)
+            call f%ink_bounds(bounds, ink)
+            call check(ink .and. bounds(3) > bounds(1) .and. bounds(4) > bounds(2), &
+                       "the frame of "//tex//" holds its rules", nfail)
+        end subroutine rule_inked
     end subroutine bare_runs_and_formulas
 
     subroutine check(ok, message, nfail)

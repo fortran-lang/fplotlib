@@ -182,6 +182,7 @@ contains
         integer, allocatable :: ti(:)
         real(dp), allocatable :: t(:)
         integer :: cap
+        logical :: some, all4
 
         if (gid < 0 .or. gid > NGLYPH) call contract_error("text: invalid glyph ID")
         if (.not. ieee_is_finite(x) .or. .not. ieee_is_finite(y)) then
@@ -190,12 +191,20 @@ contains
         if (.not. ieee_is_finite(fs) .or. fs < 0.0_dp) then
             call contract_error("text: font size must be finite and nonnegative")
         end if
-        if (.not. allocated(run%gid)) then
+        ! A run is empty, with none of gid, x, y and size, or has all four
+        ! at least as long as its count.
+        if (run%n < 0) call contract_error("text: glyph run count must be nonnegative")
+        some = allocated(run%gid) .or. allocated(run%x) .or. allocated(run%y) .or. allocated(run%size)
+        all4 = allocated(run%gid) .and. allocated(run%x) .and. allocated(run%y) .and. allocated(run%size)
+        if (some .and. .not. all4) call contract_error("text: a glyph run needs gid, x, y and size")
+        if (.not. all4) then
+            if (run%n > 0) call contract_error("text: glyph run arrays shorter than its count")
+            if (allocated(run%font)) deallocate (run%font)
+            if (allocated(run%first)) deallocate (run%first)
+            if (allocated(run%last)) deallocate (run%last)
             allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
                       run%x(16), run%y(16), run%size(16))
         else
-            if (.not. (allocated(run%x) .and. allocated(run%y) .and. allocated(run%size))) &
-                call contract_error("text: a glyph run needs gid, x, y and size")
             if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < run%n) &
                 call contract_error("text: glyph run arrays shorter than its count")
             call fill_mapping(run)

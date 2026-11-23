@@ -14,14 +14,14 @@ module test_contract
     use fplotlib_backend_png, only: png_renderer_t
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_eps, only: eps_renderer_t
-    use fplotlib_text, only: text_width
+    use fplotlib_text, only: text_width, text_layout
     use fplotlib_glyphs, only: FACE_REGULAR
     implicit none
     private
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 42
+    integer, parameter :: NCASE = 45
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -78,13 +78,16 @@ module test_contract
         "fplotlib: frame: nonfinite or out-of-range transform", &
         "fplotlib: renderer: this target cannot transform or clip a frame", &
         "fplotlib: pdf: new_page inside a frame or group", &
-        "fplotlib: renderer: frame_decimals(outer) with no frame open"]
+        "fplotlib: renderer: frame_decimals(outer) with no frame open", &
+        "fplotlib: text: glyph run count must be nonnegative", &
+        "fplotlib: text: a glyph run needs gid, x, y and size", &
+        "fplotlib: text: glyph run arrays shorter than its count"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1]
+        1, 1, 1, 1, 1]
 
 contains
 
@@ -93,6 +96,8 @@ contains
         integer, intent(in) :: k
         type(svg_renderer_t) :: svg
         integer :: k2
+        type(glyphrun_t) :: run
+        real(dp) :: adv
         type(png_renderer_t) :: png
         type(pdf_renderer_t) :: pdf
         type(eps_renderer_t) :: eps
@@ -236,6 +241,16 @@ contains
         case (42)
             call svg%open_canvas(10.0_dp, 10.0_dp)
             k2 = frame_decimals(svg, outer=.true.)
+        case (43)
+            run%n = -1
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (44)
+            allocate (run%x(4), run%y(4), run%size(4))
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (45)
+            allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
+            run%n = 5
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
         end select
     end subroutine contract_case
 
