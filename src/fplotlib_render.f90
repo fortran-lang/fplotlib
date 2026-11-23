@@ -164,6 +164,7 @@ module fplotlib_render
         logical :: filled = .false.
         integer :: fill_rgb(3) = [0, 0, 0]
         real(dp) :: fill_alpha = 1.0_dp
+        ! FILL_NONZERO or FILL_EVENODD, which every backend honours.
         integer :: fill_rule = FILL_NONZERO
 
         logical :: stroked = .false.
