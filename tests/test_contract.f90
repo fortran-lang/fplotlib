@@ -22,7 +22,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 50
+    integer, parameter :: NCASE = 51
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -87,13 +87,14 @@ module test_contract
         "fplotlib: mathtext: a rule list needs x, y, w and h", &
         "fplotlib: mathtext: rule list arrays shorter than its count", &
         "fplotlib: text: glyph run arrays must start at index 1", &
-        "fplotlib: mathtext: rule list arrays must start at index 1"]
+        "fplotlib: mathtext: rule list arrays must start at index 1", &
+        "fplotlib: add_path: a path must begin with M"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 contains
 
@@ -281,6 +282,13 @@ contains
             allocate (rules%x(0:3), rules%y(0:3), rules%w(0:3), rules%h(0:3))
             rules%n = 3
             call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
+        ! A path that does not begin with a move, seen far off the canvas,
+        ! where it is cut before any renderer checks it.
+        case (51)
+            call figure()
+            call add_path([0.0_dp, 1.0_dp, 2.0_dp, 3.0_dp], [0.0_dp, 1.0_dp, 0.0_dp, 1.0_dp], "CL")
+            call xlim(0.0_dp, 1.0e-3_dp)
+            call savefig("tests/out/contract_path.svg")
         end select
     end subroutine contract_case
 

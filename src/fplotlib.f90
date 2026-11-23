@@ -5583,6 +5583,12 @@ contains
                 call contract_error("add_path: unknown code '"//codes(j:j)//"'")
             end select
         end do
+        ! As in matplotlib, and as every backend takes a path: a contour
+        ! begins with a move. A path far off the canvas is cut before the
+        ! renderer would check it, so it is checked here.
+        if (nv > 0) then
+            if (v(1) /= VERB_MOVE) call contract_error("add_path: a path must begin with M")
+        end if
         if (np < 2 .or. np > min(size(x), size(y))) then
             call contract_error("add_path: codes need "//int_to_str(np)//" points, given " &
                                 //int_to_str(min(size(x), size(y))))
