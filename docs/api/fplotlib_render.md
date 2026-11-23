@@ -7,6 +7,7 @@ implement drawing alone.
 
 The built-in text family has size, weight and slant styles. There is no
 serif/monospace family selector that silently substitutes the sans font.
+Finished glyph runs identify the actual built-in glyphs they use.
 
 No renderer call returns an error. A call that breaks the contract, such as
 drawing before `open_canvas`, a coordinate that is not finite or lies
