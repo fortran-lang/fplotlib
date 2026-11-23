@@ -1,6 +1,7 @@
 ! SVG string builder for fplotlib.
 module fplotlib_svg
     use fplotlib_style, only: dp, utf8_next
+    use fplotlib_status, only: contract_error
     implicit none
     private
 
@@ -163,15 +164,17 @@ contains
     end function matrix_decimals
 
     ! s as XML character data or an attribute value, in out(1:n); out needs
-    ! eight characters for each of s. Every code point has one written
-    ! form, so two strings are written the same exactly when a reader reads
-    ! them the same: printable ASCII as itself, & < > " as entities, tab,
-    ! newline and return as themselves, any other code point XML 1.0 can
-    ! hold as a decimal reference, as every reader takes it the same way
-    ! whatever it believes the encoding to be, and the rest (other control
-    ! characters, surrogates, U+FFFE, U+FFFF, and anything past U+10FFFF)
-    ! as U+FFFD. Bytes that decode to ASCII are written as that character.
-    ! Trailing blanks are dropped, unless whole is given and true.
+    ! eight characters for each of s, and a shorter one is a contract
+    ! error. Every code point has one written form, so two strings are
+    ! written the same exactly when a reader reads them the same: printable
+    ! ASCII as itself, & < > " as entities, any other code point XML 1.0
+    ! can hold as a decimal reference, as every reader takes it the same
+    ! way whatever it believes the encoding to be, and the rest (other
+    ! control characters, surrogates, U+FFFE, U+FFFF, and anything past
+    ! U+10FFFF) as U+FFFD. Tab, newline and return are references too: in
+    ! an attribute a reader would read them raw as spaces. Bytes that
+    ! decode to ASCII are written as that character. Trailing blanks are
+    ! dropped, unless whole is given and true.
     subroutine xml_escape_to(s, out, n, whole)
         character(len=*), intent(in) :: s
         character(len=*), intent(out) :: out
@@ -202,16 +205,17 @@ contains
             case (34)
                 piece = "&quot;"
                 lp = 6
-            case (9, 10, 13, 32:33, 35:37, 39:59, 61, 63:126)
+            case (32:33, 35:37, 39:59, 61, 63:126)
                 piece = achar(code)
                 lp = 1
             case default
-                if (code < 32 .or. (code >= 55296 .and. code <= 57343) .or. &
+                if ((code < 32 .and. code /= 9 .and. code /= 10 .and. code /= 13) .or. &
+                    (code >= 55296 .and. code <= 57343) .or. &
                     code == 65534 .or. code == 65535 .or. code > 1114111) code = 65533
                 write (piece, "(a,i0,a)") "&#", code, ";"
                 lp = len_trim(piece)
             end select
-            if (n + lp > len(out)) exit
+            if (n + lp > len(out)) call contract_error("xml_escape_to: output buffer too short")
             out(n + 1:n + lp) = piece(1:lp)
             n = n + lp
         end do

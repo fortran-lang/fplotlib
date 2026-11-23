@@ -319,6 +319,8 @@ contains
         run%text = run%text//text
         if (present(math)) run%source_math = run%source_math .or. math
         if (first_glyph > last_glyph) return
+        if (.not. allocated(run%gid)) call contract_error("text: a glyph run needs gid, x, y and size")
+        if (size(run%gid) < run%n) call contract_error("text: glyph run arrays shorter than its count")
         call fill_mapping(run)
         run%first(first_glyph:last_glyph) = offset + 1
         run%last(first_glyph:last_glyph) = len(run%text)

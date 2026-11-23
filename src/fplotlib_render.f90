@@ -803,6 +803,9 @@ contains
             .not. allocated(run%y) .or. .not. allocated(run%size)) then
             call contract_error("glyphs: run arrays are not allocated")
         end if
+        if (any([lbound(run%gid, 1), lbound(run%x, 1), lbound(run%y, 1), lbound(run%size, 1)] /= 1)) then
+            call contract_error("glyphs: run arrays must start at index 1")
+        end if
         if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < n) then
             call contract_error("glyphs: run arrays are shorter than the glyph count")
         end if
@@ -814,12 +817,16 @@ contains
         call check_finite(run%size(1:n), "glyphs: nonfinite or out-of-range font size")
         if (any(run%size(1:n) < 0.0_dp)) call contract_error("glyphs: negative font size")
         if (allocated(run%font)) then
+            if (lbound(run%font, 1) /= 1) call contract_error("glyphs: run arrays must start at index 1")
             if (size(run%font) < n) call contract_error("glyphs: font array is shorter than the glyph count")
         end if
         if (allocated(run%first) .neqv. allocated(run%last)) then
             call contract_error("glyphs: incomplete source mapping")
         end if
         if (allocated(run%first)) then
+            if (lbound(run%first, 1) /= 1 .or. lbound(run%last, 1) /= 1) then
+                call contract_error("glyphs: run arrays must start at index 1")
+            end if
             if (min(size(run%first), size(run%last)) < n) then
                 call contract_error("glyphs: source mapping is shorter than the glyph count")
             end if

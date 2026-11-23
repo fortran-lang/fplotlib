@@ -106,7 +106,7 @@ contains
         call xml_escape_to("A"//achar(240)//achar(159)//achar(152)//achar(128) &
                            //achar(240)//achar(157)//achar(145)//achar(165) &
                            //achar(244)//achar(143)//achar(191)//achar(189)//achar(1)//achar(9), out, n)
-        call check(out(1:n) == "A&#128512;&#119909;&#1114109;&#65533;"//achar(9), &
+        call check(out(1:n) == "A&#128512;&#119909;&#1114109;&#65533;&#9;", &
                    "SVG escapes code points of six and seven digits, and control characters", nfail)
         ! A surrogate, U+FFFE, and a code past U+10FFFF: none is XML.
         call xml_escape_to(achar(237)//achar(160)//achar(128)//achar(239)//achar(191)//achar(190) &
@@ -137,6 +137,20 @@ contains
         call svg%end_group()
         call svg%begin_group(achar(2)//"x")
         call svg%end_group()
+        ! In an attribute a reader reads a raw tab, newline or return as a
+        ! space: written as references, these four are four ids.
+        call svg%begin_group("a b")
+        call svg%end_group()
+        call svg%begin_group("a"//achar(9)//"b")
+        call svg%end_group()
+        call svg%begin_group("a"//achar(10)//"b")
+        call svg%end_group()
+        call svg%begin_group("a"//achar(13)//"b")
+        call svg%end_group()
+        call svg%begin_group("m2")
+        call svg%end_group()
+        call svg%begin_group("g40")
+        call svg%end_group()
         ! Text whose control characters each take eight bytes written.
         run%n = 1
         allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
@@ -153,6 +167,11 @@ contains
         call check(occurrences(b, 'id="clip1"') == 1 .and. index(b, 'id="clip1-2"') > 0 .and. &
                    index(b, 'id="clip1-3"') > 0, "SVG group names never take the backend's own ids", nfail)
         call check(index(b, 'id="clip1 "') > 0, "SVG keeps a group name's trailing blank", nfail)
+        call check(index(b, 'id="a b"') > 0 .and. index(b, 'id="a&#9;b"') > 0 .and. &
+                   index(b, 'id="a&#10;b"') > 0 .and. index(b, 'id="a&#13;b"') > 0, &
+                   "SVG writes tab, newline and return in a group name as references", nfail)
+        call check(index(b, 'id="m2-2"') > 0 .and. index(b, 'id="g40-2"') > 0, &
+                   "SVG group names never take a marker's or glyph's id", nfail)
         call check(index(b, 'id="&#65533;x"') > 0 .and. index(b, 'id="&#65533;x-2"') > 0, &
                    "SVG group names that read alike are different ids", nfail)
         call check(index(b, 'aria-label="a'//repeat("&#65533;", 6)//'Z"') > 0, &
