@@ -36,6 +36,14 @@ each must end inside whatever began after it, and none may be open at
 `end_frame_impl`. A custom target that does not accepts only the identity
 transform without a clip, and stops on any other rather than ignoring it.
 
+SVG, PDF and EPS write a frame's matrix with fifteen significant digits of
+each factor, and the numbers inside it with one more decimal than six for
+each power of ten the frames open magnify by, up to forty, so that a frame
+that scales by 4e-7 keeps its scale and one that magnifies a million times
+still places what it holds to a millionth of a point on the page.
+`frame_decimals(r, level)` gives that count for the frames open at `level`
+(0 for none), for a custom encoder to use the same.
+
 The PNG backend draws a frame's content transformed and clipped exactly; a
 paint clip inside a clipped frame is cut as geometry, so its edges are
 antialiased rather than whole pixels. A dashed stroke is built in the

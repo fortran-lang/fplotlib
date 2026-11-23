@@ -15,7 +15,7 @@ module fplotlib_backend_svg
     use fplotlib_style, only: dp
     use fplotlib_render
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
-                         builder_get, fmt_num, xml_escape_to
+                         builder_get, fmt_num, matrix_decimals, xml_escape_to
     use fplotlib_png, only: png_encode
     use fplotlib_glyphs, only: NGLYPH, glyph_outline, glyph_inked
     implicit none
@@ -74,12 +74,19 @@ contains
         call builder_append(self%b, s)
     end subroutine put
 
-    subroutine put_num(self, x)
+    ! A number in the coordinates of the frames open now, to a millionth of
+    ! a point on the page, or to as many decimals as given.
+    subroutine put_num(self, x, decimals)
         class(svg_renderer_t), intent(inout) :: self
         real(dp), intent(in) :: x
+        integer, intent(in), optional :: decimals
         character(len=64) :: s
         integer :: n
-        call fmt_num(x, s, n)
+        if (present(decimals)) then
+            call fmt_num(x, s, n, decimals)
+        else
+            call fmt_num(x, s, n, frame_decimals(self, self%n_frame))
+        end if
         call builder_append(self%b, s(1:n))
     end subroutine put_num
 
@@ -704,9 +711,12 @@ contains
         self%frame_clipped(self%n_frame) = clip%on
         call sync_clip(self, none)
         call put(self, '<g transform="matrix(')
+        ! In the coordinates of the frames around it, with fifteen
+        ! significant digits of each factor.
         do i = 1, 6
             if (i > 1) call put(self, " ")
-            call put_num(self, matrix(i))
+            call put_num(self, matrix(i), max(frame_decimals(self, self%n_frame - 1), &
+                                              matrix_decimals(matrix(i))))
         end do
         call put(self, ')">')
         call put_eol(self)

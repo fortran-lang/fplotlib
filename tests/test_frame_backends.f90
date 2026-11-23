@@ -1,10 +1,12 @@
 module test_frame_backends
     use fplotlib_style, only: dp
-    use fplotlib_render, only: paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
+    use fplotlib_render, only: renderer_t, paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
                                CAP_BUTT, CAP_ROUND, CAP_SQUARE, JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
     use fplotlib_raster, only: full_walk
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_png, only: png_renderer_t
+    use fplotlib_backend_svg, only: svg_renderer_t
+    use fplotlib_backend_eps, only: eps_renderer_t
     use fplotlib_glyphs, only: glyph_cmap, FACE_REGULAR
     implicit none
     private
@@ -24,6 +26,8 @@ contains
         call png_image_check(nfail)
         call png_dash_frames_check(nfail)
         call png_dash_joins_check(nfail)
+        call png_far_frame_check(nfail)
+        call vector_frame_numbers_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
     end subroutine frame_backend_check
 
@@ -591,6 +595,103 @@ contains
             rgb = png%rgb
         end function draw_in_frame
     end subroutine png_dash_joins_check
+
+    ! A stroke in a frame moved 1e9 points, drawn 1e9 points the other
+    ! way, is the same picture as unmoved: each piece of the outline keeps
+    ! its orientation, which a signed area summed about the origin, of
+    ! terms near 1e18, would leave to rounding, so that pieces cancel
+    ! where they overlap into holes in caps and joins.
+    subroutine png_far_frame_check(nfail)
+        integer, intent(inout) :: nfail
+        real(dp), parameter :: x(5) = [20.0_dp, 80.0_dp, 60.0_dp, 140.0_dp, 120.0_dp]
+        real(dp), parameter :: y(5) = [20.0_dp, 120.0_dp, 30.0_dp, 130.0_dp, 25.0_dp]
+        integer, parameter :: verbs(5) = [VERB_MOVE, VERB_LINE, VERB_LINE, VERB_LINE, VERB_LINE]
+        type(paint_t) :: paint
+        character(len=:), allocatable :: near, far
+        integer :: i, j, worst
+        logical :: same
+
+        same = .true.
+        paint%stroked = .true.
+        paint%line_width = 12.0_dp
+        paint%cap = CAP_ROUND
+        do j = 1, 2
+            paint%join = merge(JOIN_MITER, JOIN_ROUND, j == 1)
+            near = moved(0.0_dp)
+            far = moved(1.0e9_dp)
+            worst = 0
+            do i = 1, len(near)
+                worst = max(worst, abs(iachar(near(i:i)) - iachar(far(i:i))))
+            end do
+            if (worst > 2) then
+                same = .false.
+                print "(a, 2(i0, 1x))", "  far frame differs: join, worst ", j, worst
+            end if
+        end do
+        call expect(same, "PNG strokes in a frame moved far keep their caps and joins", nfail)
+    contains
+        function moved(t) result(rgb)
+            real(dp), intent(in) :: t
+            character(len=:), allocatable :: rgb
+            type(png_renderer_t) :: png
+            type(clip_t) :: none
+
+            png%keep_pixels = .true.
+            call png%open_canvas(200.0_dp, 150.0_dp, bg_rgb=[255, 255, 255])
+            call png%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, -t, -t], none)
+            call png%draw_path(x + t, y + t, verbs, 5, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            rgb = png%rgb
+        end function moved
+    end subroutine png_far_frame_check
+
+    ! SVG, PDF and EPS write a frame's matrix with fifteen significant
+    ! digits, so that a scale of 4e-7 is not written as 0, and the numbers
+    ! inside a frame with as many more decimals as it magnifies, so that
+    ! a frame magnifying a million times still places them to a millionth
+    ! of a point on the page.
+    subroutine vector_frame_numbers_check(nfail)
+        integer, intent(inout) :: nfail
+        type(svg_renderer_t) :: svg
+        type(pdf_renderer_t) :: pdf
+        type(eps_renderer_t) :: eps
+        type(paint_t) :: paint
+        type(clip_t) :: none
+        character(len=:), allocatable :: b
+        real(dp), parameter :: small(6) = [4.0e-7_dp, 0.0_dp, 0.0_dp, 4.0e-7_dp, 0.0_dp, 0.0_dp]
+        real(dp), parameter :: large(6) = [1.0e6_dp, 0.0_dp, 0.0_dp, 1.0e6_dp, 0.0_dp, 0.0_dp]
+
+        paint%filled = .true.
+        call svg%open_canvas(200.0_dp, 150.0_dp)
+        call draw(svg)
+        call svg%close_canvas()
+        b = svg%bytes()
+        call expect(index(b, "matrix(0.0000004 0 0 0.0000004 0 0)") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "SVG frames keep a small scale and magnified coordinates", nfail)
+        call pdf%open_canvas(200.0_dp, 150.0_dp)
+        call draw(pdf)
+        call pdf%close_canvas()
+        b = pdf%bytes()
+        call expect(index(b, "0.0000004 0 0 0.0000004 0 0 cm") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "PDF frames keep a small scale and magnified coordinates", nfail)
+        call eps%open_canvas(200.0_dp, 150.0_dp)
+        call draw(eps)
+        call eps%close_canvas()
+        b = eps%bytes()
+        call expect(index(b, "[0.0000004 0 0 0.0000004 0 0 ] concat") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "EPS frames keep a small scale and magnified coordinates", nfail)
+    contains
+        subroutine draw(r)
+            class(renderer_t), intent(inout) :: r
+            call r%begin_frame(small, none)
+            call r%draw_rect(2.5e8_dp, 1.875e8_dp, 1.0e8_dp, 1.0e8_dp, paint)
+            call r%end_frame()
+            call r%begin_frame(large, none)
+            call r%draw_rect(0.0000012345_dp, 0.00001_dp, 0.00001_dp, 0.00001_dp, paint)
+            call r%end_frame()
+        end subroutine draw
+    end subroutine vector_frame_numbers_check
 
     subroutine expect(ok, label, nfail)
         logical, intent(in) :: ok

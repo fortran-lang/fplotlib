@@ -112,6 +112,7 @@ module fplotlib_render
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
     public :: MAX_DASH, MAX_COORD, MAX_PEN_PER_DASH
+    public :: frame_decimals
 
     ! Path verbs. A path is x/y vertex arrays plus one verb per vertex group:
     ! MOVE and LINE consume one vertex, CUBIC consumes three (two controls and
@@ -214,6 +215,9 @@ module fplotlib_render
         logical :: is_finished = .false.   ! closed since the last open
         integer :: n_group = 0             ! groups begun and not yet ended
         integer :: n_frame = 0             ! frames begun and not yet ended
+        ! For each open frame, outermost first, log10 of a bound on how
+        ! much it and the frames around it magnify: see frame_decimals.
+        real(dp), allocatable :: frame_log_zoom(:)
         ! The open groups (G) and frames (F), innermost last: each must end
         ! inside whatever began after it.
         character(len=:), allocatable :: scopes
@@ -581,8 +585,42 @@ contains
         if (clip%on) call check_box(clip%x, clip%y, clip%w, clip%h, "frame clip")
         self%n_frame = self%n_frame + 1
         call push_scope(self, "F")
+        call push_zoom(self, matrix)
         call self%begin_frame_impl(matrix, clip)
     end subroutine begin_frame
+
+    ! The frame's magnification, bounded by the Frobenius norm of its
+    ! matrix, which is at least the most it stretches, times that of the
+    ! frames around it; kept as a logarithm, which deep nesting cannot
+    ! overflow.
+    subroutine push_zoom(self, matrix)
+        class(renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        real(dp), allocatable :: grown(:)
+        real(dp) :: outer
+
+        if (.not. allocated(self%frame_log_zoom)) allocate (self%frame_log_zoom(8))
+        if (self%n_frame > size(self%frame_log_zoom)) then
+            allocate (grown(2*size(self%frame_log_zoom)))
+            grown(1:size(self%frame_log_zoom)) = self%frame_log_zoom
+            call move_alloc(grown, self%frame_log_zoom)
+        end if
+        outer = 0.0_dp
+        if (self%n_frame > 1) outer = self%frame_log_zoom(self%n_frame - 1)
+        self%frame_log_zoom(self%n_frame) = outer + &
+            log10(max(sqrt(sum(matrix(1:4)**2)), tiny(1.0_dp)))
+    end subroutine push_zoom
+
+    ! How many decimals a vector encoder writes a number with, inside the
+    ! frames open at level (0 for none), to place it within a millionth of
+    ! a point on the page: six, and one more for each power of ten those
+    ! frames magnify by, up to forty.
+    pure integer function frame_decimals(r, level) result(d)
+        class(renderer_t), intent(in) :: r
+        integer, intent(in) :: level
+        d = 6
+        if (level > 0) d = 6 + max(0, ceiling(min(34.0_dp, r%frame_log_zoom(level))))
+    end function frame_decimals
 
     subroutine end_frame(self)
         class(renderer_t), intent(inout) :: self

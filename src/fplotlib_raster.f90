@@ -380,10 +380,13 @@ contains
         integer :: i, j
 
         if (n < 3) return
+        ! Taken about the first point: about the origin, the terms of a
+        ! piece far from it, as in a frame moved far, are so large that
+        ! their sum is rounding, and its sign no orientation at all.
         a = 0.0_dp
-        do i = 1, n
+        do i = 2, n
             j = merge(1, i + 1, i == n)
-            a = a + px(i)*py(j) - px(j)*py(i)
+            a = a + (px(i) - px(1))*(py(j) - py(1)) - (px(j) - px(1))*(py(i) - py(1))
         end do
 
         if ((a < 0.0_dp) .eqv. negative) then
@@ -1222,7 +1225,8 @@ contains
         real(dp), intent(in), optional :: reach
         real(dp) :: period_px, ca, cb, ext, d, room
         ! What is left of a dash too short to count, a trillionth of a
-        ! canvas pixel: in a frame, divided by the most the matrix stretches.
+        ! canvas pixel: in a frame that stretches, divided by the most it
+        ! stretches, and a trillionth of a unit in one that does not.
         real(dp) :: tol
         real(dp), allocatable :: zx(:), zy(:)
         integer :: nz
