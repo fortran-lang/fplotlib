@@ -1651,19 +1651,24 @@ contains
             "", &
             "> A quotation, set with margins on both sides.", &
             "", &
-            "# Mathematics {#sec:math}", &
+            "(sec:math)=", &
+            "# Mathematics", &
             "", &
             "A numbered display, @eq:m, referred to by name:", &
             "$$ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad", &
-            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} $$ {#eq:m}", &
+            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} \label{eq:m}$$", &
             "and an aligned one:", &
             "$$ \begin{aligned} (a+b)^2 &= a^2 + 2ab + b^2 \\ &\ge 4ab \end{aligned} $$", &
             "", &
-            "::: {.center color=darkred .large}", &
+            ":::{div}", &
+            ":align: center", &
+            ":color: darkred", &
+            ":size: large", &
             "Centred, coloured and larger.", &
             ":::", &
             "", &
-            "\newpage", &
+            ":::{pagebreak}", &
+            ":::", &
             "", &
             "Section @sec:math ends on the page before this one."]
         integer :: k

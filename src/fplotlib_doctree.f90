@@ -29,8 +29,8 @@ module fplotlib_doctree
     integer, parameter :: DOC_QUOTE = 6    ! a block quote: blocks
     integer, parameter :: DOC_CODE = 7     ! text, its lines as they are
     integer, parameter :: DOC_RULE = 8     ! a thematic break
-    integer, parameter :: DOC_DIV = 9      ! attr; blocks
-    integer, parameter :: DOC_RAW = 10     ! a TeX command, text (\newpage, \vspace{1cm})
+    integer, parameter :: DOC_DIV = 9      ! id (the directive), attr; blocks
+    integer, parameter :: DOC_RAW = 10     ! unused by the reader; the number stays
     integer, parameter :: DOC_INLINES = 11 ! inlines not in a paragraph (a meta value)
     ! Inlines.
     integer, parameter :: IN_STR = 20      ! text without spaces

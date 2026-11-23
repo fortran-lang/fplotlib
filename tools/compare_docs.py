@@ -6,9 +6,10 @@ and sets it three ways, all with the same Lato and Lete Sans Math files,
 paper, margins and sizes:
 
   * by fplotlib, which the program is run for (with fpm, writing a PDF);
-  * by LaTeX: Pandoc turns it into LaTeX (with tools/compare_docs.lua for
-    fplotlib's extensions) and Tectonic (XeTeX) sets it;
-  * by Typst: Pandoc turns it into Typst markup and typst sets it.
+  * by LaTeX: the MyST subset is rewritten to the divs and TeX Pandoc
+    already maps (tools/compare_docs.lua), and Tectonic (XeTeX) sets it;
+  * by Typst: the same rewrite, then Pandoc turns it into Typst markup
+    and typst sets it.
 
 The pages are rasterized and put side by side, fplotlib's on the left, in
 one PNG per document:
@@ -115,6 +116,157 @@ def settings(meta):
     for k in ("title", "author", "date", "abstract"):
         s[k] = meta.get(k)
     return s
+
+
+_SIZES = {"tiny", "scriptsize", "footnotesize", "small", "normalsize", "large",
+          "Large", "LARGE", "huge", "Huge"}
+_DIRECTIVES = {"div", "sender", "recipient", "closing", "pagebreak"}
+
+
+def _opens(line):
+    rest = line.strip()[3:]
+    return any(c != ":" for c in rest)
+
+
+def _parse_open(line):
+    """Directive name, and a Pandoc attribute string when the opener is one."""
+    rest = line.strip().lstrip(":").strip()
+    if rest.startswith("{") and "}" in rest:
+        inner = rest[1:rest.index("}")].strip()
+        if inner.lower() in _DIRECTIVES:
+            return inner.lower(), ""
+        return "div", "{" + inner + "}" if inner else ""
+    if rest.lower() in _DIRECTIVES:
+        return rest.lower(), ""
+    return "div", rest
+
+
+def _take(lines, i):
+    """lines[i] opens a directive. Return name, options, inline attr, content, next index."""
+    name, inline = _parse_open(lines[i])
+    depth, j, raw = 1, i + 1, []
+    while j < len(lines):
+        t = lines[j].strip()
+        if t.startswith(":::"):
+            if _opens(t):
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+        raw.append(lines[j])
+        j += 1
+    opts, k = {}, 0
+    while k < len(raw):
+        m = re.fullmatch(r":([A-Za-z0-9_-]+):\s*(.*)", raw[k].strip())
+        if not m:
+            break
+        opts[m.group(1).lower()] = m.group(2).strip()
+        k += 1
+    return name, opts, inline, raw[k:], j
+
+
+def _paragraphs(lines):
+    paras, cur = [], []
+    for line in lines:
+        if line.strip() == "":
+            if cur:
+                paras.append(cur)
+                cur = []
+        else:
+            cur.append(line)
+    if cur:
+        paras.append(cur)
+    return paras
+
+
+def _pandoc_div(opts, inline):
+    """A Pandoc fenced-div opener argument, or '' when the div carries nothing."""
+    if inline and not opts:
+        return inline
+    classes, attrs = [], []
+    for word in opts.get("class", "").split():
+        classes.append(word[1:] if word.startswith(".") else word)
+    size = opts.get("size") or opts.get("font-size") or opts.get("fontsize")
+    if size:
+        if size in _SIZES:
+            classes.append(size)
+        else:
+            attrs.append("size=" + size)
+    if opts.get("weight", "").lower() == "bold":
+        classes.append("bold")
+    if opts.get("italic", "").lower() in ("true", "yes", "1"):
+        classes.append("italic")
+    align = {"centre": "center"}.get(opts.get("align", "").lower(),
+                                      opts.get("align", "").lower())
+    if align in ("center", "right", "left", "justify"):
+        classes.append(align)
+    color = opts.get("color") or opts.get("colour")
+    if color:
+        attrs.append("color=" + color)
+    inside = " ".join(["." + c for c in classes] + attrs)
+    if inside:
+        return "{" + inside + "}"
+    return ""
+
+
+def _emit(name, opts, inline, content, sig):
+    content = _transform(content, sig)
+    if name == "pagebreak":
+        return ["\\newpage"]
+    if name == "sender":
+        return ["::: {.right}"] + content + [":::"]
+    if name == "recipient":
+        while content and content[-1].strip() == "":
+            content.pop()
+        return content + ["", "\\bigskip"]
+    if name == "closing":
+        out = ["\\bigskip", ""]
+        for n, para in enumerate(_paragraphs(content)):
+            if n:
+                out.extend(["", "\\vspace{%s}" % sig, ""])
+            out.extend(para)
+        return out
+    spec = _pandoc_div(opts, inline)
+    if not spec:
+        return content
+    return ["::: " + spec] + content + [":::"]
+
+
+def _transform(lines, sig):
+    """MyST directives and heading targets, as the Pandoc filter reads them."""
+    out, i = [], 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        label = re.fullmatch(r"\(([^)\s]+)\)=", stripped)
+        if label and i + 1 < len(lines) and re.match(r"#{1,6} ", lines[i + 1].strip()):
+            out.append(lines[i + 1].rstrip() + " {#" + label.group(1) + "}")
+            i += 2
+            continue
+        if stripped.startswith(":::") and _opens(stripped):
+            name, opts, inline, content, i = _take(lines, i)
+            out.extend(_emit(name, opts, inline, content, sig))
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def for_pandoc(body, meta):
+    """The MyST subset rewritten to the divs and TeX compare_docs.lua maps.
+
+    fplotlib sets the directives itself. Pandoc sees the older spelling:
+    an aligning div, \\bigskip, \\vspace and \\vspace*{\\fill}.
+    """
+    sig = meta.get("signature-skip") or meta.get("signature_skip") or "1.2cm"
+    valign = (meta.get("valign") or meta.get("vertical-align") or "").lower()
+    text = "\n".join(_transform(body.split("\n"), sig))
+    if valign in ("center", "centre"):
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text = "\\vspace*{\\fill}\n\n" + text + "\\vspace*{\\fill}\n"
+    return text
 
 
 def latex_source(md_body, s, fonts):
@@ -304,6 +456,7 @@ def main():
             md, _ = fortran_document(ex)
             meta, body = front_matter(md)
             s = settings(meta)
+            body = for_pandoc(body, meta)
             name = ex.stem
             (work / f"{name}.md").write_text(latex_source(body, s, fonts), encoding="utf-8")
             run(["pandoc", f"{name}.md", "-f", "markdown", "-t", "latex", "-s",

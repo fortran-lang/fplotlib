@@ -1,25 +1,25 @@
 ! fplotlib_markdown -- read a document written in Markdown into a tree.
 !
-! The input is Markdown as Pandoc reads it, with TeX math: $...$ inline and
-! $$...$$ displayed. md_parse turns it into an fplotlib_doctree tree, which
-! a document class (fplotlib_docclass) then sets.
+! The input is a MyST subset: CommonMark, with TeX only inside math
+! ($...$ inline and $$...$$ displayed). md_parse turns it into an
+! fplotlib_doctree tree, which a document class (fplotlib_docclass) sets.
+! Spacing belongs to the class, not to commands in the prose.
 !
 ! Blocks: a YAML front matter between --- lines (its keys are the class's:
-! title, author, date, abstract, paper, fontsize, margin, ...); ATX headings
-! (# to ####) and setext ones, with an {#id}; paragraphs; bullet and
-! ordered lists, nested; block quotes; fenced code; thematic breaks;
-! Pandoc's fenced divs (::: {.center size=24pt color=navy}); and, on a
-! line of their own, the TeX commands \newpage, \pagebreak, \clearpage,
-! \vfill, \vspace{...}, \vspace*{...}, \bigskip, \medskip and \smallskip.
+! title, author, date, abstract, paper, fontsize, margin, valign,
+! signature-skip, ...); ATX headings (# to ####) and setext ones; a target
+! (name)= on the line before a heading; paragraphs; bullet and ordered
+! lists, nested; block quotes; fenced code; thematic breaks; and MyST
+! directives in colon fences (:::{name} with :key: value options, closed
+! by :::). The directives the class knows are div (align, size, color,
+! weight, italic, class), sender, recipient and closing, and pagebreak.
 !
-! Inline: *emphasis*, **strong**, `code`, [links](url), Pandoc's bracketed
-! spans ([text]{color=red size=1.2em .bold}), \textbf, \textit and \emph,
-! hard line breaks (a backslash or two spaces at the end of a line, or
-! <br>), "smart" quotes, -- and --- as dashes, ... as an ellipsis, a
-! backslash and a space as a no-break space, \hfill, \quad, \qquad, \TeX
-! and \LaTeX, and cross references: a displayed formula followed by
-! {#eq:name} or containing \label{name} is numbered, and @eq:name,
-! @sec:name, \eqref{name} and \ref{name} refer to a formula or a heading.
+! Inline: *emphasis*, **strong**, `code`, [links](url), hard line breaks
+! (a backslash or two spaces at the end of a line, or <br>), "smart"
+! quotes, -- and --- as dashes, ... as an ellipsis, a backslash and a
+! space as a no-break space, and cross references: \label{name} inside a
+! display numbers it, and @name refers to a formula or a heading. A
+! backslash command outside math is ordinary text.
 module fplotlib_markdown
     use fplotlib_style, only: utf8_next
     use fplotlib_doctree
@@ -100,7 +100,7 @@ contains
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         integer :: i, j, k, lev, depth, node
-        character(len=:), allocatable :: s, t, para, code
+        character(len=:), allocatable :: s, t, para, code, lab
         logical :: blank_before
 
         i = 1
@@ -114,8 +114,18 @@ contains
                 cycle
             end if
 
+            if (is_target(t, lab) .and. i < n) then
+                ! (name)= belongs to the heading on the next line.
+                if (is_heading(trim(adjustl(L(i + 1)%s)), lev)) then
+                    call heading(doc, parent, heading_text(trim(adjustl(L(i + 1)%s)), lev), &
+                                 lev, lab)
+                    i = i + 2
+                    blank_before = .false.
+                    cycle
+                end if
+            end if
             if (is_heading(t, lev)) then
-                call heading(doc, parent, heading_text(t, lev), lev)
+                call heading(doc, parent, heading_text(t, lev), lev, "")
                 i = i + 1
             else if (is_fence(t)) then
                 j = i + 1
@@ -130,7 +140,7 @@ contains
                 end do
                 node = doc_add_text(doc, parent, DOC_CODE, code)
                 i = j + 1
-            else if (starts(t, ":::")) then
+            else if (starts(t, ":::") .and. div_opens(t)) then
                 ! A fenced div runs to the matching :::, divs nesting.
                 depth = 0
                 do j = i, n
@@ -143,8 +153,8 @@ contains
                     end if
                 end do
                 node = doc_add(doc, parent, DOC_DIV)
-                doc%nodes(node)%attr = div_attrs(t)
-                if (j - 1 > i) call blocks(doc, node, L(i + 1:j - 1), j - 1 - i)
+                call directive(t, L, i, j, doc%nodes(node)%id, doc%nodes(node)%attr, k)
+                if (j - 1 >= k) call blocks(doc, node, L(k:j - 1), j - k)
                 i = j + 1
             else if (t(1:1) == ">") then
                 j = i
@@ -158,9 +168,6 @@ contains
                 call list_block(doc, parent, L, n, i, blank_before)
             else if (is_rule(t)) then
                 node = doc_add(doc, parent, DOC_RULE)
-                i = i + 1
-            else if (is_raw_block(t)) then
-                node = doc_add_text(doc, parent, DOC_RAW, t)
                 i = i + 1
             else
                 ! A paragraph: lines up to a blank one or a block that
@@ -184,9 +191,9 @@ contains
                     t = trim(adjustl(L(j)%s))
                     if (len(t) > 0 .and. (is_underline(t, "=") .or. is_underline(t, "-"))) then
                         if (is_underline(t, "=")) then
-                            call heading(doc, parent, trim(adjustl(para)), 1)
+                            call heading(doc, parent, trim(adjustl(para)), 1, "")
                         else
-                            call heading(doc, parent, trim(adjustl(para)), 2)
+                            call heading(doc, parent, trim(adjustl(para)), 2, "")
                         end if
                         i = j + 1
                         blank_before = .false.
@@ -203,46 +210,39 @@ contains
     ! Whether a line starts a block that ends a paragraph before it.
     logical function interrupts(s)
         character(len=*), intent(in) :: s
-        character(len=:), allocatable :: t
+        character(len=:), allocatable :: t, lab
         integer :: k, lev
         t = trim(adjustl(s))
         interrupts = .false.
         if (len(t) == 0) return
-        if (is_heading(t, lev) .or. is_fence(t) .or. starts(t, ":::") .or. &
-            t(1:1) == ">" .or. is_rule(t)) then
+        if (is_heading(t, lev) .or. is_fence(t) .or. (starts(t, ":::") .and. div_opens(t)) .or. &
+            t(1:1) == ">" .or. is_rule(t) .or. is_target(t, lab)) then
             interrupts = .true.
         else if (is_item(s, k, lev)) then
             ! Only a bullet, or a list starting at 1, interrupts.
             interrupts = lev == 0 .or. k == 1
-        else if (is_raw_block(t)) then
-            interrupts = .true.
         end if
     end function interrupts
 
-    ! A paragraph; \noindent at its start is kept as a raw inline.
+    ! A paragraph.
     subroutine paragraph(doc, parent, text)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         character(len=*), intent(in) :: text
-        character(len=:), allocatable :: s
-        integer :: node, k
-        s = trim(adjustl(text))
+        integer :: node
         node = doc_add(doc, parent, DOC_PARA)
-        if (starts(s, BS//"noindent")) then
-            k = doc_add_text(doc, node, IN_RAW, "noindent")
-            s = trim(adjustl(s(10:)))
-        end if
-        call inlines(doc, node, s)
+        call inlines(doc, node, trim(adjustl(text)))
     end subroutine paragraph
 
-    ! A heading: its text and its {#id}.
-    subroutine heading(doc, parent, text, level)
+    ! A heading: its text, the target (name)= before it, and an {#id}.
+    subroutine heading(doc, parent, text, level, tgt)
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent, level
-        character(len=*), intent(in) :: text
+        character(len=*), intent(in) :: text, tgt
         integer :: node, a, b
         node = doc_add(doc, parent, DOC_HEADING)
         doc%nodes(node)%num = level
+        doc%nodes(node)%id = tgt
         a = index(text, "{#")
         if (a > 0) then
             b = index(text(a:), "}")
@@ -368,31 +368,135 @@ contains
         call blocks(doc, node, q, n)
     end subroutine quote_block
 
-    ! The TeX commands a line may hold by itself.
-    logical function is_raw_block(t)
+    ! A MyST target on a line by itself, (name)=, and the name in it.
+    logical function is_target(t, name)
         character(len=*), intent(in) :: t
-        is_raw_block = .false.
-        if (len(t) < 2) return
-        if (t(1:1) /= BS) return
-        is_raw_block = starts(t, BS//"newpage") .or. starts(t, BS//"pagebreak") .or. &
-                       starts(t, BS//"clearpage") .or. starts(t, BS//"vfill") .or. &
-                       starts(t, BS//"vspace") .or. starts(t, BS//"bigskip") .or. &
-                       starts(t, BS//"medskip") .or. starts(t, BS//"smallskip")
-    end function is_raw_block
+        character(len=:), allocatable, intent(out) :: name
+        integer :: n, k
+        is_target = .false.
+        name = ""
+        n = len(t)
+        if (n < 4) return
+        if (t(1:1) /= "(" .or. t(n - 1:n) /= ")=") return
+        name = t(2:n - 2)
+        if (len(name) == 0) return
+        do k = 1, len(name)
+            if (name(k:k) == " " .or. name(k:k) == ")") return
+        end do
+        is_target = .true.
+    end function is_target
 
-    ! The attributes of a fenced div, ::: {.center size=20pt color=red},
-    ! without the braces.
-    function div_attrs(t) result(a)
+    ! :::{name} and its :key: value options. name is the directive; attr is
+    ! the options as classes and key=value pairs, which the class reads;
+    ! content_at is the first line of the body (the line of the closing
+    ! ::: when the body is empty). A bare ::: {.class} or ::: right is a div.
+    subroutine directive(open_line, L, i, j, name, attr, content_at)
+        character(len=*), intent(in) :: open_line
+        type(line_t), intent(in) :: L(:)
+        integer, intent(in) :: i, j
+        character(len=:), allocatable, intent(out) :: name, attr
+        integer, intent(out) :: content_at
+        character(len=:), allocatable :: rest, inner, line, key, val
+        integer :: a
+
+        name = "div"
+        attr = ""
+        rest = ""
+        a = verify(open_line, ":")
+        if (a > 0) rest = trim(adjustl(open_line(a:)))
+        if (len(rest) > 0) then
+            if (rest(1:1) == "{") then
+                a = index(rest, "}")
+                if (a >= 2) then
+                    inner = trim(adjustl(rest(2:a - 1)))
+                    if (directive_name(inner)) then
+                        name = trim(lower(inner))
+                    else if (len(inner) > 0) then
+                        attr = inner
+                    end if
+                end if
+            else if (directive_name(rest)) then
+                name = trim(lower(rest))
+            else
+                attr = rest
+            end if
+        end if
+        content_at = i + 1
+        do while (content_at < j)
+            line = trim(adjustl(L(content_at)%s))
+            if (.not. option_line(line, key, val)) exit
+            call append_option(attr, key, val)
+            content_at = content_at + 1
+        end do
+    end subroutine directive
+
+    ! div, sender, recipient, closing and pagebreak, in either case.
+    logical function directive_name(t)
         character(len=*), intent(in) :: t
-        character(len=:), allocatable :: a
-        a = trim(adjustl(t(4:)))
-        if (len(a) > 0) then
-            if (a(1:1) == "{") a = a(2:)
+        character(len=:), allocatable :: n
+        directive_name = .false.
+        if (len(t) == 0) return
+        if (index(t, " ") > 0 .or. index(t, ".") > 0 .or. t(1:1) == "#") return
+        n = trim(lower(t))
+        directive_name = n == "div" .or. n == "sender" .or. n == "recipient" .or. &
+                         n == "closing" .or. n == "pagebreak"
+    end function directive_name
+
+    ! :key: value, a directive option. key is the word between the colons.
+    logical function option_line(line, key, val)
+        character(len=*), intent(in) :: line
+        character(len=:), allocatable, intent(out) :: key, val
+        integer :: c, k
+        option_line = .false.
+        key = ""
+        val = ""
+        if (len(line) < 3) return
+        if (line(1:1) /= ":") return
+        c = index(line(2:), ":")
+        if (c < 2) return
+        key = line(2:c)
+        do k = 1, len(key)
+            if (index("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-", &
+                      key(k:k)) == 0) return
+        end do
+        val = trim(adjustl(line(c + 2:)))
+        option_line = .true.
+    end function option_line
+
+    ! One option onto attr: :class: words become .word, and any other key
+    ! becomes key=value.
+    subroutine append_option(attr, key, val)
+        character(len=:), allocatable, intent(inout) :: attr
+        character(len=*), intent(in) :: key, val
+        character(len=:), allocatable :: k, word, rest
+        integer :: p
+        k = trim(lower(key))
+        if (k == "class") then
+            rest = trim(adjustl(val))
+            do while (len(rest) > 0)
+                p = index(rest, " ")
+                if (p == 0) then
+                    word = rest
+                    rest = ""
+                else
+                    word = rest(1:p - 1)
+                    rest = trim(adjustl(rest(p + 1:)))
+                end if
+                if (len(word) == 0) cycle
+                if (word(1:1) == ".") word = word(2:)
+                if (len(word) == 0) cycle
+                if (len(attr) > 0) attr = attr//" "
+                attr = attr//"."//word
+            end do
+        else
+            if (len(attr) > 0) attr = attr//" "
+            if (index(trim(val), " ") > 0) then
+                attr = attr//k//'="'//trim(val)//'"'
+            else
+                attr = attr//k//"="//trim(val)
+            end if
         end if
-        if (len(a) > 0) then
-            if (a(len(a):len(a)) == "}") a = a(1:len(a) - 1)
-        end if
-    end function div_attrs
+    end subroutine append_option
 
     ! ------------------------------------------------------------------
     ! Inlines.
@@ -404,8 +508,8 @@ contains
         type(doc_t), intent(inout) :: doc
         integer, intent(in) :: parent
         character(len=*), intent(in) :: s
-        character(len=:), allocatable :: w, cmd, arg
-        integer :: i, j, k, r, cp, nb, node, a, b
+        character(len=:), allocatable :: w
+        integer :: i, j, k, r, cp, nb, node
         integer :: stack(64), ns
         logical :: em_open, strong_open, lf, rf
         character :: c, em_c, strong_c, prev, next
@@ -505,29 +609,13 @@ contains
             case ("$")
                 if (i < len(s)) then
                     if (s(i + 1:i + 1) == "$") then
-                        ! A display, and the {#id} after it.
+                        ! A display. \label{name} inside it numbers it.
                         j = index(s(i + 2:), "$$")
                         if (j > 0) then
                             call flush()
                             node = doc_add_text(doc, stack(ns), IN_MATH, s(i + 2:i + j))
                             doc%nodes(node)%display = .true.
-                            k = i + j + 3
-                            a = k
-                            do while (a <= len(s))
-                                if (s(a:a) /= " ") exit
-                                a = a + 1
-                            end do
-                            if (a + 1 <= len(s)) then
-                                if (s(a:a + 1) == "{#") then
-                                    b = index(s(a:), "}")
-                                    if (b > 0) then
-                                        doc%nodes(node)%id = s(a + 2:a + b - 2)
-                                        doc%nodes(node)%num = 1
-                                        k = a + b
-                                    end if
-                                end if
-                            end if
-                            i = k
+                            i = i + j + 3
                             ! A line break after it is not a space.
                             do while (i <= len(s))
                                 if (s(i:i) /= " " .and. s(i:i) /= NL) exit
@@ -562,27 +650,15 @@ contains
                     w = w//NBSP
                     i = i + 2
                 else if (is_alpha(next)) then
+                    ! A backslash command outside math is ordinary text, and
+                    ! a brace after it stays text too.
                     j = i + 1
                     do while (j <= len(s))
                         if (.not. is_alpha(s(j:j))) exit
                         j = j + 1
                     end do
-                    cmd = s(i + 1:j - 1)
-                    arg = ""
-                    k = j
-                    if (j <= len(s)) then
-                        if (s(j:j) == "{") then
-                            k = matching(s, j)
-                            arg = s(j + 1:k - 1)
-                            k = k + 1
-                        end if
-                    end if
-                    call command(cmd, arg, k, j)
-                    ! A command without an argument may be ended by {}.
-                    if (k == j .and. j + 1 <= len(s)) then
-                        if (s(j:j + 1) == "{}") k = j + 2
-                    end if
-                    i = k
+                    w = w//s(i:j - 1)
+                    i = j
                 else
                     w = w//next
                     i = i + 2
@@ -748,47 +824,6 @@ contains
             doc%nodes(kk)%num = form
         end subroutine ref
 
-        ! A command written in the text.
-        recursive subroutine command(cmd, arg, k, j)
-            character(len=*), intent(in) :: cmd, arg
-            integer, intent(inout) :: k
-            integer, intent(in) :: j
-            integer :: kk
-            select case (cmd)
-            case ("hfill", "quad", "qquad", "TeX", "LaTeX")
-                call flush()
-                kk = doc_add_text(doc, stack(ns), IN_RAW, cmd)
-                k = j
-            case ("newline", "linebreak")
-                call flush()
-                kk = doc_add(doc, stack(ns), IN_BREAK)
-                k = j
-            case ("textbf", "emph", "textit", "textrm", "textsf", "textup")
-                call flush()
-                select case (cmd)
-                case ("textbf")
-                    kk = doc_add(doc, stack(ns), IN_STRONG)
-                case ("emph")
-                    kk = doc_add(doc, stack(ns), IN_EMPH)
-                case default
-                    kk = doc_add(doc, stack(ns), IN_SPAN)
-                    if (cmd == "textit") doc%nodes(kk)%attr = ".italic"
-                    if (cmd == "textrm" .or. cmd == "textup") doc%nodes(kk)%attr = ".upright"
-                end select
-                call inlines(doc, kk, arg)
-            case ("eqref")
-                call ref(arg, REF_EQ)
-            case ("ref")
-                call ref(arg, REF_PLAIN)
-            case ("noindent", "par")
-                k = j
-            case default
-                ! Unknown: written as it is, so that it is noticed.
-                w = w//BS//cmd
-                k = j
-            end select
-        end subroutine command
-
     end subroutine inlines
 
     ! ------------------------------------------------------------------
@@ -838,6 +873,8 @@ contains
 
     logical function div_opens(t)
         character(len=*), intent(in) :: t
+        div_opens = .false.
+        if (len(t) <= 3) return
         div_opens = len_trim(t(4:)) > 0 .and. verify(trim(t), ":") > 0
     end function div_opens
 

@@ -1,16 +1,16 @@
 ! A letter
 ! ========
 !
-! A formal letter on US letter paper: the sender's address and the date
-! set flush right in a fenced div, the recipient's address, the body in
-! justified paragraphs separated by space rather than indented, and the
-! closing.
+! A formal letter on US letter paper: the sender's address and the date,
+! the recipient's address, the body in justified paragraphs separated by
+! space rather than indented, and the closing.
 !
 ! The front matter sets the paper, the size of the type, the space
 ! between paragraphs (``parskip``, which also turns the indentation off)
-! and leaves out the page number. ``<br>`` breaks the line there (as does
-! a backslash at the end of a line, in Pandoc's Markdown); ``::: right``
-! sets what it encloses flush right, as LaTeX's ``flushright`` does.
+! and leaves out the page number. ``signature-skip`` is the extra room
+! between the valediction and the signature. ``:::{sender}`` is set flush
+! right, and the class puts a big skip after ``:::{recipient}`` and before
+! ``:::{closing}``. A backslash at the end of a line breaks it.
 
 program plot_letter
     use fplotlib, only: typeset
@@ -23,21 +23,22 @@ program plot_letter
         "margin: 1.1in", &
         "parskip: 6pt", &
         "pagenumbers: false", &
+        "signature-skip: 1.2cm", &
         "---", &
         "", &
-        "::: right", &
-        "Augusta Ada King, Countess of Lovelace<br>", &
-        "12 St James’s Square<br>", &
+        ":::{sender}", &
+        "Augusta Ada King, Countess of Lovelace\", &
+        "12 St James’s Square\", &
         "London", &
         "", &
         "10 July 1843", &
         ":::", &
         "", &
-        "Charles Babbage, Esq.<br>", &
-        "1 Dorset Street<br>", &
+        ":::{recipient}", &
+        "Charles Babbage, Esq.\", &
+        "1 Dorset Street\", &
         "Marylebone, London", &
-        "", &
-        "\bigskip", &
+        ":::", &
         "", &
         "Dear Mr. Babbage,", &
         "", &
@@ -60,12 +61,10 @@ program plot_letter
         "shall be in town until the end of the week, and can call upon you at any hour that", &
         "suits you.", &
         "", &
-        "\bigskip", &
-        "", &
+        ":::{closing}", &
         "With kind regards, I remain yours most sincerely,", &
         "", &
-        "\vspace{1.2cm}", &
-        "", &
-        "A. A. L."], &
+        "A. A. L.", &
+        ":::"], &
         "letter.svg")
 end program plot_letter

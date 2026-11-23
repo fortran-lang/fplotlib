@@ -1,6 +1,6 @@
--- Pandoc filter for tools/compare_docs.py: the Markdown extensions that
--- fplotlib reads, mapped onto LaTeX and Typst so that the same source
--- comes out the same way in all three.
+-- Pandoc filter for tools/compare_docs.py. compare_docs.py rewrites the
+-- MyST subset into these forms before Pandoc reads the file; this filter
+-- maps them onto LaTeX and Typst.
 --
 --   * fenced divs and bracketed spans: alignment (.center, .right, .left),
 --     LaTeX's size names (.small ... .Huge), .bold, .italic, and the
@@ -8,7 +8,7 @@
 --   * a displayed formula followed by {#eq:name}, or with \label{name} in
 --     it, is numbered, and @eq:name, @sec:name, \eqref and \ref refer to
 --     it;
---   * the TeX commands fplotlib accepts on a line of their own (\newpage,
+--   * the TeX commands the rewriter emits on a line of their own (\newpage,
 --     \vspace, \vfill, \bigskip, ...) and in text (\hfill, \quad, \TeX,
 --     \LaTeX), for Typst, which has none of them;
 --   * a paragraph that is only a display gets \noindent in LaTeX, which

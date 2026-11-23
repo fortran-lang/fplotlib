@@ -2,20 +2,25 @@
 !
 ! The document class: it sets an fplotlib_doctree tree with fplotlib_typeset,
 ! with the spacing and the styles of LaTeX's article class (or book, with
-! class: book), so that a document comes out the way the same source does
-! through Pandoc and LaTeX. It numbers sections and equations, and resolves
-! references to them, from a first pass over the tree, as LaTeX does from
-! its .aux file.
+! class: book). It numbers sections and equations, and resolves references
+! to them, from a first pass over the tree, as LaTeX does from its .aux file.
+! The vertical rhythm belongs to the class. A letter's sender, recipient and
+! closing, and an invitation centred on its card, are spaced here.
 !
 ! The front matter's keys: title, subtitle, author (once per author), date,
 ! abstract, class (article or book), fontsize, linestretch, paper (a4, a5,
 ! a6, letter, legal, b5 or "W x H"), margin and margin-left, -right, -top
-! and -bottom, indent, parskip, align, numbersections, numberequations,
-! pagenumbers, color and pagecolor.
+! and -bottom, indent, parskip, align, valign (center), signature-skip,
+! numbersections, numberequations, pagenumbers, color and pagecolor.
 !
-! Divs and spans take classes (.center, .right, .left, .justify, .bold,
-! .italic, .upright, and LaTeX's size names .tiny to .Huge) and key=value
-! pairs (size, color, align).
+! A div's id names it: div, sender, recipient, closing or pagebreak.
+! Attributes are classes (.center, .right, .left, .justify, .bold, .italic,
+! .upright, and LaTeX's size names .tiny to .Huge) and key=value pairs
+! (size, weight, italic, color, align). The reader turns a directive's
+! :key: value options into those. sender is set flush right. A big skip
+! follows recipient and precedes closing; signature-skip is the extra space
+! between the closing's paragraphs, on top of parskip. valign: center puts
+! fill above and below the body.
 !
 ! Lengths are in points (1/72 in, as in PostScript and Typst), or in bp,
 ! in, cm, mm, em or ex.
@@ -56,6 +61,8 @@ module fplotlib_docclass
         logical :: inlist = .false.
         ! Paragraphs are indented (at the top level of the document).
         logical :: indent = .true.
+        ! True while the paragraphs of a letter's closing are being set.
+        logical :: closing = .false.
     end type ctx_t
 
     ! The document's settings.
@@ -63,6 +70,9 @@ module fplotlib_docclass
     real(dp) :: PARINDENT = 15.0_dp
     type(ts_glue_t) :: PARSKIP_G
     integer :: DOC_ALIGN = ALIGN_JUSTIFY
+    ! valign: center is 1. signature-skip is the extra gap in a closing.
+    integer :: VALIGN = 0
+    real(dp) :: SIGNATURE = 0.0_dp
     logical :: NUMBER_SECTIONS = .false., BOOK = .false., NUMBER_EQS = .false.
     ! The title block's inlines: nodes of the front matter, 0 for none.
     integer :: TITLE = 0, SUBTITLE = 0, DATE = 0, ABSTRACT = 0
@@ -115,7 +125,9 @@ contains
         ctx%color = TEXT_COL
         ctx%align = DOC_ALIGN
         call title_block(doc, ctx)
+        if (VALIGN == 1) call vfill_star()
         call set_blocks(doc, 1, ctx)
+        if (VALIGN == 1) call vfill_star()
         call ts_paginate()
     end subroutine doc_typeset
 
@@ -125,6 +137,8 @@ contains
         PARINDENT = -1.0_dp
         PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
         DOC_ALIGN = ALIGN_JUSTIFY
+        VALIGN = 0
+        SIGNATURE = 72.0_dp/2.54_dp*1.2_dp
         NUMBER_SECTIONS = .false.
         NUMBER_EQS = .false.
         BOOK = .false.
@@ -209,6 +223,10 @@ contains
                 if (PARINDENT < 0.0_dp) PARINDENT = 0.0_dp
             case ("align")
                 DOC_ALIGN = align_of(lower(val), ALIGN_JUSTIFY)
+            case ("valign", "vertical-align")
+                if (lower(val) == "center" .or. lower(val) == "centre") VALIGN = 1
+            case ("signature-skip", "signature_skip")
+                SIGNATURE = length(val, BASE)
             case ("numbersections", "number-sections")
                 NUMBER_SECTIONS = truth(val)
             case ("numberequations", "number-equations")
@@ -339,27 +357,26 @@ contains
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: parent
         type(ctx_t), intent(in) :: ctx
-        type(ctx_t) :: sub
-        integer :: c, aligns
+        integer :: c, npart
 
+        npart = 0
         c = doc%nodes(parent)%first
         do while (c > 0)
             select case (doc%nodes(c)%kind)
             case (DOC_PARA)
+                ! The second and later paragraphs of a closing have the
+                ! signature gap before them, and then their parskip.
+                if (ctx%closing) then
+                    npart = npart + 1
+                    if (npart > 1) call ts_vskip(ts_glue_t(SIGNATURE, 0.0_dp, 0.0_dp, 0, 0))
+                end if
                 call paragraph(doc, c, ctx)
             case (DOC_HEADING)
                 call heading(doc, c, ctx)
             case (DOC_CODE)
                 call code_block(doc%nodes(c)%text, ctx)
             case (DOC_DIV)
-                ! A div that aligns its text is a LaTeX environment
-                ! (center, flushright, flushleft), a list with the space of
-                ! one around it; one that only changes the type is a group.
-                sub = div_ctx(doc%nodes(c)%attr, ctx, aligns)
-                if (aligns > 0) call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call set_blocks(doc, c, sub)
-                call ts_end_par()
-                if (aligns > 0) call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call set_div(doc, c, ctx)
             case (DOC_QUOTE)
                 call quote_block(doc, c, ctx)
             case (DOC_LIST)
@@ -370,12 +387,68 @@ contains
                 call ts_end_par()
                 call ts_rule(0.5_dp*(ts_hsize() - ctx%left - ctx%right), 0.5_dp, ctx%color)
                 call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            case (DOC_RAW)
-                call raw_block(doc%nodes(c)%text, ctx)
             end select
             c = doc%nodes(c)%next
         end do
     end subroutine set_blocks
+
+    ! A directive. pagebreak is a new page. sender is flush right, with the
+    ! space of an aligning environment around it. A big skip follows
+    ! recipient and precedes closing; the closing's later paragraphs take
+    ! signature-skip from ctx%closing. Any other div is a group, and an
+    ! aligning one has that environment's space around it.
+    recursive subroutine set_div(doc, node, ctx)
+        type(doc_t), intent(in) :: doc
+        integer, intent(in) :: node
+        type(ctx_t), intent(in) :: ctx
+        type(ctx_t) :: sub
+        integer :: aligns
+        character(len=:), allocatable :: name
+        type(ts_glue_t) :: around
+
+        around = scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0))
+        name = doc%nodes(node)%id
+        select case (name)
+        case ("pagebreak")
+            call ts_page_break()
+            NOINDENT = .false.
+        case ("sender")
+            sub = div_ctx("right "//doc%nodes(node)%attr, ctx, aligns)
+            if (aligns > 0) call ts_addvspace(around)
+            call set_blocks(doc, node, sub)
+            call ts_end_par()
+            if (aligns > 0) call ts_addvspace(around)
+        case ("recipient")
+            sub = div_ctx(doc%nodes(node)%attr, ctx, aligns)
+            call set_blocks(doc, node, sub)
+            call ts_end_par()
+            call bigskip()
+        case ("closing")
+            call bigskip()
+            sub = div_ctx(doc%nodes(node)%attr, ctx, aligns)
+            sub%closing = .true.
+            call set_blocks(doc, node, sub)
+            call ts_end_par()
+        case default
+            sub = div_ctx(doc%nodes(node)%attr, ctx, aligns)
+            if (aligns > 0) call ts_addvspace(around)
+            call set_blocks(doc, node, sub)
+            call ts_end_par()
+            if (aligns > 0) call ts_addvspace(around)
+        end select
+    end subroutine set_div
+
+    ! LaTeX's \bigskip, scaled from the 10pt class.
+    subroutine bigskip()
+        real(dp) :: f
+        f = BASE/10.0_dp
+        call ts_vskip(ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0))
+    end subroutine bigskip
+
+    ! \vspace*{\fill}: fill that is not discarded at the top of a page.
+    subroutine vfill_star()
+        call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
+    end subroutine vfill_star
 
     ! A paragraph of inline text in the context's settings.
     subroutine paragraph(doc, k, ctx)
@@ -678,43 +751,6 @@ contains
         call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
-    ! A TeX command on a line by itself: \newpage, \pagebreak,
-    ! \clearpage, \vfill, \bigskip, \medskip, \smallskip, \vspace{...} and
-    ! \vspace*{...}.
-    subroutine raw_block(t, ctx)
-        character(len=*), intent(in) :: t
-        type(ctx_t), intent(in) :: ctx
-        character(len=:), allocatable :: arg
-        integer :: a, b
-        real(dp) :: f
-        f = BASE/10.0_dp
-        call ts_end_par()
-        if (starts(t, BS//"newpage") .or. starts(t, BS//"pagebreak") .or. &
-            starts(t, BS//"clearpage")) then
-            call ts_page_break()
-            NOINDENT = .false.
-        else if (starts(t, BS//"vfill")) then
-            call ts_vfil()
-        else if (starts(t, BS//"bigskip")) then
-            call ts_vskip(ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0))
-        else if (starts(t, BS//"medskip")) then
-            call ts_vskip(ts_glue_t(6.0_dp*f, 2.0_dp*f, 2.0_dp*f, 0, 0))
-        else if (starts(t, BS//"smallskip")) then
-            call ts_vskip(ts_glue_t(3.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0))
-        else if (starts(t, BS//"vspace")) then
-            a = index(t, "{")
-            b = index(t, "}", back=.true.)
-            if (a > 0 .and. b > a) then
-                arg = trim(adjustl(t(a + 1:b - 1)))
-                if (index(t(1:a), "*") > 0) then
-                    call ts_vkeep(skip_of(arg, ctx%size))
-                else
-                    call ts_vskip(skip_of(arg, ctx%size))
-                end if
-            end if
-        end if
-    end subroutine raw_block
-
     ! The settings of a div with attributes a; aligns is 1 when it sets an
     ! alignment.
     function div_ctx(a, ctx, aligns) result(sub)
@@ -724,6 +760,8 @@ contains
         type(ctx_t) :: sub
         sub = ctx
         sub%align = -1
+        ! A nested div is not the closing, so it does not take signature-skip.
+        sub%closing = .false.
         call apply_attrs(a, sub%align, sub%size, sub%color, sub%bold, sub%italic, ctx%size)
         aligns = merge(1, 0, sub%align >= 0)
         if (sub%align < 0) sub%align = ctx%align
@@ -775,21 +813,39 @@ contains
         end if
     end function list_label
 
-    ! A length or \fill as glue.
-    function skip_of(arg, size) result(g)
-        character(len=*), intent(in) :: arg
-        real(dp), intent(in) :: size
-        type(ts_glue_t) :: g
-        if (arg == BS//"fill" .or. arg == BS//"vfill" .or. arg == BS//"stretch{1}") then
-            g = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0)
-        else
-            g = ts_glue_t(length(arg, size), 0.0_dp, 0.0_dp, 0, 0)
-        end if
-    end function skip_of
+    ! LaTeX's named sizes, in the body's size: tiny 0.5 through Huge 2.488.
+    ! -1 when v is not one of them (the names are case sensitive).
+    real(dp) function named_size(v)
+        character(len=*), intent(in) :: v
+        select case (trim(v))
+        case ("tiny")
+            named_size = 0.5_dp*BASE
+        case ("scriptsize")
+            named_size = 0.7_dp*BASE
+        case ("footnotesize")
+            named_size = 0.8_dp*BASE
+        case ("small")
+            named_size = 0.9_dp*BASE
+        case ("normalsize")
+            named_size = BASE
+        case ("large")
+            named_size = 1.2_dp*BASE
+        case ("Large")
+            named_size = 1.44_dp*BASE
+        case ("LARGE")
+            named_size = 1.728_dp*BASE
+        case ("huge")
+            named_size = 2.074_dp*BASE
+        case ("Huge")
+            named_size = 2.488_dp*BASE
+        case default
+            named_size = -1.0_dp
+        end select
+    end function named_size
 
     ! Attributes of a div or a span: classes (.center, .right, .left,
-    ! .justify, .bold, .italic, .upright, and LaTeX's size names .small to .Huge)
-    ! and key=value pairs (size, color).
+    ! .justify, .bold, .italic, .upright, and LaTeX's size names .small to
+    ! .Huge) and key=value pairs (size, weight, italic, color, align).
     subroutine apply_attrs(a, align, size, color, bold, italic, base_size)
         character(len=*), intent(in) :: a
         integer, intent(inout) :: align, color
@@ -797,6 +853,7 @@ contains
         logical, intent(inout) :: bold, italic
         real(dp), intent(in) :: base_size
         integer :: i, j, e
+        real(dp) :: x
         character(len=:), allocatable :: w, k, v
         i = 1
         do while (i <= len(a))
@@ -818,45 +875,31 @@ contains
             end do
             w = a(i:min(j - 1, len(a)))
             i = j
+            if (len(w) == 0) cycle
             ! A bare word is a class, as Pandoc reads ::: right.
             if (w(1:1) /= "." .and. index(w, "=") == 0) w = "."//w
             if (w(1:1) == ".") then
-                select case (w(2:))
-                case ("center", "centering")
-                    align = ALIGN_CENTER
-                case ("right", "flushright", "raggedleft")
-                    align = ALIGN_RIGHT
-                case ("left", "flushleft", "raggedright")
-                    align = ALIGN_LEFT
-                case ("justify")
-                    align = ALIGN_JUSTIFY
-                case ("bold", "strong")
-                    bold = .true.
-                case ("italic", "emph")
-                    italic = .true.
-                case ("upright")
-                    italic = .false.
-                case ("tiny")
-                    size = 0.5_dp*BASE
-                case ("scriptsize")
-                    size = 0.7_dp*BASE
-                case ("footnotesize")
-                    size = 0.8_dp*BASE
-                case ("small")
-                    size = 0.9_dp*BASE
-                case ("normalsize")
-                    size = BASE
-                case ("large")
-                    size = 1.2_dp*BASE
-                case ("Large")
-                    size = 1.44_dp*BASE
-                case ("LARGE")
-                    size = 1.728_dp*BASE
-                case ("huge")
-                    size = 2.074_dp*BASE
-                case ("Huge")
-                    size = 2.488_dp*BASE
-                end select
+                x = named_size(w(2:))
+                if (x >= 0.0_dp) then
+                    size = x
+                else
+                    select case (w(2:))
+                    case ("center", "centering")
+                        align = ALIGN_CENTER
+                    case ("right", "flushright", "raggedleft")
+                        align = ALIGN_RIGHT
+                    case ("left", "flushleft", "raggedright")
+                        align = ALIGN_LEFT
+                    case ("justify")
+                        align = ALIGN_JUSTIFY
+                    case ("bold", "strong")
+                        bold = .true.
+                    case ("italic", "emph")
+                        italic = .true.
+                    case ("upright")
+                        italic = .false.
+                    end select
+                end if
             else
                 e = index(w, "=")
                 if (e == 0) cycle
@@ -864,7 +907,20 @@ contains
                 v = unquote(w(e + 1:))
                 select case (k)
                 case ("size", "font-size", "fontsize")
-                    size = length(v, base_size)
+                    x = named_size(v)
+                    if (x >= 0.0_dp) then
+                        size = x
+                    else
+                        x = length(v, base_size)
+                        if (x > 0.0_dp) size = x
+                    end if
+                case ("weight")
+                    if (lower(v) == "bold") bold = .true.
+                    if (lower(v) == "normal" .or. lower(v) == "regular") bold = .false.
+                case ("italic")
+                    if (truth(v)) italic = .true.
+                    if (lower(trim(v)) == "false" .or. lower(trim(v)) == "no" .or. &
+                        trim(v) == "0") italic = .false.
                 case ("color", "colour")
                     color = color_of(v, color)
                 case ("align")
@@ -1151,9 +1207,9 @@ contains
     end subroutine heading_number
 
     ! The tag of displayed formula k: its \tag{t}, or its number when it is
-    ! numbered: in a document with numberequations, or with an {#id} after
-    ! it or \label{name} in it, but not with \notag or \nonumber. Within a
-    ! book, formulas are numbered by chapter.
+    ! numbered: with numberequations, with \label{name} in the formula, or
+    ! when the node asks for a number, but not with \notag or \nonumber.
+    ! Within a book, formulas are numbered by chapter.
     function display_tag(doc, k) result(tag)
         type(doc_t), intent(in) :: doc
         integer, intent(in) :: k
@@ -1169,8 +1225,10 @@ contains
         a = index(src, BS//"tag{")
         if (a > 0) then
             b = index(src(a:), "}")
-            tag = src(a + 5:a + b - 2)
-            return
+            if (b > 0) then
+                tag = src(a + 5:a + b - 2)
+                return
+            end if
         end if
         if (numbered) then
             EQNO = EQNO + 1

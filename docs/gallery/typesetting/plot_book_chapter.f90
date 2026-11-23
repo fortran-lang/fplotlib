@@ -49,14 +49,14 @@ program plot_book_chapter
         "and *penalties*, which mark the places where a line may be broken and say how", &
         "undesirable a break there would be. A line is good when its glue has to stretch or", &
         "shrink little to fill the measure; TeX measures this by the *badness*", &
-        "$$ b = 100\,r^3, $$ {#eq:badness}", &
+        "$$ b = 100\,r^3, \label{eq:badness}$$", &
         "where $r$ is the ratio of the stretching or shrinking needed to the amount available.", &
         "A line whose glue is stretched to its full stretchability has a badness of 100, and", &
         "TeX’s default tolerance of 200 allows a little more than that.", &
         "", &
         "Each line is then given a number of *demerits*, which grows with its badness and with", &
         "the penalty $p$ of the break at its end,", &
-        "$$ d = (l + b)^2 + p^2, $$ {#eq:demerits}", &
+        "$$ d = (l + b)^2 + p^2, \label{eq:demerits}$$", &
         "$l$ being a small penalty for every line, so that a paragraph of fewer lines is", &
         "preferred. Further demerits are added when two consecutive lines end with hyphens, or", &
         "when a very loose line follows a very tight one.", &

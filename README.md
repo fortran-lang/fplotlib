@@ -250,7 +250,7 @@ call typeset([character(len=80) :: &
     "# Energy", &
     "", &
     "The energy of a mass at rest is", &
-    "$$ E = mc^2 $$ {#eq:einstein}", &
+    "$$ E = mc^2 \label{eq:einstein}$$", &
     "and @eq:einstein is the best known formula of physics."], "notes.pdf")
 ```
 
@@ -278,22 +278,22 @@ kerns, penalties, paragraphs, formulas, marks, and the page builder with
 its output routine. A program
 can also build a tree itself and give it to the class.
 
-The Markdown is Pandoc's: YAML front matter (`title`,
-`author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
-`align`, `numbersections`, `class: book`, `color`, `pagecolor`, ...),
-headings, emphasis, lists, block quotes, code, rules, links, fenced divs
-and bracketed spans for alignment, size and colour (`::: {.center .Huge
-color=darkred}`), cross references (`$$...$$ {#eq:name}` and `@eq:name`,
-`# Title {#sec:name}` and `@sec:name`, `\label`, `\eqref`, `\ref`), and the
-TeX commands `\newpage`, `\vspace`, `\vspace*{\fill}`, `\bigskip`, `\hfill`
-and `\quad`. The book class sets chapters, running heads and flush bottoms.
-Lengths are PostScript points (1/72 in), as in Typst.
+The text is a MyST subset. TeX is the mathematics, between `$...$` and
+`$$...$$`. A display that contains `\label{eq:name}` is numbered, and
+`@eq:name` refers to it. A heading is labelled by a target `(sec:name)=`
+on the line before it, and `@sec:name` refers to that. The front matter
+holds the class's options: `title`, `author`, `date`, `abstract`, `paper`,
+`fontsize`, `margin`, `parskip`, `align`, `valign`, `signature-skip`,
+`numbersections`, `class: book`, `color`, `pagecolor`. Colon directives
+mark parts the class spaces itself: `:::{div}` with `:align:`, `:size:`,
+`:weight:`, `:italic:` and `:color:`; a letter uses `:::{sender}`,
+`:::{recipient}` and `:::{closing}`; a page break is `:::{pagebreak}`.
+The book class sets chapters, running heads and flush bottoms. Lengths
+are PostScript points (1/72 in), as in Typst.
 
-Why Markdown and not TeX: TeX as input means TeX's macro language
-(category codes, `\def`, expansion) and LaTeX on top of it, and anything
-less would break on the first document pasted from LaTeX. Markdown is small
-and readable, the mathematics stays TeX, and a handful of TeX commands
-cover the layout Markdown has no words for, as in Pandoc.
+The class owns the vertical rhythm. The gap after a letter's recipient,
+the gap before its closing, and the room left for a signature come from
+the letter. An invitation centred on its card says `valign: center`.
 
 `tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
 lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`

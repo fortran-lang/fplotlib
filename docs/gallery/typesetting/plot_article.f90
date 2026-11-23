@@ -7,9 +7,9 @@
 ! derivation, a list and a quotation. It runs over two pages, cut where
 ! TeX's page builder would cut them.
 !
-! The text is Markdown, as Pandoc reads it; the mathematics is TeX's.
-! ``$$ ... $$ {#eq:name}`` numbers a display, and ``@eq:name`` refers to
-! it. Paragraphs are broken into lines as TeX breaks them, with the same
+! The text is a MyST subset and the mathematics is TeX's.
+! ``\label{eq:name}`` inside a display numbers it, and ``@eq:name`` refers
+! to it. Paragraphs are broken into lines as TeX breaks them, with the same
 ! hyphenation, and the spacing around headings, lists and displays is
 ! LaTeX's article class.
 !
@@ -36,11 +36,11 @@ program plot_article
         "", &
         "A mass $m$ on a spring of stiffness $k$, slowed by a friction force proportional to", &
         "its velocity, obeys Newton’s second law,", &
-        "$$ m\ddot{x} + c\dot{x} + kx = 0, $$ {#eq:motion}", &
+        "$$ m\ddot{x} + c\dot{x} + kx = 0, \label{eq:motion}$$", &
         "where $c$ is the damping coefficient. Dividing by $m$ and writing", &
         "$\omega_0 = \sqrt{k/m}$ for the natural frequency and $\zeta = c/(2\sqrt{mk})$ for the", &
         "damping ratio gives the standard form", &
-        "$$ \ddot{x} + 2\zeta\omega_0\dot{x} + \omega_0^2 x = 0. $$ {#eq:standard}", &
+        "$$ \ddot{x} + 2\zeta\omega_0\dot{x} + \omega_0^2 x = 0. \label{eq:standard}$$", &
         "These two numbers are all that is left of the three constants we started with: the", &
         "frequency sets the time scale of the motion, and the damping ratio its shape. Every", &
         "mechanical, electrical or acoustic system that is linear and of second order behaves", &
@@ -51,12 +51,12 @@ program plot_article
         "", &
         "Trying $x = e^{\lambda t}$ in @eq:standard turns the differential equation into an", &
         "algebraic one, whose roots are", &
-        "$$ \lambda_{1,2} = -\zeta\omega_0 \pm \omega_0\sqrt{\zeta^2 - 1}. $$ {#eq:roots}", &
+        "$$ \lambda_{1,2} = -\zeta\omega_0 \pm \omega_0\sqrt{\zeta^2 - 1}. \label{eq:roots}$$", &
         "The sign of the discriminant decides the behaviour, and with", &
         "$\omega_d = \omega_0\sqrt{1 - \zeta^2}$ the general solution is", &
         "$$ x(t) = \begin{cases} e^{-\zeta\omega_0 t}\left(A\cos\omega_d t + B\sin\omega_d t\right)", &
         "   & \zeta < 1, \\ (A + Bt)\,e^{-\omega_0 t} & \zeta = 1, \\", &
-        "   A e^{\lambda_1 t} + B e^{\lambda_2 t} & \zeta > 1, \end{cases} $$ {#eq:regimes}", &
+        "   A e^{\lambda_1 t} + B e^{\lambda_2 t} & \zeta > 1, \end{cases} \label{eq:regimes}$$", &
         "the constants $A$ and $B$ being fixed by the initial position and velocity. The three", &
         "cases of @eq:regimes are the three regimes of the oscillator:", &
         "", &
@@ -81,7 +81,7 @@ program plot_article
         "The energy of the oscillator is $E = \tfrac{1}{2}mv^2 + \tfrac{1}{2}kx^2$, kinetic and", &
         "potential. By @eq:motion it changes at the rate", &
         "$$ \begin{aligned} \frac{dE}{dt} &= m v \dot{v} + k x v \\ &= v\,(m\ddot{x} + kx) \\", &
-        "   &= -c v^2 \le 0, \end{aligned} $$ {#eq:energy}", &
+        "   &= -c v^2 \le 0, \end{aligned} \label{eq:energy}$$", &
         "so friction dissipates energy at the rate $cv^2$, and the oscillation dies away. Without", &
         "friction, $c = 0$, the energy is conserved and the mass oscillates for ever with the", &
         "frequency $\omega_0$.", &
