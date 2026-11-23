@@ -738,6 +738,38 @@ contains
                         "even-odd fill in a clipped frame keeps its first and last rows", nfail)
             call expect_pixel(png, 15, 30, [0, 0, 0], "even-odd square in a clipped frame", nfail)
         end block
+        ! An even-odd ring over the whole canvas in a clipped frame reaches
+        ! its first and last rows, which the band of rows must keep; and
+        ! with no frame, a paint clip at x = 29.5 cuts it to whole pixels,
+        ! as every fill outside a transformed frame is cut.
+        block
+            type(png_renderer_t) :: png
+            type(paint_t) :: clipped
+            real(dp), parameter :: moved(6) = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.25_dp, 0.25_dp]
+            real(dp), parameter :: bx(8) = [-10.0_dp, 70.0_dp, 70.0_dp, -10.0_dp, &
+                                            20.0_dp, 40.0_dp, 40.0_dp, 20.0_dp]
+            real(dp), parameter :: by(8) = [-10.0_dp, -10.0_dp, 70.0_dp, 70.0_dp, &
+                                            20.0_dp, 20.0_dp, 40.0_dp, 40.0_dp]
+            png%keep_pixels = .true.
+            call png%set_dpi(72.0_dp)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            ! Clipped at x = 29.5, and past the canvas above and below.
+            call png%begin_frame(moved, clip_t(.true., 0.0_dp, -5.0_dp, 29.5_dp, 70.0_dp))
+            call png%draw_path(bx, by, ring_v, 10, paint)
+            call png%end_frame()
+            call png%close_canvas()
+            call expect_pixel(png, 10, 1, [0, 0, 0], "even-odd fill in a clipped frame on the canvas's first row", nfail)
+            call expect_pixel(png, 10, 60, [0, 0, 0], "even-odd fill in a clipped frame on the canvas's last row", nfail)
+            call expect_pixel(png, 30, 30, [255, 255, 255], "even-odd hole in a clipped frame across the canvas", nfail)
+            call png%open_canvas(60.0_dp, 60.0_dp, [255, 255, 255])
+            clipped = paint
+            clipped%clip = clip_t(.true., 0.0_dp, 0.0_dp, 29.5_dp, 60.0_dp)
+            call png%draw_path(bx, by, ring_v, 10, clipped)
+            call png%close_canvas()
+            call expect(grey(png, 30, 10) == 0 .or. grey(png, 30, 10) == 255, &
+                        "even-odd fill under a paint clip outside a frame is cut to whole pixels", nfail)
+            call expect_pixel(png, 10, 10, [0, 0, 0], "even-odd fill under a paint clip outside a frame", nfail)
+        end block
     contains
         integer function grey(png, x, y)
             type(png_renderer_t), intent(in) :: png

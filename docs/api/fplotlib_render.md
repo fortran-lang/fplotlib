@@ -30,9 +30,9 @@ A filled paint fills with its `fill_rule`, `FILL_NONZERO` by default or
 uses `eofill`, and PNG takes the parity of the winding number its
 rasterizer sums, where nonzero clamps it. At a pixel that edges cross, PNG
 takes the sum of their signed areas for the area they cover, for either
-rule, which can overstate it where contours overlap there. Under a clip in
-a frame, an even-odd fill is filled whole and its coverage multiplied by
-the clip's: exact inside the clip, and off by up to a quarter of a pixel
+rule, which can overstate it where contours overlap there. Under a frame's
+clip, or a paint clip in a transformed frame, an even-odd fill is filled
+whole and its coverage multiplied by the clip's: exact inside the clip, and off by up to a quarter of a pixel
 either way where the shape's edge and the clip's cross the same pixel, a
 quarter too little for two halves that coincide and a quarter too much
 for a shape that ends just where the clip begins. Strokes and glyphs
@@ -66,8 +66,9 @@ The PNG backend draws a frame's content transformed and clipped; a paint
 clip inside a clipped frame is cut as geometry, or for an even-odd fill
 applied as the mask above, so its edges are antialiased rather than whole
 pixels. Contours that overlap where a clip cuts them can saturate a pixel
-there that they cover only in part, as overlapping contours can anywhere. A dashed stroke is built in the
-frame's coordinates, but what the rasterizer may skip of it is decided by
+there that they cover only in part, as overlapping contours can anywhere.
+A dashed stroke is built in the frame's coordinates, but what the
+rasterizer may skip of it is decided by
 the canvas: a segment is walked only where the matrix maps it into the
 canvas, widened on each side by the pen as the matrix stretches that axis,
 and only over the dashes whose place along the line falls within the

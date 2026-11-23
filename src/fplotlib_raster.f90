@@ -671,8 +671,8 @@ contains
                 cv%acc(x - 1, y) = 0.0_dp
                 if (y < cy0 .or. y > cy1 .or. x < cx0 .or. x > cx1) cycle
                 if (odd) then
-                    ! |run| folded into [0, 1]; past 1 only, to spare the
-                    ! many pixels at a winding of 0 or 1 the division.
+                    ! |run| folded into [0, 1], worked out past 1 only:
+                    ! a pixel at a winding of 0 or 1 is as nonzero has it.
                     cov = abs(run)
                     if (cov > 1.0_dp) then
                         cov = cov - 2.0_dp*aint(0.5_dp*cov)
