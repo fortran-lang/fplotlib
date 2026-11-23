@@ -15,13 +15,14 @@ module test_contract
     use fplotlib_backend_pdf, only: pdf_renderer_t
     use fplotlib_backend_eps, only: eps_renderer_t
     use fplotlib_text, only: text_width, text_layout
+    use fplotlib_mathtext, only: math_formula, mrules_t
     use fplotlib_glyphs, only: FACE_REGULAR
     implicit none
     private
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 45
+    integer, parameter :: NCASE = 50
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -81,13 +82,18 @@ module test_contract
         "fplotlib: frame: nonfinite or out-of-range transform", &
         "fplotlib: renderer: this target cannot transform or clip a frame", &
         "fplotlib: renderer: frame_decimals(outer) with no frame open", &
-        "fplotlib: pdf: new_page inside a frame or group"]
+        "fplotlib: pdf: new_page inside a frame or group", &
+        "fplotlib: mathtext: rule list count must be nonnegative", &
+        "fplotlib: mathtext: a rule list needs x, y, w and h", &
+        "fplotlib: mathtext: rule list arrays shorter than its count", &
+        "fplotlib: text: glyph run arrays must start at index 1", &
+        "fplotlib: mathtext: rule list arrays must start at index 1"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 
 contains
 
@@ -97,7 +103,8 @@ contains
         type(svg_renderer_t) :: svg
         integer :: k2
         type(glyphrun_t) :: run
-        real(dp) :: adv
+        real(dp) :: adv, rw, rh, rd
+        type(mrules_t) :: rules
         type(png_renderer_t) :: png
         type(pdf_renderer_t) :: pdf
         type(eps_renderer_t) :: eps
@@ -253,6 +260,27 @@ contains
             call pdf%open_canvas(10.0_dp, 10.0_dp)
             call pdf%begin_frame(unit, none)
             call pdf%new_page()
+        ! Rule lists built by hand are checked whole before a formula adds
+        ! to them.
+        case (46)
+            rules%n = -1
+            call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
+        case (47)
+            allocate (rules%x(4), rules%y(4), rules%w(4))
+            call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
+        case (48)
+            allocate (rules%x(1), rules%y(1), rules%w(1), rules%h(1))
+            rules%n = 5
+            call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
+        ! Arrays that start anywhere but 1.
+        case (49)
+            allocate (run%gid(0:3), run%x(0:3), run%y(0:3), run%size(0:3))
+            run%n = 3
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (50)
+            allocate (rules%x(0:3), rules%y(0:3), rules%w(0:3), rules%h(0:3))
+            rules%n = 3
+            call math_formula("\frac{a}{b}", 10.0_dp, .false., run, rules, rw, rh, rd)
         end select
     end subroutine contract_case
 

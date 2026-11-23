@@ -205,6 +205,8 @@ contains
             allocate (run%gid(16), run%font(16), run%first(16), run%last(16), &
                       run%x(16), run%y(16), run%size(16))
         else
+            if (any([lbound(run%gid, 1), lbound(run%x, 1), lbound(run%y, 1), lbound(run%size, 1)] /= 1)) &
+                call contract_error("text: glyph run arrays must start at index 1")
             if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < run%n) &
                 call contract_error("text: glyph run arrays shorter than its count")
             call fill_mapping(run)
@@ -255,6 +257,16 @@ contains
         integer, allocatable :: ti(:)
         integer :: cap, i, m
 
+        if (lbound(run%gid, 1) /= 1) call contract_error("text: glyph run arrays must start at index 1")
+        if (allocated(run%font)) then
+            if (lbound(run%font, 1) /= 1) call contract_error("text: glyph run arrays must start at index 1")
+        end if
+        if (allocated(run%first)) then
+            if (lbound(run%first, 1) /= 1) call contract_error("text: glyph run arrays must start at index 1")
+        end if
+        if (allocated(run%last)) then
+            if (lbound(run%last, 1) /= 1) call contract_error("text: glyph run arrays must start at index 1")
+        end if
         cap = size(run%gid)
         if (.not. allocated(run%font)) then
             allocate (run%font(cap))
@@ -307,6 +319,8 @@ contains
         run%text = run%text//text
         if (present(math)) run%source_math = run%source_math .or. math
         if (first_glyph > last_glyph) return
+        if (.not. allocated(run%gid)) call contract_error("text: a glyph run needs gid, x, y and size")
+        if (size(run%gid) < run%n) call contract_error("text: glyph run arrays shorter than its count")
         call fill_mapping(run)
         run%first(first_glyph:last_glyph) = offset + 1
         run%last(first_glyph:last_glyph) = len(run%text)

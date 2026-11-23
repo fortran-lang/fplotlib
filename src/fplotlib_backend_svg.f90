@@ -508,7 +508,7 @@ contains
 
         call put(self, "<g")
         if (allocated(run%text)) then
-            allocate (character(len=6*len(run%text)) :: esc)
+            allocate (character(len=8*len(run%text)) :: esc)
             call xml_escape_to(run%text, esc, en)
             call put(self, ' aria-label="')
             call put(self, esc(1:en))
@@ -629,21 +629,33 @@ contains
         class(svg_renderer_t), intent(inout) :: self
         character(len=*), intent(in) :: name
         type(clip_t) :: none
-        integer :: j
+        integer :: j, n
         character(len=12) :: suffix
-        character(len=:), allocatable :: id
+        character(len=:), allocatable :: id, base
 
         call sync_clip(self, none)
-        ! A name used before becomes name-2, name-3, ...: the first of those
-        ! no group on the canvas has used, a name given as such included.
-        ! Each name remembers the next suffix to try.
-        id = name
-        j = find_id(self, name)
+        ! Ids are compared as written, escaped, which is one form for each
+        ! value a reader can take: two names a reader would read the same,
+        ! by bytes that decode alike or characters that both become U+FFFD,
+        ! are the same id. A name used before becomes name-2, name-3, ...:
+        ! the first of those no group on the canvas has used, a name given
+        ! as such included. Each name remembers the next suffix to try. A
+        ! name like the ids of clips, markers and glyphs (clip3, m1, g40)
+        ! counts as used, so that it can never take one of theirs.
+        allocate (character(len=8*len(name)) :: base)
+        call xml_escape_to(name, base, n, whole=.true.)
+        base = base(1:n)
+        id = base
+        j = find_id(self, base)
+        if (j == 0 .and. internal_id(base)) then
+            call add_id(self, base)
+            j = find_id(self, base)
+        end if
         if (j > 0) then
             do
                 write (suffix, "(i0)") self%ids(j)%next
                 self%ids(j)%next = self%ids(j)%next + 1
-                id = name//"-"//trim(suffix)
+                id = base//"-"//trim(suffix)
                 if (find_id(self, id) == 0) exit
             end do
         end if
@@ -664,11 +676,30 @@ contains
         call put_eol(self)
     end subroutine svg_end_group
 
+    ! Whether id has the form of an id the backend makes itself: clip, m or
+    ! g, then a number.
+    pure logical function internal_id(id) result(r)
+        character(len=*), intent(in) :: id
+        r = .false.
+        if (len(id) > 4) then
+            if (id(1:4) == "clip") then
+                r = verify(id(5:), "0123456789") == 0
+                return
+            end if
+        end if
+        if (len(id) > 1) then
+            if (id(1:1) == "m" .or. id(1:1) == "g") r = verify(id(2:), "0123456789") == 0
+        end if
+    end function internal_id
+
     integer function find_id(self, id) result(j)
         class(svg_renderer_t), intent(in) :: self
         character(len=*), intent(in) :: id
+        ! Exactly: Fortran's == would pad the shorter with blanks.
         do j = 1, self%n_ids
-            if (self%ids(j)%s == id) return
+            if (len(self%ids(j)%s) == len(id)) then
+                if (self%ids(j)%s == id) return
+            end if
         end do
         j = 0
     end function find_id
