@@ -43,7 +43,7 @@ module test_missing
         procedure :: draw_image_impl => ext_image
     end type extent_renderer_t
 
-    integer, parameter :: NCASE = 97
+    integer, parameter :: NCASE = 98
 
 contains
 
@@ -799,6 +799,11 @@ contains
             call set_yscale("symlog", linthresh=1.0e-10_dp)
         case (97); call imshow(reshape([0.0_dp, 1.0_dp, 1.0e300_dp, -1.0e300_dp], [2, 2]), &
                                norm="symlog", linthresh=1.0e-10_dp); call colorbar()
+        ! A band of 8 points seen through a tiny window: its outline, far
+        ! off the canvas, closes with exactly as many points as were made
+        ! room for, and closing it grows the buffer the first point is in.
+        case (98); call fill_between([(real(i, dp), i = 1, 8)], [(real(i, dp), i = 1, 8)], [(0.0_dp, i = 1, 8)])
+            call xlim(0.0_dp, 1.0e-3_dp)
         end select
     end subroutine draw_case
 
