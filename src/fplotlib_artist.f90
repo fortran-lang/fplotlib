@@ -588,12 +588,18 @@ contains
         no = no + size(px)
     end subroutine grow_put
 
+    ! Appends (px, py) to cx, cy. The point is read before the arrays may
+    ! grow: a caller may pass one of their own elements, closing a contour
+    ! with cx(1), cy(1), which growing them would free.
     subroutine push_point(cx, cy, n, px, py)
         real(dp), allocatable, intent(inout) :: cx(:), cy(:)
         integer, intent(inout) :: n
         real(dp), intent(in) :: px, py
         real(dp), allocatable :: t(:)
+        real(dp) :: x, y
 
+        x = px
+        y = py
         if (n + 1 > size(cx)) then
             allocate (t(2*(n + 1)))
             t(1:n) = cx(1:n)
@@ -603,8 +609,8 @@ contains
             call move_alloc(t, cy)
         end if
         n = n + 1
-        cx(n) = px
-        cy(n) = py
+        cx(n) = x
+        cy(n) = y
     end subroutine push_point
 
     pure logical function finite_point(x, y, k)
