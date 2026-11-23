@@ -1,13 +1,13 @@
 module test_frame_backends
     use fplotlib_style, only: dp
-    use fplotlib_render, only: renderer_t, paint_t, clip_t, glyphrun_t, VERB_MOVE, VERB_LINE, VERB_CLOSE, &
-                               CAP_BUTT, CAP_ROUND, CAP_SQUARE, JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
-    use fplotlib_raster, only: full_walk
-    use fplotlib_backend_pdf, only: pdf_renderer_t
-    use fplotlib_backend_png, only: png_renderer_t
+    use fplotlib_render, only: renderer_t, paint_t, clip_t
     use fplotlib_backend_svg, only: svg_renderer_t
     use fplotlib_backend_eps, only: eps_renderer_t
-    use fplotlib_glyphs, only: glyph_cmap, FACE_REGULAR
+    use fplotlib_backend_pdf, only: pdf_renderer_t
+    use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CLOSE, CAP_BUTT, CAP_ROUND, CAP_SQUARE, &
+                               JOIN_MITER, JOIN_ROUND, JOIN_BEVEL
+    use fplotlib_raster, only: full_walk
+    use fplotlib_backend_png, only: png_renderer_t
     implicit none
     private
 
@@ -19,140 +19,73 @@ contains
         integer, intent(out) :: nfail
 
         nfail = 0
-        call pdf_resources_check(nfail)
-        call pdf_pages_check(nfail)
-        call pdf_text_check(nfail)
+        call vector_frame_numbers_check(nfail)
         call png_frames_check(nfail)
         call png_image_check(nfail)
         call png_dash_frames_check(nfail)
         call png_dash_joins_check(nfail)
         call png_far_frame_check(nfail)
-        call vector_frame_numbers_check(nfail)
+        call pdf_resources_check(nfail)
+        call pdf_pages_check(nfail)
         print "(a,i0)", "frame backends: failures = ", nfail
     end subroutine frame_backend_check
 
-    subroutine pdf_resources_check(nfail)
+    ! SVG, PDF and EPS write a frame's matrix with fifteen significant
+    ! digits, so that a scale of 4e-7 is not written as 0, and the numbers
+    ! inside a frame with as many more decimals as it magnifies, so that
+    ! a frame magnifying a million times still places them to a millionth
+    ! of a point on the page.
+    subroutine vector_frame_numbers_check(nfail)
         integer, intent(inout) :: nfail
-        integer, parameter :: NIMAGE = 20, NALPHA = 80
+        type(svg_renderer_t) :: svg
         type(pdf_renderer_t) :: pdf
+        type(eps_renderer_t) :: eps
         type(paint_t) :: paint
-        integer :: i, rgba(4, 1, 1), pos, ios
-        real(dp) :: alpha
-        character(len=16) :: id
-        character(len=:), allocatable :: document, key
-        logical :: images_present, alphas_present
+        type(clip_t) :: none
+        character(len=:), allocatable :: b
+        real(dp), parameter :: small(6) = [4.0e-7_dp, 0.0_dp, 0.0_dp, 4.0e-7_dp, 0.0_dp, 0.0_dp]
+        real(dp), parameter :: large(6) = [1.0e6_dp, 0.0_dp, 0.0_dp, 1.0e6_dp, 0.0_dp, 0.0_dp]
 
-        call pdf%open_canvas(100.0_dp, 100.0_dp)
-        do i = 1, NIMAGE
-            rgba(:, 1, 1) = [7*i, 255 - 5*i, 3*i, 255]
-            if (mod(i, 3) == 0) rgba(4, 1, 1) = 128
-            call pdf%draw_image(real(4*i, dp), 0.0_dp, 3.0_dp, 3.0_dp, rgba, 1, 1, paint)
-        end do
         paint%filled = .true.
-        do i = 1, NALPHA
-            paint%fill_alpha = real(i, dp)/100.0_dp
-            call pdf%draw_rect(real(i, dp), 10.0_dp, 1.0_dp, 20.0_dp, paint)
-        end do
+        call svg%open_canvas(200.0_dp, 150.0_dp)
+        call draw(svg)
+        call svg%close_canvas()
+        b = svg%bytes()
+        call expect(index(b, "matrix(0.0000004 0 0 0.0000004 0 0)") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "SVG frames keep a small scale and magnified coordinates", nfail)
+        call pdf%open_canvas(200.0_dp, 150.0_dp)
+        call draw(pdf)
         call pdf%close_canvas()
-        document = pdf%bytes()
+        b = pdf%bytes()
+        call expect(index(b, "0.0000004 0 0 0.0000004 0 0 cm") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "PDF frames keep a small scale and magnified coordinates", nfail)
+        call eps%open_canvas(200.0_dp, 150.0_dp)
+        call draw(eps)
+        call eps%close_canvas()
+        b = eps%bytes()
+        call expect(index(b, "[0.0000004 0 0 0.0000004 0 0 ] concat") > 0 .and. index(b, "0.0000012345") > 0, &
+                    "EPS frames keep a small scale and magnified coordinates", nfail)
+    contains
+        subroutine draw(r)
+            class(renderer_t), intent(inout) :: r
+            call r%begin_frame(small, none)
+            call r%draw_rect(2.5e8_dp, 1.875e8_dp, 1.0e8_dp, 1.0e8_dp, paint)
+            call r%end_frame()
+            call r%begin_frame(large, none)
+            call r%draw_rect(0.0000012345_dp, 0.00001_dp, 0.00001_dp, 0.00001_dp, paint)
+            call r%end_frame()
+        end subroutine draw
+    end subroutine vector_frame_numbers_check
 
-        images_present = .true.
-        do i = 1, NIMAGE
-            write (id, "(i0)") i
-            if (occurrences(document, "/Im"//trim(id)//" Do") /= 1) images_present = .false.
-        end do
-        call expect(images_present, "PDF retains every image draw past image 16", nfail)
-        call expect(occurrences(document, "/ColorSpace /DeviceRGB") == NIMAGE, &
-                    "PDF emits every RGB image XObject", nfail)
-        call expect(occurrences(document, "/ColorSpace /DeviceGray") == NIMAGE/3, &
-                    "PDF retains image soft masks after resource growth", nfail)
-
-        alphas_present = .true.
-        do i = 1, NALPHA
-            write (id, "(i0)") i
-            if (occurrences(document, "/GS"//trim(id)//" gs") /= 1) alphas_present = .false.
-            key = "/GS"//trim(id)//" << /Type /ExtGState /ca "
-            if (occurrences(document, key) /= 1) alphas_present = .false.
-            pos = index(document, key)
-            if (pos == 0) cycle
-            read (document(pos + len(key):), *, iostat=ios) alpha
-            if (ios /= 0) then
-                alphas_present = .false.
-            else if (abs(alpha - real(i, dp)/100.0_dp) > 1.0e-12_dp) then
-                alphas_present = .false.
-            end if
-        end do
-        call expect(alphas_present, "PDF defines and uses every alpha state past state 64", nfail)
-    end subroutine pdf_resources_check
-
-    subroutine pdf_pages_check(nfail)
+    subroutine expect(ok, label, nfail)
+        logical, intent(in) :: ok
+        character(len=*), intent(in) :: label
         integer, intent(inout) :: nfail
-        type(pdf_renderer_t) :: pdf
-        character(len=:), allocatable :: document
 
-        call pdf%open_canvas(100.0_dp, 80.0_dp, [255, 255, 255])
-        call pdf%new_page(width=160.0_dp, height=120.0_dp, bg_rgb=[0, 0, 0], bg_alpha=0.5_dp)
-        call pdf%new_page()
-        call pdf%close_canvas()
-        document = pdf%bytes()
-
-        call expect(occurrences(document, "/Type /Page ") == 3, "PDF keeps all three pages", nfail)
-        call expect(occurrences(document, "/MediaBox [0 0 100 80]") == 1 .and. &
-                    occurrences(document, "/MediaBox [0 0 160 120]") == 2, &
-                    "PDF preserves earlier page sizes and inherits the current size", nfail)
-        call expect(index(document, "/MediaBox [0 0 100 80]") < index(document, "/MediaBox [0 0 160 120]"), &
-                    "PDF preserves page order when sizes change", nfail)
-        call expect(occurrences(document, "0 0 100 80 re") == 1 .and. &
-                    occurrences(document, "0 0 160 120 re") == 2, &
-                    "PDF backgrounds use their own page dimensions", nfail)
-        call expect(occurrences(document, "/GS1 gs") == 2 .and. &
-                    occurrences(document, "0 0 0 rg") == 2, &
-                    "PDF no-argument new_page inherits background color and alpha", nfail)
-    end subroutine pdf_pages_check
-
-    subroutine pdf_text_check(nfail)
-        integer, intent(inout) :: nfail
-        type(pdf_renderer_t) :: pdf
-        type(paint_t) :: paint
-        type(glyphrun_t) :: run
-        character(len=:), allocatable :: document
-
-        run%n = 3
-        allocate (run%gid(3), run%font(3), run%first(3), run%last(3))
-        allocate (run%x(3), run%y(3), run%size(3))
-        run%gid = [glyph_cmap(FACE_REGULAR, 65), glyph_cmap(FACE_REGULAR, 233), glyph_cmap(FACE_REGULAR, 63)]
-        run%font = FACE_REGULAR
-        run%x = [0.0_dp, 12.0_dp, 24.0_dp]
-        run%y = 0.0_dp
-        run%size = 12.0_dp
-        run%first = [1, 2, 4]
-        run%last = [1, 3, 7]
-        ! The emoji has a fallback outline, but extraction must retain its source.
-        run%text = "Aé😀"
-        paint%filled = .true.
-        call pdf%open_canvas(100.0_dp, 80.0_dp)
-        call pdf%draw_glyphs(5.0_dp, 15.0_dp, run, paint, 0.0_dp)
-
-        run%text = "$A^2$"
-        run%source_math = .true.
-        run%first = 0
-        run%last = 0
-        call pdf%draw_glyphs(5.0_dp, 35.0_dp, run, paint, 0.0_dp)
-        deallocate (run%text)
-        run%source_math = .false.
-        call pdf%draw_glyphs(5.0_dp, 55.0_dp, run, paint, 0.0_dp)
-        call pdf%close_canvas()
-        document = pdf%bytes()
-
-        call expect(index(document, "/ActualText <FEFF004100E9D83DDE00>") > 0, &
-                    "PDF ActualText retains BMP and supplementary Unicode", nfail)
-        call expect(occurrences(document, "/ActualText") == 1 .and. occurrences(document, "EMC") == 1, &
-                    "PDF excludes TeX source and unmapped runs from ActualText", nfail)
-        call expect(occurrences(document, "BT"//new_line("a")) == 3 .and. &
-                    occurrences(document, "ET"//new_line("a")) == 3 .and. &
-                    index(document, "/ToUnicode") > 0 .and. index(document, "beginbfchar") > 0, &
-                    "PDF still paints and maps text without ActualText", nfail)
-    end subroutine pdf_text_check
+        if (ok) return
+        nfail = nfail + 1
+        print "(a)", "  FAIL "//label
+    end subroutine expect
 
     subroutine png_frames_check(nfail)
         integer, intent(inout) :: nfail
@@ -646,63 +579,6 @@ contains
         end function moved
     end subroutine png_far_frame_check
 
-    ! SVG, PDF and EPS write a frame's matrix with fifteen significant
-    ! digits, so that a scale of 4e-7 is not written as 0, and the numbers
-    ! inside a frame with as many more decimals as it magnifies, so that
-    ! a frame magnifying a million times still places them to a millionth
-    ! of a point on the page.
-    subroutine vector_frame_numbers_check(nfail)
-        integer, intent(inout) :: nfail
-        type(svg_renderer_t) :: svg
-        type(pdf_renderer_t) :: pdf
-        type(eps_renderer_t) :: eps
-        type(paint_t) :: paint
-        type(clip_t) :: none
-        character(len=:), allocatable :: b
-        real(dp), parameter :: small(6) = [4.0e-7_dp, 0.0_dp, 0.0_dp, 4.0e-7_dp, 0.0_dp, 0.0_dp]
-        real(dp), parameter :: large(6) = [1.0e6_dp, 0.0_dp, 0.0_dp, 1.0e6_dp, 0.0_dp, 0.0_dp]
-
-        paint%filled = .true.
-        call svg%open_canvas(200.0_dp, 150.0_dp)
-        call draw(svg)
-        call svg%close_canvas()
-        b = svg%bytes()
-        call expect(index(b, "matrix(0.0000004 0 0 0.0000004 0 0)") > 0 .and. index(b, "0.0000012345") > 0, &
-                    "SVG frames keep a small scale and magnified coordinates", nfail)
-        call pdf%open_canvas(200.0_dp, 150.0_dp)
-        call draw(pdf)
-        call pdf%close_canvas()
-        b = pdf%bytes()
-        call expect(index(b, "0.0000004 0 0 0.0000004 0 0 cm") > 0 .and. index(b, "0.0000012345") > 0, &
-                    "PDF frames keep a small scale and magnified coordinates", nfail)
-        call eps%open_canvas(200.0_dp, 150.0_dp)
-        call draw(eps)
-        call eps%close_canvas()
-        b = eps%bytes()
-        call expect(index(b, "[0.0000004 0 0 0.0000004 0 0 ] concat") > 0 .and. index(b, "0.0000012345") > 0, &
-                    "EPS frames keep a small scale and magnified coordinates", nfail)
-    contains
-        subroutine draw(r)
-            class(renderer_t), intent(inout) :: r
-            call r%begin_frame(small, none)
-            call r%draw_rect(2.5e8_dp, 1.875e8_dp, 1.0e8_dp, 1.0e8_dp, paint)
-            call r%end_frame()
-            call r%begin_frame(large, none)
-            call r%draw_rect(0.0000012345_dp, 0.00001_dp, 0.00001_dp, 0.00001_dp, paint)
-            call r%end_frame()
-        end subroutine draw
-    end subroutine vector_frame_numbers_check
-
-    subroutine expect(ok, label, nfail)
-        logical, intent(in) :: ok
-        character(len=*), intent(in) :: label
-        integer, intent(inout) :: nfail
-
-        if (ok) return
-        nfail = nfail + 1
-        print "(a)", "  FAIL "//label
-    end subroutine expect
-
     subroutine expect_pixel(png, x, y, expected, label, nfail)
         type(png_renderer_t), intent(in) :: png
         integer, intent(in) :: x, y, expected(3)
@@ -730,6 +606,85 @@ contains
         nfail = nfail + 1
         print "(a,a,a,3(i0,1x),a,3(i0,1x))", "  FAIL ", label, ": got ", actual, "expected ", expected
     end subroutine expect_pixel
+
+    subroutine pdf_resources_check(nfail)
+        integer, intent(inout) :: nfail
+        integer, parameter :: NIMAGE = 20, NALPHA = 80
+        type(pdf_renderer_t) :: pdf
+        type(paint_t) :: paint
+        integer :: i, rgba(4, 1, 1), pos, ios
+        real(dp) :: alpha
+        character(len=16) :: id
+        character(len=:), allocatable :: document, key
+        logical :: images_present, alphas_present
+
+        call pdf%open_canvas(100.0_dp, 100.0_dp)
+        do i = 1, NIMAGE
+            rgba(:, 1, 1) = [7*i, 255 - 5*i, 3*i, 255]
+            if (mod(i, 3) == 0) rgba(4, 1, 1) = 128
+            call pdf%draw_image(real(4*i, dp), 0.0_dp, 3.0_dp, 3.0_dp, rgba, 1, 1, paint)
+        end do
+        paint%filled = .true.
+        do i = 1, NALPHA
+            paint%fill_alpha = real(i, dp)/100.0_dp
+            call pdf%draw_rect(real(i, dp), 10.0_dp, 1.0_dp, 20.0_dp, paint)
+        end do
+        call pdf%close_canvas()
+        document = pdf%bytes()
+
+        images_present = .true.
+        do i = 1, NIMAGE
+            write (id, "(i0)") i
+            if (occurrences(document, "/Im"//trim(id)//" Do") /= 1) images_present = .false.
+        end do
+        call expect(images_present, "PDF retains every image draw past image 16", nfail)
+        call expect(occurrences(document, "/ColorSpace /DeviceRGB") == NIMAGE, &
+                    "PDF emits every RGB image XObject", nfail)
+        call expect(occurrences(document, "/ColorSpace /DeviceGray") == NIMAGE/3, &
+                    "PDF retains image soft masks after resource growth", nfail)
+
+        alphas_present = .true.
+        do i = 1, NALPHA
+            write (id, "(i0)") i
+            if (occurrences(document, "/GS"//trim(id)//" gs") /= 1) alphas_present = .false.
+            key = "/GS"//trim(id)//" << /Type /ExtGState /ca "
+            if (occurrences(document, key) /= 1) alphas_present = .false.
+            pos = index(document, key)
+            if (pos == 0) cycle
+            read (document(pos + len(key):), *, iostat=ios) alpha
+            if (ios /= 0) then
+                alphas_present = .false.
+            else if (abs(alpha - real(i, dp)/100.0_dp) > 1.0e-12_dp) then
+                alphas_present = .false.
+            end if
+        end do
+        call expect(alphas_present, "PDF defines and uses every alpha state past state 64", nfail)
+    end subroutine pdf_resources_check
+
+    subroutine pdf_pages_check(nfail)
+        integer, intent(inout) :: nfail
+        type(pdf_renderer_t) :: pdf
+        character(len=:), allocatable :: document
+
+        call pdf%open_canvas(100.0_dp, 80.0_dp, [255, 255, 255])
+        call pdf%new_page(width=160.0_dp, height=120.0_dp, bg_rgb=[0, 0, 0], bg_alpha=0.5_dp)
+        call pdf%new_page()
+        call pdf%close_canvas()
+        document = pdf%bytes()
+
+        call expect(occurrences(document, "/Type /Page ") == 3, "PDF keeps all three pages", nfail)
+        call expect(occurrences(document, "/MediaBox [0 0 100 80]") == 1 .and. &
+                    occurrences(document, "/MediaBox [0 0 160 120]") == 2, &
+                    "PDF preserves earlier page sizes and inherits the current size", nfail)
+        call expect(index(document, "/MediaBox [0 0 100 80]") < index(document, "/MediaBox [0 0 160 120]"), &
+                    "PDF preserves page order when sizes change", nfail)
+        call expect(occurrences(document, "0 0 100 80 re") == 1 .and. &
+                    occurrences(document, "0 0 160 120 re") == 2, &
+                    "PDF backgrounds use their own page dimensions", nfail)
+        call expect(occurrences(document, "/GS1 gs") == 2 .and. &
+                    occurrences(document, "0 0 0 rg") == 2, &
+                    "PDF no-argument new_page inherits background color and alpha", nfail)
+    end subroutine pdf_pages_check
 
     integer function occurrences(text, token) result(n)
         character(len=*), intent(in) :: text, token

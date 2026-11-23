@@ -72,16 +72,16 @@ module test_contract
         "fplotlib: render_png: the figure has too many pixels at this dpi", &
         "fplotlib: render_svg: pad_inches must be finite and at most 1e9 inches", &
         "fplotlib: set_yscale: linthresh must be from 1e-300 to 1e300", &
+        "fplotlib: text: glyph run count must be nonnegative", &
+        "fplotlib: text: a glyph run needs gid, x, y and size", &
+        "fplotlib: text: glyph run arrays shorter than its count", &
         "fplotlib: renderer: end_frame without begin_frame", &
         "fplotlib: renderer: end_frame inside a group begun after the frame", &
         "fplotlib: renderer: begin_frame without end_frame at close_canvas", &
         "fplotlib: frame: nonfinite or out-of-range transform", &
         "fplotlib: renderer: this target cannot transform or clip a frame", &
-        "fplotlib: pdf: new_page inside a frame or group", &
         "fplotlib: renderer: frame_decimals(outer) with no frame open", &
-        "fplotlib: text: glyph run count must be nonnegative", &
-        "fplotlib: text: a glyph run needs gid, x, y and size", &
-        "fplotlib: text: glyph run arrays shorter than its count"]
+        "fplotlib: pdf: new_page inside a frame or group"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
@@ -212,45 +212,47 @@ contains
             ! A symlog threshold whose linear part would be subnormal.
             call figure()
             call set_yscale("symlog", linthresh=1.0e-310_dp)
-        ! Frames scope a transform and a clip, and nest with groups.
+        ! Glyph runs built by hand are checked whole before text is added.
         case (36)
+            run%n = -1
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (37)
+            allocate (run%x(4), run%y(4), run%size(4))
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        case (38)
+            allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
+            run%n = 5
+            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
+        ! Frames scope a transform and a clip, and nest with groups.
+        case (39)
             call svg%open_canvas(10.0_dp, 10.0_dp)
             call svg%end_frame()
-        case (37)
+        case (40)
             call svg%open_canvas(10.0_dp, 10.0_dp)
             call svg%begin_frame(unit, none)
             call svg%begin_group("g")
             call svg%end_frame()
-        case (38)
+        case (41)
             call png%open_canvas(10.0_dp, 10.0_dp)
             call png%begin_frame(unit, none)
             call png%close_canvas()
-        case (39)
+        case (42)
             call eps%open_canvas(10.0_dp, 10.0_dp)
             call eps%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, nan, 0.0_dp, 0.0_dp], none)
-        case (40)
+        case (43)
             ! The identity without a clip is fine; a scale is not.
             call flat%open_canvas(10.0_dp, 10.0_dp)
             call flat%begin_frame(unit, none)
             call flat%end_frame()
             call flat%begin_frame([2.0_dp, 0.0_dp, 0.0_dp, 2.0_dp, 0.0_dp, 0.0_dp], none)
-        case (41)
+        case (44)
+            call svg%open_canvas(10.0_dp, 10.0_dp)
+            k2 = frame_decimals(svg, outer=.true.)
+        ! A PDF page cannot end inside a frame or group.
+        case (45)
             call pdf%open_canvas(10.0_dp, 10.0_dp)
             call pdf%begin_frame(unit, none)
             call pdf%new_page()
-        case (42)
-            call svg%open_canvas(10.0_dp, 10.0_dp)
-            k2 = frame_decimals(svg, outer=.true.)
-        case (43)
-            run%n = -1
-            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
-        case (44)
-            allocate (run%x(4), run%y(4), run%size(4))
-            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
-        case (45)
-            allocate (run%gid(1), run%x(1), run%y(1), run%size(1))
-            run%n = 5
-            call text_layout("A", 10.0_dp, FACE_REGULAR, 0.0_dp, 0.0_dp, run, adv)
         end select
     end subroutine contract_case
 
