@@ -168,6 +168,7 @@ contains
         integer, intent(out) :: n
         integer :: i, m, code, nb, digits
         character(len=1) :: c
+        character(len=7) :: ref
 
         n = 0
         m = len_trim(s)
@@ -194,17 +195,24 @@ contains
                 n = n + 6
             case default
                 ! Anything past ASCII is a code point in its own right: a
-                ! degree sign, or a greek letter out of mathtext. It goes
-                ! out as a character reference, which every reader takes
-                ! the same way whatever it believes the encoding to be.
-                if (iachar(c) > 126) then
-                    call utf8_next(s, i, code, nb)
-                    i = i + nb - 1
-                    digits = 3
-                    if (code > 999) digits = 4
-                    if (code > 9999) digits = 5
+                ! degree sign, a greek letter out of mathtext, an emoji.
+                ! It goes out as a character reference, which every reader
+                ! takes the same way whatever it believes the encoding to
+                ! be. A control character, a surrogate or U+FFFE/U+FFFF,
+                ! which no XML 1.0 file may hold, is U+FFFD instead.
+                if (iachar(c) > 126 .or. (iachar(c) < 32 .and. index(achar(9)//achar(10)//achar(13), c) == 0)) then
+                    if (iachar(c) > 126) then
+                        call utf8_next(s, i, code, nb)
+                        i = i + nb - 1
+                    else
+                        code = 65533
+                    end if
+                    if (code < 32 .or. (code >= 55296 .and. code <= 57343) .or. &
+                        code == 65534 .or. code == 65535 .or. code > 1114111) code = 65533
+                    write (ref, "(I0)") code
+                    digits = len_trim(ref)
                     if (n + digits + 3 > len(out)) exit
-                    write (out(n+1:n+digits+3), "(A2,I0,A1)") "&#", code, ";"
+                    out(n+1:n+digits+3) = "&#"//ref(1:digits)//";"
                     n = n + digits + 3
                 else
                     if (n + 1 > len(out)) exit

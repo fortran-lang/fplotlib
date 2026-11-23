@@ -40,6 +40,7 @@
 ! dollar sign written \$ is a dollar sign, in text and in math.
 module fplotlib_mathtext
     use fplotlib_style, only: dp, utf8_next
+    use fplotlib_status, only: contract_error
     use fplotlib_render, only: glyphrun_t, paint_t
     use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_text, only: text_layout, run_add, run_map, check_font
@@ -451,10 +452,21 @@ contains
         real(dp), intent(in) :: x, y, w, h
         real(dp), allocatable :: t(:)
         integer :: cap
-        if (.not. allocated(rules%x)) then
+        logical :: some, all4
+        ! A list is empty, with none of x, y, w and h, or has all four at
+        ! least as long as its count; it grows when its shortest is full.
+        if (rules%n < 0) call contract_error("mathtext: rule list count must be nonnegative")
+        some = allocated(rules%x) .or. allocated(rules%y) .or. allocated(rules%w) .or. allocated(rules%h)
+        all4 = allocated(rules%x) .and. allocated(rules%y) .and. allocated(rules%w) .and. allocated(rules%h)
+        if (some .and. .not. all4) call contract_error("mathtext: a rule list needs x, y, w and h")
+        if (.not. all4) then
+            if (rules%n > 0) call contract_error("mathtext: rule list arrays shorter than its count")
             allocate (rules%x(4), rules%y(4), rules%w(4), rules%h(4))
-        else if (rules%n >= size(rules%x)) then
-            cap = 2*size(rules%x)
+        else if (min(size(rules%x), size(rules%y), size(rules%w), size(rules%h)) < rules%n) then
+            call contract_error("mathtext: rule list arrays shorter than its count")
+        end if
+        if (rules%n >= min(size(rules%x), size(rules%y), size(rules%w), size(rules%h))) then
+            cap = max(4, 2*(rules%n + 1))
             allocate (t(cap))
             t(1:rules%n) = rules%x(1:rules%n)
             call move_alloc(t, rules%x)

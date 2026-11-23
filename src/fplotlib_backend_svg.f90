@@ -636,9 +636,15 @@ contains
         call sync_clip(self, none)
         ! A name used before becomes name-2, name-3, ...: the first of those
         ! no group on the canvas has used, a name given as such included.
-        ! Each name remembers the next suffix to try.
+        ! Each name remembers the next suffix to try. A name like the ids
+        ! of clips, markers and glyphs (clip3, m1, g40) counts as used, so
+        ! that it can never take one of theirs.
         id = name
         j = find_id(self, name)
+        if (j == 0 .and. internal_id(name)) then
+            call add_id(self, name)
+            j = find_id(self, name)
+        end if
         if (j > 0) then
             do
                 write (suffix, "(i0)") self%ids(j)%next
@@ -649,7 +655,7 @@ contains
         end if
         call add_id(self, id)
         call put(self, '<g id="')
-        call put(self, id)
+        call put_escaped(self, id)
         call put(self, '">')
         call put_eol(self)
     end subroutine svg_begin_group
@@ -663,6 +669,33 @@ contains
         call put(self, "</g>")
         call put_eol(self)
     end subroutine svg_end_group
+
+    ! Whether id has the form of an id the backend makes itself: clip, m or
+    ! g, then a number.
+    pure logical function internal_id(id) result(r)
+        character(len=*), intent(in) :: id
+        r = .false.
+        if (len(id) > 4) then
+            if (id(1:4) == "clip") then
+                r = verify(id(5:), "0123456789") == 0
+                return
+            end if
+        end if
+        if (len(id) > 1) then
+            if (id(1:1) == "m" .or. id(1:1) == "g") r = verify(id(2:), "0123456789") == 0
+        end if
+    end function internal_id
+
+    ! Text in an attribute, escaped as XML needs it.
+    subroutine put_escaped(self, s)
+        class(svg_renderer_t), intent(inout) :: self
+        character(len=*), intent(in) :: s
+        character(len=:), allocatable :: buf
+        integer :: n
+        allocate (character(len=10*len(s) + 1) :: buf)
+        call xml_escape_to(s, buf, n)
+        call put(self, buf(1:n))
+    end subroutine put_escaped
 
     integer function find_id(self, id) result(j)
         class(svg_renderer_t), intent(in) :: self

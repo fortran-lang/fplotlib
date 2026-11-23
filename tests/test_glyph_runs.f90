@@ -1,11 +1,15 @@
 ! Glyph runs that keep the source text they were set from: the UTF-8
-! range of each glyph, runs built by hand, and PDF ActualText.
+! range of each glyph, runs and rule lists built by hand, PDF ActualText,
+! and SVG text and group names.
 module test_glyph_runs
     use fplotlib_style, only: dp
     use fplotlib_render, only: glyphrun_t, paint_t
     use fplotlib_text, only: text_layout
     use fplotlib_glyphs, only: glyph_cmap, FACE_REGULAR
     use fplotlib_backend_pdf, only: pdf_renderer_t
+    use fplotlib_backend_svg, only: svg_renderer_t
+    use fplotlib_svg, only: xml_escape_to
+    use fplotlib_mathtext, only: math_formula, mrules_t
     implicit none
     private
     public :: glyph_runs_check
@@ -18,6 +22,8 @@ contains
         call source_ranges(nfail)
         call hand_built_runs(nfail)
         call pdf_text_check(nfail)
+        call svg_text_check(nfail)
+        call hand_built_rules(nfail)
         print "(a,i0)", "glyph runs: failures = ", nfail
     end subroutine glyph_runs_check
 
@@ -81,6 +87,54 @@ contains
         call check(uneven%n == 7 .and. size(uneven%x) >= 7 .and. size(uneven%size) >= 7, &
                    "a run with arrays of different lengths grows by the shortest", nfail)
     end subroutine hand_built_runs
+
+    ! SVG text goes out as character references for anything past ASCII,
+    ! of six and seven digits too, as an emoji or a math italic letter
+    ! needs; what XML 1.0 cannot hold at all is U+FFFD. Group names are
+    ! escaped, and one shaped like an id the backend makes itself is
+    ! renamed rather than taking that id.
+    subroutine svg_text_check(nfail)
+        integer, intent(inout) :: nfail
+        character(len=200) :: out
+        character(len=:), allocatable :: b
+        type(svg_renderer_t) :: svg
+        integer :: n
+
+        ! "A", U+1F600, U+1D465 (math italic x), U+0001, a tab.
+        call xml_escape_to("A"//achar(240)//achar(159)//achar(152)//achar(128) &
+                           //achar(240)//achar(157)//achar(145)//achar(165)//achar(1)//achar(9), out, n)
+        call check(out(1:n) == "A&#128512;&#119909;&#65533;"//achar(9), &
+                   "SVG escapes code points of six digits and control characters", nfail)
+        call svg%open_canvas(10.0_dp, 10.0_dp)
+        call svg%begin_group('a"b')
+        call svg%end_group()
+        call svg%begin_group("clip1")
+        call svg%end_group()
+        call svg%close_canvas()
+        b = svg%bytes()
+        call check(index(b, 'id="a&quot;b"') > 0, "SVG escapes group names", nfail)
+        call check(index(b, 'id="clip1"') == 0 .and. index(b, 'id="clip1-2"') > 0, &
+                   "SVG group names never take the backend's own ids", nfail)
+    end subroutine svg_text_check
+
+    ! A rule list built by hand with x longer than y, w and h grows by its
+    ! shortest array when a formula adds to it.
+    subroutine hand_built_rules(nfail)
+        integer, intent(inout) :: nfail
+        type(glyphrun_t) :: run
+        type(mrules_t) :: rules
+        real(dp) :: w, h, d
+
+        allocate (rules%x(8), rules%y(1), rules%w(1), rules%h(1))
+        rules%x = 0.0_dp
+        rules%y = 0.0_dp
+        rules%w = 1.0_dp
+        rules%h = 1.0_dp
+        rules%n = 1
+        call math_formula("\frac{a}{b}+\sqrt{c}", 10.0_dp, .false., run, rules, w, h, d)
+        call check(rules%n >= 3 .and. size(rules%y) >= rules%n .and. size(rules%h) >= rules%n, &
+                   "a rule list with arrays of different lengths grows by the shortest", nfail)
+    end subroutine hand_built_rules
 
     subroutine pdf_text_check(nfail)
         integer, intent(inout) :: nfail
