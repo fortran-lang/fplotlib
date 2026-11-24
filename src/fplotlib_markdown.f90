@@ -11,8 +11,9 @@
 ! Inline: *emphasis*, **strong**, `code`, [links](url), hard line breaks
 ! (trailing \ or two spaces), smart quotes, --/--- dashes, ... ellipsis,
 ! and MyST cross-references: $$ ... $$ (eq:name) numbers a display,
-! {eq}`eq:name` writes (n), {numref}`sec:name` writes the section number,
-! and {ref}`sec:name` writes the section title.
+! {eq}`eq:name` writes (n), {numref}`sec:name` writes "Section n" (and
+! {numref}`Part %s <sec:name>` "Part n"), and {ref}`sec:name` writes the
+! section title (and {ref}`text <sec:name>` the text).
 !
 ! Lengths are in points (1/72 in), or in bp, in, cm, mm, em or ex.
 module fplotlib_markdown
@@ -20,6 +21,7 @@ module fplotlib_markdown
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
     use fplotlib_typeset
+    use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
 
@@ -1460,7 +1462,10 @@ contains
         integer, intent(in) :: kind
         type(label_t), allocatable :: grown(:)
         if (.not. FIRST_PASS) return
-        if (find_label(name) > 0) return
+        if (find_label(name) > 0) then
+            write (error_unit, "(a)") "fplotlib: typeset: warning: duplicate label "//name
+            return
+        end if
         if (.not. allocated(LABS)) allocate (LABS(64))
         if (NLAB == size(LABS)) then
             allocate (grown(2*size(LABS)))
@@ -1486,29 +1491,82 @@ contains
         end do
     end function find_label
 
-    ! What a role writes for its target: {eq} the display's number in
-    ! parentheses, {numref} the number, {ref} the heading's title; ?? for
-    ! a target that has no label, or no number to write.
-    function reference(role, target) result(s)
-        character(len=*), intent(in) :: role, target
-        character(len=:), allocatable :: s
-        integer :: r
+    ! What a role writes, as Sphinx resolves it: {eq} a display's number
+    ! in parentheses; {numref} "Section n" for a heading and "(n)" for a
+    ! display; {ref} a heading's title. A role may give its own text,
+    ! "text <target>", in which {numref} replaces %s and {number} with the
+    ! number and {name} with the title. A reference that cannot be resolved
+    ! is ??, and a warning, as in LaTeX.
+    function reference(role, arg) result(s)
+        character(len=*), intent(in) :: role, arg
+        character(len=:), allocatable :: s, target, title
+        integer :: r, a
+        logical :: explicit
+
+        target = trim(adjustl(arg))
+        title = ""
+        explicit = .false.
+        a = index(target, "<", back=.true.)
+        if (a > 1 .and. target(len(target):) == ">") then
+            title = trim(target(1:a - 1))
+            if (len(title) > 0) then
+                explicit = .true.
+                target = trim(adjustl(target(a + 1:len(target) - 1)))
+            end if
+        end if
         s = "??"
         r = find_label(target)
-        if (r == 0) return
-        select case (role)
-        case ("eq")
-            if (len(LABS(r)%num) > 0) s = "("//LABS(r)%num//")"
-        case ("ref")
-            if (len(LABS(r)%title) > 0) then
-                s = LABS(r)%title
-            else if (len(LABS(r)%num) > 0) then
-                s = LABS(r)%num
-            end if
-        case default
-            if (len(LABS(r)%num) > 0) s = LABS(r)%num
-        end select
+        if (r > 0) then
+            select case (role)
+            case ("eq")
+                if (LABS(r)%kind == LAB_EQUATION .and. len(LABS(r)%num) > 0) &
+                    s = "("//LABS(r)%num//")"
+            case ("ref")
+                if (explicit) then
+                    s = title
+                else if (LABS(r)%kind == LAB_SECTION) then
+                    s = LABS(r)%title
+                end if
+            case ("numref")
+                if (len(LABS(r)%num) > 0) then
+                    if (.not. explicit) then
+                        title = "Section %s"
+                        if (LABS(r)%kind == LAB_EQUATION) title = "(%s)"
+                    end if
+                    s = replace(replace(replace(title, "%s", LABS(r)%num), "{number}", &
+                                        LABS(r)%num), "{name}", LABS(r)%title)
+                end if
+            end select
+        else if (explicit .and. role == "ref") then
+            s = title
+        end if
+        if (r == 0 .or. s == "??") &
+            call warn("unresolved reference {"//role//"}`"//trim(adjustl(arg))//"`")
     end function reference
+
+    ! s with every occurrence of a replaced by b.
+    function replace(s, a, b) result(t)
+        character(len=*), intent(in) :: s, a, b
+        character(len=:), allocatable :: t
+        integer :: i, k
+        t = ""
+        i = 1
+        do
+            k = index(s(i:), a)
+            if (k == 0) exit
+            t = t//s(i:i + k - 2)//b
+            i = i + k - 1 + len(a)
+        end do
+        t = t//s(i:)
+    end function replace
+
+    ! A warning about the document, as LaTeX gives one: written to the
+    ! error unit in the pass that sets the pages, the document set anyway.
+    subroutine warn(message)
+        character(len=*), intent(in) :: message
+        if (FIRST_PASS) return
+        write (error_unit, "(a)") "fplotlib: typeset: warning: "//message
+    end subroutine warn
 
     ! ------------------------------------------------------------------
     ! Recognizing lines.

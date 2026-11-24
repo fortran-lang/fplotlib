@@ -1680,7 +1680,7 @@ contains
             ":::{pagebreak}", &
             ":::", &
             "", &
-            "Section {numref}`sec:math` ends on the page before this one."]
+            "{numref}`sec:math` ends on the page before this one."]
         integer :: k
         call typeset(doc, "tests/out/document.png", dpi=100.0_dp, on_directive=doc_directive)
         do k = 1, 3

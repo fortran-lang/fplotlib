@@ -277,8 +277,11 @@ and the page builder).
 The text is a strict MyST subset. TeX is confined to mathematics between `$...$`
 and `$$...$$`. A display followed by `(eq:name)` is numbered, and
 `` {eq}`eq:name` `` refers to it. A heading is labelled by a target `(sec:name)=`
-on the line before it, `` {numref}`sec:name` `` writes its number, and
-`` {ref}`sec:name` `` writes its title. Front matter holds the document options
+on the line before it, `` {numref}`sec:name` `` writes "Section" and its number,
+and `` {ref}`sec:name` `` writes its title; as in Sphinx, a role may give its own
+text, `` {ref}`the introduction <sec:name>` `` or `` {numref}`Part %s <sec:name>` ``.
+A reference that cannot be resolved is set as ?? with a warning, as LaTeX does.
+Front matter holds the document options
 (`title`, `author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
 `align`, `numbersections`, `chapters`, `runningheads`, `flushbottom`, `color`,
 `pagecolor`). Custom MyST directives (`:::{name}` with `:key: value` options)

@@ -43,6 +43,7 @@ contains
         nfail = 0
         ncase = 0
         call numbering_cases(ncase, nfail)
+        call role_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -56,7 +57,7 @@ contains
         call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
                      "# One"//NL//NL//"```sh"//NL//"# install"//NL//"make"//NL//"```"//NL//NL// &
                      "(sec:two)="//NL//"# Two"//NL//NL//"Two is {numref}`sec:two`.", t, f)
-        call expect("code comment", t, "Two is 2.", ncase, nfail)
+        call expect("code comment", t, "Two is Section 2.", ncase, nfail)
         ! $$ in a code block or a code span is no display.
         call set_doc("```"//NL//"$$ x $$ (eq:fake)"//NL//"```"//NL//NL// &
                      "Code `$$ z $$ (eq:z)` and $$ y $$ (eq:real)"//NL// &
@@ -66,12 +67,12 @@ contains
         call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
                      "One"//NL//"==="//NL//NL//"(sec:b)="//NL//"# Two"//NL//NL// &
                      "Two is {numref}`sec:b`.", t, f)
-        call expect("setext heading", t, "Two is 2.", ncase, nfail)
+        call expect("setext heading", t, "Two is Section 2.", ncase, nfail)
         ! So is a heading in a quotation.
         call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
                      "> # Quoted"//NL//NL//"(sec:c)="//NL//"# After"//NL//NL// &
                      "After is {numref}`sec:c`.", t, f)
-        call expect("quoted heading", t, "After is 2.", ncase, nfail)
+        call expect("quoted heading", t, "After is Section 2.", ncase, nfail)
         ! A heading set without a number has none to refer to, but its
         ! title can be.
         call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
@@ -87,6 +88,22 @@ contains
                      "$$ y $$ (eq:b)"//NL//NL//"See {eq}`eq:a` and {eq}`eq:b`.", t, f)
         call expect("chapter displays", t, "See (1.1) and (2.1).", ncase, nfail)
     end subroutine numbering_cases
+
+    ! The roles write what Sphinx writes for them, a text of their own
+    ! included.
+    subroutine role_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "(sec:a)="//NL//"# Alpha"//NL//NL//"$$ x $$ (eq:x)"//NL//NL// &
+                     "{ref}`the intro <sec:a>`; {numref}`Part %s <sec:a>`;"//NL// &
+                     "{numref}`{name} ({number}) <sec:a>`; {numref}`eq:x`; {eq}`eq:x`;"//NL// &
+                     "{ref}`eq:x`; {eq}`sec:a`; {ref}`gone`; {ref}`kept <gone>`.", t, f)
+        call expect("explicit ref", t, "the intro; Part 1;", ncase, nfail)
+        call expect("numref fields", t, "Alpha (1); (1); (1);", ncase, nfail)
+        call expect("unresolved", t, "??; ??; ??; kept.", ncase, nfail)
+    end subroutine role_cases
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
