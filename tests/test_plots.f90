@@ -1693,18 +1693,21 @@ contains
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
 
-    subroutine doc_directive(name, opts, body, ctx)
+    subroutine doc_directive(name, opts, body, ctx, handled)
         use fplotlib_markdown, only: md_ctx_t, md_blocks, md_option, md_color, &
                                      md_align, md_noindent, md_base_size
         use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
                                     ts_glue_t, ALIGN_JUSTIFY
         character(len=*), intent(in) :: name, opts, body
         type(md_ctx_t), intent(in) :: ctx
+        logical, intent(out) :: handled
         type(md_ctx_t) :: sub
         type(ts_glue_t) :: around
         real(dp) :: f
         integer :: al
 
+        handled = name == "div" .or. name == "pagebreak"
+        if (.not. handled) return
         if (name == "pagebreak") then
             call ts_page_break()
             call md_noindent(.false.)

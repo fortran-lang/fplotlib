@@ -57,11 +57,18 @@ module fplotlib_markdown
         logical :: indent = .true.
     end type md_ctx_t
 
+    ! The callbacks a template gives md_typeset. on_directive sets a MyST
+    ! directive :::{name}, given its :key: value lines (opts) and its body,
+    ! and on_heading a heading, given its level, text and number; either
+    ! says whether it did (handled), and what it leaves is set as the core
+    ! sets it: a directive's body as blocks, a heading as LaTeX's \section.
+    ! on_body is called before the body (after false) and after it (true).
     abstract interface
-        subroutine md_directive_cb(name, opts, body, ctx)
+        subroutine md_directive_cb(name, opts, body, ctx, handled)
             import :: md_ctx_t
             character(len=*), intent(in) :: name, opts, body
             type(md_ctx_t), intent(in) :: ctx
+            logical, intent(out) :: handled
         end subroutine md_directive_cb
 
         subroutine md_body_cb(after, ctx)
@@ -1184,6 +1191,7 @@ contains
         type(md_ctx_t), intent(in) :: ctx
         character(len=:), allocatable :: rest, name, opts, body, line
         integer :: a, c, k, content_at
+        logical :: handled
 
         name = ""
         rest = ""
@@ -1215,11 +1223,10 @@ contains
             body = body//L(k)%s
         end do
 
-        if (associated(CB_DIR)) then
-            call CB_DIR(name, opts, body, ctx)
-        else if (j - 1 >= content_at) then
+        handled = .false.
+        if (associated(CB_DIR)) call CB_DIR(name, opts, body, ctx, handled)
+        if (.not. handled .and. j - 1 >= content_at) &
             call blocks(L(content_at:j - 1), j - content_at, ctx)
-        end if
     end subroutine set_div
 
     ! --- Template helpers -------------------------------------------------

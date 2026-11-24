@@ -69,15 +69,17 @@ program plot_letter
 
 contains
 
-    subroutine letter_directive(name, opts, body, ctx)
+    subroutine letter_directive(name, opts, body, ctx, handled)
         character(len=*), intent(in) :: name, opts, body
         type(md_ctx_t), intent(in) :: ctx
+        logical, intent(out) :: handled
         type(md_ctx_t) :: sub
         type(ts_glue_t) :: around, big
         real(dp) :: f, sig
         integer :: p
         character, parameter :: NL = achar(10)
 
+        handled = .true.
         f = md_base_size()/10.0_dp
         around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
         big = ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0)
@@ -107,7 +109,7 @@ contains
             end if
             call ts_end_par()
         case default
-            if (len(opts) >= 0) call md_blocks(body, sub)
+            handled = .false.
         end select
     end subroutine letter_directive
 

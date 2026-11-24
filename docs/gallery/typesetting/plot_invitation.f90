@@ -6,12 +6,13 @@
 ! text centred vertically on the card.
 !
 ! The front matter sets the card size, colours, and alignment. The local
-! ``invitation_body`` and ``invitation_directive`` callbacks centre the
-! text vertically on the card and apply ``:::{div}`` options.
+! ``invitation_body`` callback centres the text vertically on the card,
+! as ``valign: center`` asks, and ``invitation_directive`` applies the
+! ``:::{div}`` options.
 
 program plot_invitation
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_ctx_t, md_blocks, md_option, md_color, md_base_size
+    use fplotlib_markdown, only: md_ctx_t, md_blocks, md_option, md_color, md_base_size, md_meta
     use fplotlib_typeset, only: ts_vkeep, ts_end_par, ts_glue_t
     implicit none
 
@@ -69,33 +70,36 @@ program plot_invitation
 
 contains
 
+    ! valign: center in the front matter puts as much space, \vfill,
+    ! before the body as after it.
     subroutine invitation_body(after, ctx)
         logical, intent(in) :: after
         type(md_ctx_t), intent(in) :: ctx
-        if (after .or. ctx%size > 0.0_dp) call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
+        if (md_meta("valign") == "center") call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine invitation_body
 
-    subroutine invitation_directive(name, opts, body, ctx)
+    subroutine invitation_directive(name, opts, body, ctx, handled)
         character(len=*), intent(in) :: name, opts, body
         type(md_ctx_t), intent(in) :: ctx
+        logical, intent(out) :: handled
         type(md_ctx_t) :: sub
         character(len=:), allocatable :: v
         real(dp) :: b
 
+        handled = name == "div"
+        if (.not. handled) return
         sub = ctx
         b = md_base_size()
-        if (name == "div") then
-            v = md_option(opts, "size")
-            select case (v)
-            case ("small"); sub%size = 0.9_dp*b
-            case ("large"); sub%size = 1.2_dp*b
-            case ("Huge"); sub%size = 2.488_dp*b
-            end select
-            if (md_option(opts, "weight") == "bold") sub%bold = .true.
-            if (md_option(opts, "italic") == "true") sub%italic = .true.
-            v = md_option(opts, "color")
-            if (len(v) > 0) sub%color = md_color(v, sub%color)
-        end if
+        v = md_option(opts, "size")
+        select case (v)
+        case ("small"); sub%size = 0.9_dp*b
+        case ("large"); sub%size = 1.2_dp*b
+        case ("Huge"); sub%size = 2.488_dp*b
+        end select
+        if (md_option(opts, "weight") == "bold") sub%bold = .true.
+        if (md_option(opts, "italic") == "true") sub%italic = .true.
+        v = md_option(opts, "color")
+        if (len(v) > 0) sub%color = md_color(v, sub%color)
         call md_blocks(body, sub)
         call ts_end_par()
     end subroutine invitation_directive
