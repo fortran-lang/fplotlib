@@ -25,8 +25,9 @@ module fplotlib
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-    use fplotlib_markdown, only: md_typeset, md_directive_cb, md_body_cb, md_heading_cb
-    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    use fplotlib_markdown, only: md_typeset, md_document_t, md_directive_cb, md_body_cb, &
+                                 md_heading_cb
+    use fplotlib_typeset, only: typeset_context_t, ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
     implicit none
@@ -7526,8 +7527,8 @@ contains
     ! with exit code 2. The figures are not touched. on_directive,
     ! on_body and on_heading are a template's callbacks (fplotlib_markdown);
     ! the document is set twice, as LaTeX is run twice, and they are
-    ! called in both passes. A callback may not call typeset itself; the
-    ! two are recursive only so that such a call reaches md_typeset's check.
+    ! called in both passes. A callback may declare and set a nested
+    ! md_document_t or call typeset without affecting the outer document.
     ! ------------------------------------------------------------------
 
     recursive subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, &
@@ -7538,9 +7539,11 @@ contains
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_document_t) :: doc
         call check_typeset_args(filename, dpi)
-        call md_typeset(text, on_directive=on_directive, on_body=on_body, on_heading=on_heading)
-        call write_pages(filename, dpi, status)
+        call md_typeset(doc, text, on_directive=on_directive, on_body=on_body, &
+                        on_heading=on_heading)
+        call write_pages(doc%engine, filename, dpi, status)
     end subroutine typeset_text
 
     ! The document as an array of lines, which is how a Fortran program
@@ -7567,7 +7570,8 @@ contains
     ! The pages set last, each recorded into a frame of the paper's size
     ! and colour, written as a paged document. A document with no pages
     ! is written as one blank page.
-    subroutine write_pages(filename, dpi, status)
+    recursive subroutine write_pages(ts, filename, dpi, status)
+        type(typeset_context_t), intent(in) :: ts
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
@@ -7580,11 +7584,11 @@ contains
 
         res = 150.0_dp
         if (present(dpi)) res = dpi
-        call ts_page_size(w, h, col)
+        call ts_page_size(ts, w, h, col)
         bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
-        do p = 1, max(1, ts_page_count())
+        do p = 1, max(1, ts_page_count(ts))
             call recorder%open_canvas(w, h, bg_rgb=bg)
-            if (p <= ts_page_count()) call ts_page_draw(recorder, p)
+            if (p <= ts_page_count(ts)) call ts_page_draw(ts, recorder, p)
             call recorder%close_canvas()
             call recorder%take(page)
             call document%add_page(page)

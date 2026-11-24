@@ -24,17 +24,18 @@ module fplotlib_markdown
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
     use fplotlib_typeset
-    use fplotlib_status, only: contract_error
     use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
 
-    public :: md_typeset, md_ctx_t, md_directive_t, md_heading_t
+    public :: md_typeset, md_document_t, md_ctx_t, md_directive_t, md_heading_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
 
     character, parameter :: BS = achar(92), NL = achar(10)
+    integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
+    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3
 
     type :: line_t
         character(len=:), allocatable :: s
@@ -49,12 +50,7 @@ module fplotlib_markdown
 
     ! Where blocks are set, as the callbacks are given it: a template
     ! copies it, changes what it wants, and sets blocks with the copy
-    ! (md_blocks, md_inline). left and right are how far the text is moved
-    ! in from the margins, in points; align is one of fplotlib_typeset's
-    ! ALIGN_*; size is the type size in points, and color is 0xRRGGBB; bold
-    ! and italic are the face; indent is whether a justified paragraph's
-    ! first line is indented. The nesting of lists and quotations is the
-    ! core's own, and private.
+    ! (md_blocks, md_inline).
     type :: md_ctx_t
         real(dp) :: left = 0.0_dp, right = 0.0_dp
         integer :: align = ALIGN_JUSTIFY
@@ -66,118 +62,85 @@ module fplotlib_markdown
         integer, private :: ilev = 0, elev = 0
     end type md_ctx_t
 
-    ! A MyST directive, as on_directive is given it:
-    !
-    !     :::{name} argument
-    !     :key: value
-    !     body
-    !     :::
-    !
-    ! name in lower case; the argument, the rest of the opening line; opts,
-    ! the :key: value lines, one to a line (md_option reads them); and the
-    ! body, the lines after them. A directive is one argument, so that what
-    ! it is given may grow without changing the callbacks.
+    ! A MyST directive, as on_directive is given it.
     type :: md_directive_t
         character(len=:), allocatable :: name, arg, opts, body
     end type md_directive_t
 
-    ! A heading, as on_heading is given it: its level (1 for #), its text,
-    ! and its number ("" when it has none), such as "2.1". One argument,
-    ! as a directive is.
+    ! A heading, as on_heading is given it.
     type :: md_heading_t
         integer :: level = 0
         character(len=:), allocatable :: text, num
     end type md_heading_t
 
-    ! The callbacks a template gives md_typeset. on_directive sets a MyST
-    ! directive, and on_heading a heading; either sets handled to .true.
-    ! when it did (it is .false. on entry, and a callback that leaves it so
-    ! leaves the block to the core), and what it leaves is set as the core
-    ! sets it: a directive's body as blocks, a heading as LaTeX's \section.
-    ! on_body is called before the body (after false) and after it (true).
-    ! A callback that sets blocks with md_blocks is called again, before it
-    ! returns, for a directive or heading among them: declare it recursive.
+    type :: meta_t
+        character(len=:), allocatable :: key, val
+    end type meta_t
+
+    type :: label_t
+        character(len=:), allocatable :: name, num, title
+        integer :: kind = LAB_SECTION
+    end type label_t
+
+    type :: pending_t
+        character(len=:), allocatable :: s
+        real(dp) :: left = 0.0_dp
+    end type pending_t
+
+    ! A document being typeset: its engine (public so templates call
+    ! ts_*(doc%engine, ...)) and all Markdown layout state (private).
+    type :: md_document_t
+        private
+        type(typeset_context_t), public :: engine
+        procedure(md_directive_cb), pointer, nopass :: CB_DIR => null()
+        procedure(md_body_cb), pointer, nopass :: CB_BODY => null()
+        procedure(md_heading_cb), pointer, nopass :: CB_HEAD => null()
+        real(dp) :: BASE = 10.0_dp, LEAD = 1.2_dp
+        real(dp) :: PARINDENT = 15.0_dp
+        type(ts_glue_t) :: PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
+        integer :: DOC_ALIGN = ALIGN_JUSTIFY
+        logical :: NUMBER_SECTIONS = .false., CHAPTERS = .false., NUMBER_EQS = .false.
+        character(len=:), allocatable :: TITLE, SUBTITLE, AUTHOR, DATE, ABSTRACT
+        integer :: TEXT_COL = 0, PAGE_COL = 16777215
+        integer :: NMETA = 0
+        type(meta_t), allocatable :: META(:)
+        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
+        integer :: NLAB = 0
+        type(label_t), allocatable :: LABS(:)
+        logical :: FIRST_PASS = .false.
+        character(len=:), allocatable :: TARGETS
+        logical :: AFTER_HEADING = .false.
+        logical :: NOINDENT = .false.
+        integer :: NPEND = 0
+        type(pending_t), allocatable :: PENDING(:)
+    end type md_document_t
+
+    ! Template callbacks given to md_typeset. Callbacks receive the
+    ! document first (doc) and may set a nested document of their own.
     abstract interface
-        subroutine md_directive_cb(directive, ctx, handled)
-            import :: md_directive_t, md_ctx_t
+        subroutine md_directive_cb(doc, directive, ctx, handled)
+            import :: md_document_t, md_directive_t, md_ctx_t
+            type(md_document_t), intent(inout) :: doc
             type(md_directive_t), intent(in) :: directive
             type(md_ctx_t), intent(in) :: ctx
             logical, intent(inout) :: handled
         end subroutine md_directive_cb
 
-        subroutine md_body_cb(after, ctx)
-            import :: md_ctx_t
+        subroutine md_body_cb(doc, after, ctx)
+            import :: md_document_t, md_ctx_t
+            type(md_document_t), intent(inout) :: doc
             logical, intent(in) :: after
             type(md_ctx_t), intent(in) :: ctx
         end subroutine md_body_cb
 
-        subroutine md_heading_cb(heading, ctx, handled)
-            import :: md_heading_t, md_ctx_t
+        subroutine md_heading_cb(doc, heading, ctx, handled)
+            import :: md_document_t, md_heading_t, md_ctx_t
+            type(md_document_t), intent(inout) :: doc
             type(md_heading_t), intent(in) :: heading
             type(md_ctx_t), intent(in) :: ctx
             logical, intent(inout) :: handled
         end subroutine md_heading_cb
     end interface
-
-    ! Whether a document is being set: md_typeset's state is the module's,
-    ! one document at a time, so a callback may not set another.
-    logical :: SETTING = .false.
-
-    ! Active template callbacks for the current md_typeset call.
-    procedure(md_directive_cb), pointer, save :: CB_DIR => null()
-    procedure(md_body_cb), pointer, save :: CB_BODY => null()
-    procedure(md_heading_cb), pointer, save :: CB_HEAD => null()
-
-    ! The document's settings.
-    real(dp) :: BASE = 10.0_dp, LEAD = 1.2_dp
-    real(dp) :: PARINDENT = 15.0_dp
-    type(ts_glue_t) :: PARSKIP_G
-    integer :: DOC_ALIGN = ALIGN_JUSTIFY
-    logical :: NUMBER_SECTIONS = .false., CHAPTERS = .false., NUMBER_EQS = .false.
-    character(len=:), allocatable :: TITLE, SUBTITLE, AUTHOR, DATE, ABSTRACT
-    integer :: TEXT_COL = 0, PAGE_COL = 16777215
-    integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
-
-    ! The front matter's keys and values, for templates (md_meta).
-    type :: meta_t
-        character(len=:), allocatable :: key, val
-    end type meta_t
-    integer :: NMETA = 0
-    type(meta_t), allocatable :: META(:)
-
-    ! Counters and cross references. A label is a heading's or a display's
-    ! name, its number ("" when it has none) and, for a heading, its title.
-    integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
-    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3
-    type :: label_t
-        character(len=:), allocatable :: name, num, title
-        integer :: kind = LAB_SECTION
-    end type label_t
-    integer :: NLAB = 0
-    type(label_t), allocatable :: LABS(:)
-
-    ! The document is set twice, as LaTeX is run twice: the first pass
-    ! numbers the headings and displays and records their labels, and the
-    ! second, with every label known, sets the pages.
-    logical :: FIRST_PASS = .false.
-
-    ! The MyST targets, (name)=, waiting for the block they label; and
-    ! whether the last block was a heading (LaTeX's @nobreak), after which
-    ! a heading adds no space and no break of its own.
-    character(len=:), allocatable :: TARGETS
-    logical :: AFTER_HEADING = .false.
-
-    ! Next paragraph is not indented (after a heading or display), and the
-    ! labels of items waiting for their first line: an item's own and, when
-    ! an item begins with a list, those of the items it is in, each with
-    ! the left edge of its item's text.
-    logical :: NOINDENT = .false.
-    type :: pending_t
-        character(len=:), allocatable :: s
-        real(dp) :: left = 0.0_dp
-    end type pending_t
-    integer :: NPEND = 0
-    type(pending_t), allocatable :: PENDING(:)
 
 contains
 
@@ -185,11 +148,12 @@ contains
     ! The document.
     ! ------------------------------------------------------------------
 
-    ! Set text, a MyST Markdown document, into fplotlib_typeset's pages.
+    ! Set text, a MyST Markdown document, into doc%engine's pages.
     ! The document is set twice (see FIRST_PASS), so the callbacks are
     ! called twice, and only the second pass's pages are kept. A callback
-    ! may not set a document of its own: that is a broken precondition.
-    recursive subroutine md_typeset(text, on_directive, on_body, on_heading)
+    ! may set a nested md_document_t without affecting doc.
+    recursive subroutine md_typeset(doc, text, on_directive, on_body, on_heading)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
@@ -198,71 +162,68 @@ contains
         type(md_ctx_t) :: ctx
         integer :: n, first, pass
 
-        if (SETTING) call contract_error("typeset: a document cannot be set from inside a "// &
-                                         "callback of the one being set")
-        SETTING = .true.
-        CB_DIR => null()
-        CB_BODY => null()
-        CB_HEAD => null()
-        if (present(on_directive)) CB_DIR => on_directive
-        if (present(on_body)) CB_BODY => on_body
-        if (present(on_heading)) CB_HEAD => on_heading
+        doc%CB_DIR => null()
+        doc%CB_BODY => null()
+        doc%CB_HEAD => null()
+        if (present(on_directive)) doc%CB_DIR => on_directive
+        if (present(on_body)) doc%CB_BODY => on_body
+        if (present(on_heading)) doc%CB_HEAD => on_heading
 
         call split_lines(text, lines, n)
-        NLAB = 0
+        doc%NLAB = 0
         do pass = 1, 2
-            FIRST_PASS = pass == 1
-            call ts_reset()
-            call defaults()
+            doc%FIRST_PASS = pass == 1
+            call ts_reset(doc%engine)
+            call defaults(doc)
             first = 1
-            call front_matter(lines, n, first)
-            call ts_set_font(BASE, LEAD*BASE)
-            call ts_set_parskip(PARSKIP_G)
-            call ts_set_colors(TEXT_COL, PAGE_COL)
-            SEC = 0
-            CHAPTER = 0
-            EQNO = 0
-            TARGETS = ""
-            AFTER_HEADING = .false.
+            call front_matter(doc, lines, n, first)
+            call ts_set_font(doc%engine, doc%BASE, doc%LEAD*doc%BASE)
+            call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+            call ts_set_colors(doc%engine, doc%TEXT_COL, doc%PAGE_COL)
+            doc%SEC = 0
+            doc%CHAPTER = 0
+            doc%EQNO = 0
+            doc%TARGETS = ""
+            doc%AFTER_HEADING = .false.
             ctx = md_ctx_t()
-            ctx%size = BASE
-            ctx%color = TEXT_COL
-            ctx%align = DOC_ALIGN
-            call title_block(ctx)
-            if (associated(CB_BODY)) call CB_BODY(.false., ctx)
-            if (first <= n) call blocks(lines(first:n), n - first + 1, ctx)
-            call place_targets()
-            if (associated(CB_BODY)) call CB_BODY(.true., ctx)
+            ctx%size = doc%BASE
+            ctx%color = doc%TEXT_COL
+            ctx%align = doc%DOC_ALIGN
+            call title_block(doc, ctx)
+            if (associated(doc%CB_BODY)) call doc%CB_BODY(doc, .false., ctx)
+            if (first <= n) call blocks(doc, lines(first:n), n - first + 1, ctx)
+            call place_targets(doc)
+            if (associated(doc%CB_BODY)) call doc%CB_BODY(doc, .true., ctx)
         end do
-        FIRST_PASS = .false.
-        call ts_paginate()
+        doc%FIRST_PASS = .false.
+        call ts_paginate(doc%engine)
 
-        CB_DIR => null()
-        CB_BODY => null()
-        CB_HEAD => null()
-        SETTING = .false.
+        doc%CB_DIR => null()
+        doc%CB_BODY => null()
+        doc%CB_HEAD => null()
     end subroutine md_typeset
 
-    subroutine defaults()
-        BASE = 10.0_dp
-        LEAD = 1.2_dp
-        PARINDENT = -1.0_dp
-        PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
-        DOC_ALIGN = ALIGN_JUSTIFY
-        NUMBER_SECTIONS = .false.
-        NUMBER_EQS = .false.
-        CHAPTERS = .false.
-        TITLE = ""
-        SUBTITLE = ""
-        AUTHOR = ""
-        DATE = ""
-        ABSTRACT = ""
-        TEXT_COL = 0
-        PAGE_COL = 16777215
-        NMETA = 0
-        NOINDENT = .false.
-        NPEND = 0
-        call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
+    recursive subroutine defaults(doc)
+        type(md_document_t), intent(inout) :: doc
+        doc%BASE = 10.0_dp
+        doc%LEAD = 1.2_dp
+        doc%PARINDENT = -1.0_dp
+        doc%PARSKIP_G = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
+        doc%DOC_ALIGN = ALIGN_JUSTIFY
+        doc%NUMBER_SECTIONS = .false.
+        doc%NUMBER_EQS = .false.
+        doc%CHAPTERS = .false.
+        doc%TITLE = ""
+        doc%SUBTITLE = ""
+        doc%AUTHOR = ""
+        doc%DATE = ""
+        doc%ABSTRACT = ""
+        doc%TEXT_COL = 0
+        doc%PAGE_COL = 16777215
+        doc%NMETA = 0
+        doc%NOINDENT = .false.
+        doc%NPEND = 0
+        call ts_set_page(doc%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
     ! The front matter: "key: value" lines between a first line of --- and
@@ -270,7 +231,8 @@ contains
     ! front matter, and the --- is a rule. The type size is read first, as
     ! the em and ex of the other values are its. A value that cannot be
     ! read is warned of, and the setting keeps its default.
-    subroutine front_matter(lines, n, first)
+    recursive subroutine front_matter(doc, lines, n, first)
+        type(md_document_t), intent(inout) :: doc
         type(line_t), intent(in) :: lines(:)
         integer, intent(in) :: n
         integer, intent(inout) :: first
@@ -303,88 +265,88 @@ contains
         do i = 2, last - 1
             if (.not. entry(lines, i, last, key, val)) cycle
             if (key /= "fontsize") cycle
-            x = length(val, BASE, ok)
-            if (ok) BASE = x
+            x = length(doc, val, doc%BASE, ok)
+            if (ok) doc%BASE = x
         end do
         do i = 2, last - 1
             if (.not. entry(lines, i, last, key, val)) cycle
-            call add_meta(key, val)
+            call add_meta(doc, key, val)
             select case (key)
             case ("title")
-                TITLE = val
+                doc%TITLE = val
             case ("subtitle")
-                SUBTITLE = val
+                doc%SUBTITLE = val
             case ("author", "authors")
-                if (len(AUTHOR) > 0) then
-                    AUTHOR = AUTHOR//NL//val
+                if (len(doc%AUTHOR) > 0) then
+                    doc%AUTHOR = doc%AUTHOR//NL//val
                 else
-                    AUTHOR = val
+                    doc%AUTHOR = val
                 end if
             case ("date")
-                DATE = val
+                doc%DATE = val
             case ("abstract")
-                ABSTRACT = val
+                doc%ABSTRACT = val
             case ("linestretch", "leading")
-                x = number(val, ok)
-                if (ok) LEAD = 1.2_dp*x
+                x = number(doc, val, ok)
+                if (ok) doc%LEAD = 1.2_dp*x
             case ("paper", "papersize")
-                call paper_size(lower(val), pw, ph)
+                call paper_size(doc, lower(val), pw, ph)
             case ("margin")
-                call set_length(val, m)
+                call set_length(doc, val, m)
             case ("margin-left")
-                call set_length(val, ml)
+                call set_length(doc, val, ml)
             case ("margin-right")
-                call set_length(val, mr)
+                call set_length(doc, val, mr)
             case ("margin-top")
-                call set_length(val, mt)
+                call set_length(doc, val, mt)
             case ("margin-bottom")
-                call set_length(val, mb)
+                call set_length(doc, val, mb)
             case ("indent", "parindent")
                 if (lower(val) == "false" .or. lower(val) == "no") then
-                    PARINDENT = 0.0_dp
+                    doc%PARINDENT = 0.0_dp
                 else if (lower(val) /= "true" .and. lower(val) /= "yes") then
-                    call set_length(val, PARINDENT)
+                    call set_length(doc, val, doc%PARINDENT)
                 end if
             case ("parskip")
-                x = length(val, BASE, ok)
+                x = length(doc, val, doc%BASE, ok)
                 if (ok) then
-                    PARSKIP_G = ts_glue_t(x, 0.2_dp*x, 0.0_dp, 0, 0)
-                    if (PARINDENT < 0.0_dp) PARINDENT = 0.0_dp
+                    doc%PARSKIP_G = ts_glue_t(x, 0.2_dp*x, 0.0_dp, 0, 0)
+                    if (doc%PARINDENT < 0.0_dp) doc%PARINDENT = 0.0_dp
                 end if
             case ("align")
                 c = align_of(lower(val), -1)
                 if (c < 0) then
-                    call warn("cannot read the alignment '"//val//"'")
+                    call warn(doc, "cannot read the alignment '"//val//"'")
                 else
-                    DOC_ALIGN = c
+                    doc%DOC_ALIGN = c
                 end if
             case ("numbersections", "number-sections")
-                NUMBER_SECTIONS = flag(val)
+                doc%NUMBER_SECTIONS = flag(doc, val)
             case ("numberequations", "number-equations")
-                NUMBER_EQS = flag(val)
+                doc%NUMBER_EQS = flag(doc, val)
             case ("pagenumbers", "page-numbers")
-                numbers = flag(val)
+                numbers = flag(doc, val)
             case ("runningheads", "running-heads")
-                heads = flag(val)
+                heads = flag(doc, val)
             case ("flushbottom", "flush-bottom")
-                flushb = flag(val)
+                flushb = flag(doc, val)
             case ("chapters")
-                CHAPTERS = flag(val)
+                doc%CHAPTERS = flag(doc, val)
             case ("color", "fontcolor")
-                call set_color(val, TEXT_COL)
+                call set_color(doc, val, doc%TEXT_COL)
             case ("pagecolor", "background")
-                call set_color(val, PAGE_COL)
+                call set_color(doc, val, doc%PAGE_COL)
             end select
         end do
         if (last > 0) first = last + 1
-        if (PARINDENT < 0.0_dp) PARINDENT = 1.5_dp*BASE
+        if (doc%PARINDENT < 0.0_dp) doc%PARINDENT = 1.5_dp*doc%BASE
         ! LaTeX's geometry is set here by margins; without them, one inch.
         if (m < 0.0_dp) m = 72.0_dp
         if (ml < 0.0_dp) ml = m
         if (mr < 0.0_dp) mr = m
         if (mt < 0.0_dp) mt = m
         if (mb < 0.0_dp) mb = m
-        call ts_set_page(pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
+        call ts_set_page(doc%engine, pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
     end subroutine front_matter
 
     ! The key and value of front matter line i, when it is a line that is
@@ -453,53 +415,58 @@ contains
     end function flow_list
 
     ! A front matter value, kept for the templates (md_meta).
-    subroutine add_meta(key, val)
+    recursive subroutine add_meta(doc, key, val)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: key, val
         type(meta_t), allocatable :: grown(:)
-        if (.not. allocated(META)) allocate (META(16))
-        if (NMETA == size(META)) then
-            allocate (grown(2*size(META)))
-            grown(1:NMETA) = META(1:NMETA)
-            call move_alloc(grown, META)
+        if (.not. allocated(doc%META)) allocate (doc%META(16))
+        if (doc%NMETA == size(doc%META)) then
+            allocate (grown(2*size(doc%META)))
+            grown(1:doc%NMETA) = doc%META(1:doc%NMETA)
+            call move_alloc(grown, doc%META)
         end if
-        NMETA = NMETA + 1
-        META(NMETA)%key = key
-        META(NMETA)%val = val
+        doc%NMETA = doc%NMETA + 1
+        doc%META(doc%NMETA)%key = key
+        doc%META(doc%NMETA)%val = val
     end subroutine add_meta
 
-    subroutine set_length(val, var)
+    recursive subroutine set_length(doc, val, var)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: val
         real(dp), intent(inout) :: var
         real(dp) :: x
         logical :: ok
-        x = length(val, BASE, ok)
+        x = length(doc, val, doc%BASE, ok)
         if (ok) var = x
     end subroutine set_length
 
-    subroutine set_color(val, var)
+    recursive subroutine set_color(doc, val, var)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: val
         integer, intent(inout) :: var
         integer :: c
         c = color_of(val, -1)
         if (c < 0) then
-            call warn("cannot read the colour '"//val//"'")
+            call warn(doc, "cannot read the colour '"//val//"'")
         else
             var = c
         end if
     end subroutine set_color
 
     ! A yes or no: true, yes or 1, or false, no or 0.
-    logical function flag(val)
+    recursive logical function flag(doc, val)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: val
         flag = truth(val)
         select case (lower(trim(val)))
         case ("true", "yes", "1", "false", "no", "0")
         case default
-            call warn("cannot read '"//val//"' as true or false")
+            call warn(doc, "cannot read '"//val//"' as true or false")
         end select
     end function flag
 
-    subroutine paper_size(v, w, h)
+    recursive subroutine paper_size(doc, v, w, h)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: v
         real(dp), intent(inout) :: w, h
         real(dp) :: a, b
@@ -530,96 +497,100 @@ contains
             oka = .false.
             okb = .false.
             if (x > 0) then
-                a = length(trim(v(1:x - 1)), BASE, oka)
-                b = length(trim(v(x + 1:)), BASE, okb)
+                a = length(doc, trim(v(1:x - 1)), doc%BASE, oka)
+                b = length(doc, trim(v(x + 1:)), doc%BASE, okb)
             end if
             if (oka .and. okb) then
                 w = a
                 h = b
             else
-                call warn("cannot read the paper '"//v//"'")
+                call warn(doc, "cannot read the paper '"//v//"'")
             end if
         end select
     end subroutine paper_size
 
     ! LaTeX's \maketitle and abstract, for the article class.
-    subroutine title_block(ctx)
+    recursive subroutine title_block(doc, ctx)
+        type(md_document_t), intent(inout) :: doc
         type(md_ctx_t), intent(in) :: ctx
         type(style_t) :: st
         integer :: i, j
         ! The title, with its authors and date; an abstract is set with or
         ! without one.
-        if (len(TITLE) > 0) then
+        if (len(doc%TITLE) > 0) then
             st = base_style(ctx)
-            call ts_vkeep(ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            st%size = 1.728_dp*BASE
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*BASE/10.0_dp, &
+            call ts_vkeep(doc%engine, ts_glue_t(2.0_dp*doc%BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            st%size = 1.728_dp*doc%BASE
+            call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                    leading=22.0_dp*doc%BASE/10.0_dp, &
                               skip=.false.)
-            call inline(TITLE, st)
-            call ts_end_par()
-            if (len(SUBTITLE) > 0) then
-                st%size = 1.2_dp*BASE
-                call ts_vskip(ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                  leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-                call inline(SUBTITLE, st)
-                call ts_end_par()
+            call inline(doc, doc%TITLE, st)
+            call ts_end_par(doc%engine)
+            if (len(doc%SUBTITLE) > 0) then
+                st%size = 1.2_dp*doc%BASE
+                call ts_vskip(doc%engine, ts_glue_t(0.5_dp*doc%BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                  leading=14.0_dp*doc%BASE/10.0_dp, skip=.false.)
+                call inline(doc, doc%SUBTITLE, st)
+                call ts_end_par(doc%engine)
             end if
-            st%size = 1.2_dp*BASE
-            if (len(AUTHOR) > 0) then
-                call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            st%size = 1.2_dp*doc%BASE
+            if (len(doc%AUTHOR) > 0) then
+                call ts_vskip(doc%engine, ts_glue_t(1.5_dp*doc%BASE, 0.0_dp, 0.0_dp, 0, 0))
                 i = 1
-                do while (i <= len(AUTHOR))
-                    j = index(AUTHOR(i:), NL)
+                do while (i <= len(doc%AUTHOR))
+                    j = index(doc%AUTHOR(i:), NL)
                     if (j == 0) then
-                        j = len(AUTHOR) + 1
+                        j = len(doc%AUTHOR) + 1
                     else
                         j = i + j - 1
                     end if
-                    call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                      leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-                    call inline(AUTHOR(i:j - 1), st)
-                    call ts_end_par()
+                    call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                      leading=14.0_dp*doc%BASE/10.0_dp, skip=.false.)
+                    call inline(doc, doc%AUTHOR(i:j - 1), st)
+                    call ts_end_par(doc%engine)
                     i = j + 1
                 end do
             end if
-            if (len(DATE) > 0) then
-                call ts_vskip(ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                                  leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-                call inline(DATE, st)
-                call ts_end_par()
+            if (len(doc%DATE) > 0) then
+                call ts_vskip(doc%engine, ts_glue_t(doc%BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                  leading=14.0_dp*doc%BASE/10.0_dp, skip=.false.)
+                call inline(doc, doc%DATE, st)
+                call ts_end_par(doc%engine)
             end if
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vskip(doc%engine, ts_glue_t(1.5_dp*doc%BASE, 0.0_dp, 0.0_dp, 0, 0))
         end if
-        if (len(ABSTRACT) > 0) then
+        if (len(doc%ABSTRACT) > 0) then
             ! \small, a centred bold heading, and a quotation.
             st = base_style(ctx)
-            st%size = 0.9_dp*BASE
+            st%size = 0.9_dp*doc%BASE
             st%bold = .true.
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=11.0_dp*BASE/10.0_dp, skip=.false.)
-            call inline("Abstract", st)
-            call ts_end_par()
+            call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                              leading=11.0_dp*doc%BASE/10.0_dp, skip=.false.)
+            call inline(doc, "Abstract", st)
+            call ts_end_par(doc%engine)
             st%bold = .false.
-            call ts_vskip(ts_glue_t(-0.5_dp*st%size + 0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*BASE, &
-                              right=2.5_dp*BASE, size=st%size, leading=11.0_dp*BASE/10.0_dp)
-            call inline(ABSTRACT, st)
-            call ts_end_par()
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vskip(doc%engine, ts_glue_t(-0.5_dp*st%size + 0.5_dp*doc%BASE, 0.0_dp, &
+                    0.0_dp, 0, 0))
+            call ts_begin_par(doc%engine, ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*doc%BASE, &
+                              right=2.5_dp*doc%BASE, size=st%size, leading=11.0_dp*doc%BASE/10.0_dp)
+            call inline(doc, doc%ABSTRACT, st)
+            call ts_end_par(doc%engine)
+            call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
         end if
-        NOINDENT = .false.
+        doc%NOINDENT = .false.
     end subroutine title_block
 
     ! ------------------------------------------------------------------
     ! Blocks.
     ! ------------------------------------------------------------------
 
-    recursive subroutine blocks(L, n, ctx)
+    recursive subroutine blocks(doc, L, n, ctx)
+        type(md_document_t), intent(inout) :: doc
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         type(md_ctx_t), intent(in) :: ctx
@@ -640,21 +611,22 @@ contains
 
             ! A MyST target labels the block after it, and is not set.
             if (is_target(t, lab)) then
-                TARGETS = TARGETS//" "//lab
+                if (.not. allocated(doc%TARGETS)) doc%TARGETS = ""
+                doc%TARGETS = doc%TARGETS//" "//lab
                 i = i + 1
                 cycle
             end if
             if (is_heading(t, lev)) then
-                call heading(heading_text(t, lev), lev, ctx)
+                call heading(doc, heading_text(t, lev), lev, ctx)
                 i = i + 1
             else if (is_fence(t)) then
-                call other_block()
+                call other_block(doc)
                 j = i + 1
                 do while (j <= n)
                     if (is_fence(trim(adjustl(L(j)%s)))) exit
                     j = j + 1
                 end do
-                call code_block(L(i + 1:min(j - 1, n)), max(0, min(j - 1, n) - i), ctx)
+                call code_block(doc, L(i + 1:min(j - 1, n)), max(0, min(j - 1, n) - i), ctx)
                 i = j + 1
             else if (starts(t, ":::") .and. div_opens(t)) then
                 depth = 0
@@ -667,8 +639,8 @@ contains
                         if (depth == 0) exit
                     end if
                 end do
-                call other_block()
-                call set_div(t, L, i, j, ctx)
+                call other_block(doc)
+                call set_div(doc, t, L, i, j, ctx)
                 i = j + 1
             else if (t(1:1) == ">") then
                 j = i
@@ -676,19 +648,20 @@ contains
                     if (len_trim(L(j)%s) == 0) exit
                     j = j + 1
                 end do
-                call other_block()
-                call quote_block(L(i:j - 1), j - i, ctx)
+                call other_block(doc)
+                call quote_block(doc, L(i:j - 1), j - i, ctx)
                 i = j
             else if (is_item(s, k, lev)) then
-                call other_block()
-                call list_block(L, n, i, ctx, blank_before)
+                call other_block(doc)
+                call list_block(doc, L, n, i, ctx, blank_before)
             else if (is_rule(t)) then
-                call other_block()
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
-                call ts_end_par()
-                call ts_rule(0.5_dp*(ts_hsize() - ctx%left - ctx%right), 0.5_dp, ctx%color)
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call other_block(doc)
+                call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
+                call ts_end_par(doc%engine)
+                call ts_rule(doc%engine, 0.5_dp*(ts_hsize(doc%engine) - ctx%left - ctx%right), &
+                        0.5_dp, ctx%color)
+                call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
                 i = i + 1
             else
                 para = ""
@@ -711,17 +684,17 @@ contains
                     t = trim(adjustl(L(j)%s))
                     if (len(t) > 0 .and. (is_underline(t, "=") .or. is_underline(t, "-"))) then
                         if (is_underline(t, "=")) then
-                            call heading(trim(adjustl(para)), 1, ctx)
+                            call heading(doc, trim(adjustl(para)), 1, ctx)
                         else
-                            call heading(trim(adjustl(para)), 2, ctx)
+                            call heading(doc, trim(adjustl(para)), 2, ctx)
                         end if
                         i = j + 1
                         blank_before = .false.
                         cycle
                     end if
                 end if
-                call other_block()
-                call paragraph(para, ctx)
+                call other_block(doc)
+                call paragraph(doc, para, ctx)
                 i = j
             end if
             blank_before = .false.
@@ -730,31 +703,34 @@ contains
 
     ! A block that is not a heading: the targets before it label it, and a
     ! heading after it is not one straight after a heading.
-    subroutine other_block()
-        call place_targets()
-        AFTER_HEADING = .false.
+    recursive subroutine other_block(doc)
+        type(md_document_t), intent(inout) :: doc
+        call place_targets(doc)
+        doc%AFTER_HEADING = .false.
     end subroutine other_block
 
     ! The targets waiting for a block label it: a heading with its number
     ! and title, anything else with neither, for a reference that gives
     ! its own text.
-    subroutine place_targets(num, title)
+    recursive subroutine place_targets(doc, num, title)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in), optional :: num, title
         character(len=:), allocatable :: name
         integer :: k
-        do while (len_trim(TARGETS) > 0)
-            TARGETS = adjustl(TARGETS)
-            k = index(TARGETS, " ")
-            if (k == 0) k = len(TARGETS) + 1
-            name = TARGETS(1:k - 1)
-            TARGETS = TARGETS(k:)
+        if (.not. allocated(doc%TARGETS)) return
+        do while (len_trim(doc%TARGETS) > 0)
+            doc%TARGETS = adjustl(doc%TARGETS)
+            k = index(doc%TARGETS, " ")
+            if (k == 0) k = len(doc%TARGETS) + 1
+            name = doc%TARGETS(1:k - 1)
+            doc%TARGETS = doc%TARGETS(k:)
             if (present(num)) then
-                call add_label(name, num, title, LAB_SECTION)
+                call add_label(doc, name, num, title, LAB_SECTION)
             else
-                call add_label(name, "", "", LAB_OTHER)
+                call add_label(doc, name, "", "", LAB_OTHER)
             end if
         end do
-        TARGETS = ""
+        doc%TARGETS = ""
     end subroutine place_targets
 
     ! Whether a line starts a block that ends a paragraph before it.
@@ -806,49 +782,54 @@ contains
     end function open_display
 
     ! A paragraph of inline text in the context's settings.
-    subroutine paragraph(text, ctx)
+    recursive subroutine paragraph(doc, text, ctx)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         type(md_ctx_t), intent(in) :: ctx
         character(len=:), allocatable :: s
         real(dp) :: ind
         s = trim(adjustl(text))
         ind = 0.0_dp
-        if (ctx%indent .and. .not. NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = PARINDENT
-        NOINDENT = .false.
-        call ts_begin_par(ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
-                          leading=LEAD*ctx%size)
-        call put_labels(ctx, ctx%left)
-        call inline(s, base_style(ctx))
-        call ts_end_par()
+        if (ctx%indent .and. .not. doc%NOINDENT .and. ctx%align == ALIGN_JUSTIFY) &
+            ind = doc%PARINDENT
+        doc%NOINDENT = .false.
+        call ts_begin_par(doc%engine, ctx%align, ind, left=ctx%left, right=ctx%right, &
+                size=ctx%size, &
+                          leading=doc%LEAD*ctx%size)
+        call put_labels(doc, ctx, ctx%left)
+        call inline(doc, s, base_style(ctx))
+        call ts_end_par(doc%engine)
     end subroutine paragraph
 
     ! An item's label, waiting for the item's first line.
-    subroutine push_label(s, left)
+    recursive subroutine push_label(doc, s, left)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: left
         type(pending_t), allocatable :: grown(:)
-        if (.not. allocated(PENDING)) allocate (PENDING(4))
-        if (NPEND == size(PENDING)) then
-            allocate (grown(2*size(PENDING)))
-            grown(1:NPEND) = PENDING(1:NPEND)
-            call move_alloc(grown, PENDING)
+        if (.not. allocated(doc%PENDING)) allocate (doc%PENDING(4))
+        if (doc%NPEND == size(doc%PENDING)) then
+            allocate (grown(2*size(doc%PENDING)))
+            grown(1:doc%NPEND) = doc%PENDING(1:doc%NPEND)
+            call move_alloc(grown, doc%PENDING)
         end if
-        NPEND = NPEND + 1
-        PENDING(NPEND)%s = s
-        PENDING(NPEND)%left = left
+        doc%NPEND = doc%NPEND + 1
+        doc%PENDING(doc%NPEND)%s = s
+        doc%PENDING(doc%NPEND)%left = left
     end subroutine push_label
 
     ! The labels waiting for the line just begun, whose text starts at
     ! left: each half an em before its own item's text.
-    subroutine put_labels(ctx, left)
+    recursive subroutine put_labels(doc, ctx, left)
+        type(md_document_t), intent(inout) :: doc
         type(md_ctx_t), intent(in) :: ctx
         real(dp), intent(in) :: left
         integer :: k
-        do k = 1, NPEND
-            call ts_label(PENDING(k)%s, label_face(ctx), ctx%size, &
-                          0.5_dp*BASE + left - PENDING(k)%left, ctx%color)
+        do k = 1, doc%NPEND
+            call ts_label(doc%engine, doc%PENDING(k)%s, label_face(ctx), ctx%size, &
+                          0.5_dp*doc%BASE + left - doc%PENDING(k)%left, ctx%color)
         end do
-        NPEND = 0
+        doc%NPEND = 0
     end subroutine put_labels
 
     integer function label_face(ctx)
@@ -859,7 +840,8 @@ contains
 
     ! Headings: LaTeX's \section, \subsection and \subsubsection, numbered
     ! within the chapter in a book, unless on_heading sets them.
-    recursive subroutine heading(text0, level, ctx)
+    recursive subroutine heading(doc, text0, level, ctx)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text0
         integer, intent(in) :: level
         type(md_ctx_t), intent(in) :: ctx
@@ -872,88 +854,90 @@ contains
         type(md_heading_t) :: this
 
         text = trim(text0)
-        ex = face_xheight(FACE_REGULAR)*BASE
+        ex = face_xheight(FACE_REGULAR)*doc%BASE
         lv = level
         num = ""
-        if (CHAPTERS .and. level == 1) then
-            CHAPTER = CHAPTER + 1
-            SEC = 0
-            EQNO = 0
-            if (NUMBER_SECTIONS) num = itoa(CHAPTER)
+        if (doc%CHAPTERS .and. level == 1) then
+            doc%CHAPTER = doc%CHAPTER + 1
+            doc%SEC = 0
+            doc%EQNO = 0
+            if (doc%NUMBER_SECTIONS) num = itoa(doc%CHAPTER)
         else
-            if (CHAPTERS) lv = level - 1
-            if (NUMBER_SECTIONS .and. lv <= 3) then
-                SEC(lv) = SEC(lv) + 1
-                SEC(lv + 1:) = 0
-                if (CHAPTERS) then
-                    num = itoa(CHAPTER)
+            if (doc%CHAPTERS) lv = level - 1
+            if (doc%NUMBER_SECTIONS .and. lv <= 3) then
+                doc%SEC(lv) = doc%SEC(lv) + 1
+                doc%SEC(lv + 1:) = 0
+                if (doc%CHAPTERS) then
+                    num = itoa(doc%CHAPTER)
                 else
-                    num = itoa(SEC(1))
+                    num = itoa(doc%SEC(1))
                 end if
-                do k = merge(1, 2, CHAPTERS), lv
-                    num = num//"."//itoa(SEC(k))
+                do k = merge(1, 2, doc%CHAPTERS), lv
+                    num = num//"."//itoa(doc%SEC(k))
                 end do
             end if
         end if
-        call place_targets(num, strip_markup(text))
-        if (associated(CB_HEAD)) then
+        call place_targets(doc, num, strip_markup(text))
+        if (associated(doc%CB_HEAD)) then
             this%level = level
             this%text = text
             this%num = num
             handled = .false.
-            call CB_HEAD(this, ctx, handled)
+            call doc%CB_HEAD(doc, this, ctx, handled)
             if (handled) then
-                AFTER_HEADING = .true.
+                doc%AFTER_HEADING = .true.
                 return
             end if
         end if
         select case (lv)
         case (1)
-            size = 1.44_dp*BASE
-            baseline = 18.0_dp*BASE/10.0_dp
+            size = 1.44_dp*doc%BASE
+            baseline = 18.0_dp*doc%BASE/10.0_dp
             before = ts_glue_t(3.5_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(2.3_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case (2)
-            size = 1.2_dp*BASE
-            baseline = 14.0_dp*BASE/10.0_dp
+            size = 1.2_dp*doc%BASE
+            baseline = 14.0_dp*doc%BASE/10.0_dp
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case default
-            size = BASE
-            baseline = LEAD*BASE
+            size = doc%BASE
+            baseline = doc%LEAD*doc%BASE
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
         ! Straight after a heading, the space after that one is all there
         ! is, as \@startsection has it when @nobreak is set.
-        if (.not. AFTER_HEADING) then
-            call ts_addpenalty(-300)
-            call ts_addvspace(before)
+        if (.not. doc%AFTER_HEADING) then
+            call ts_addpenalty(doc%engine, -300)
+            call ts_addvspace(doc%engine, before)
         end if
         st = base_style(ctx)
         st%bold = .true.
         st%size = size
         hang = 0.0_dp
         if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
-        call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
+        call ts_begin_par(doc%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, &
+                size=size, &
                           leading=baseline, hang=hang, nobreak=.true.)
         if (len(num) > 0) then
-            call ts_word(num, FACE_BOLD, size, ctx%color)
-            call ts_kern(size)
+            call ts_word(doc%engine, num, FACE_BOLD, size, ctx%color)
+            call ts_kern(doc%engine, size)
         end if
-        call inline(text, st)
-        call ts_end_par()
-        call ts_penalty(10000)
-        call ts_vskip(after)
-        call ts_nobreak_next()
-        NOINDENT = .true.
-        AFTER_HEADING = .true.
+        call inline(doc, text, st)
+        call ts_end_par(doc%engine)
+        call ts_penalty(doc%engine, 10000)
+        call ts_vskip(doc%engine, after)
+        call ts_nobreak_next(doc%engine)
+        doc%NOINDENT = .true.
+        doc%AFTER_HEADING = .true.
     end subroutine heading
 
     ! A list: LaTeX's itemize or enumerate, with its spacing at the depth
     ! it is at. A tight list (no blank lines between its items) is set as
     ! Pandoc's \tightlist sets it, without \itemsep and \parsep.
-    recursive subroutine list_block(L, n, i, ctx, blank_before)
+    recursive subroutine list_block(doc, L, n, i, ctx, blank_before)
+        type(md_document_t), intent(inout) :: doc
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         integer, intent(inout) :: i
@@ -967,29 +951,29 @@ contains
         real(dp) :: lm, f
         character(len=:), allocatable :: s
 
-        f = BASE/10.0_dp
+        f = doc%BASE/10.0_dp
         lev = min(ctx%depth + 1, 4)
         select case (lev)
         case (1)
             topsep = ts_glue_t(8.0_dp*f, 2.0_dp*f, 4.0_dp*f, 0, 0)
             parsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.5_dp*BASE
+            lm = 2.5_dp*doc%BASE
         case (2)
             topsep = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             itemsep = parsep
-            lm = 2.2_dp*BASE
+            lm = 2.2_dp*doc%BASE
         case (3)
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.87_dp*BASE
+            lm = 1.87_dp*doc%BASE
         case default
             topsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
             parsep = ts_glue_t(0.0_dp, 1.0_dp*f, 0.0_dp, 0, 0)
             itemsep = topsep
-            lm = 1.7_dp*BASE
+            lm = 1.7_dp*doc%BASE
         end select
         partopsep = ts_glue_t(2.0_dp*f, 1.0_dp*f, 1.0_dp*f, 0, 0)
 
@@ -1046,17 +1030,17 @@ contains
         else
             sub%elev = ctx%elev + 1
         end if
-        if (NPEND > 0) then
+        if (doc%NPEND > 0) then
             ! A list that begins an item starts on the item's first line,
             ! its labels after the item's, as LaTeX's \@donoparitem has it.
-            call ts_end_par()
-        else if (blank_before .and. .not. ts_in_par()) then
-            call ts_addpenalty(-51)
-            call ts_addvspace(add_glue(topsep, partopsep))
+            call ts_end_par(doc%engine)
+        else if (blank_before .and. .not. ts_in_par(doc%engine)) then
+            call ts_addpenalty(doc%engine, -51)
+            call ts_addvspace(doc%engine, add_glue(topsep, partopsep))
         else
-            call ts_end_par()
-            call ts_addpenalty(-51)
-            call ts_addvspace(topsep)
+            call ts_end_par(doc%engine)
+            call ts_addpenalty(doc%engine, -51)
+            call ts_addvspace(doc%engine, topsep)
         end if
 
         num = start_num
@@ -1089,41 +1073,43 @@ contains
             end do
             nitem = nitem + 1
             if (nitem > 1) then
-                call ts_addpenalty(-51)
-                call ts_addvspace(itemsep)
+                call ts_addpenalty(doc%engine, -51)
+                call ts_addvspace(doc%engine, itemsep)
             end if
-            call push_label(list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num), sub%left)
-            call ts_set_parskip(parsep)
-            call blocks(item, ni, sub)
-            if (NPEND > 0) then
+            call push_label(doc, list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num), &
+                    sub%left)
+            call ts_set_parskip(doc%engine, parsep)
+            call blocks(doc, item, ni, sub)
+            if (doc%NPEND > 0) then
                 ! An item with no paragraph of its own still has its label.
-                call ts_begin_par(sub%align, 0.0_dp, left=sub%left, right=sub%right, &
+                call ts_begin_par(doc%engine, sub%align, 0.0_dp, left=sub%left, right=sub%right, &
                                   size=sub%size)
-                call put_labels(sub, sub%left)
-                call ts_strut(0.7_dp*sub%size, 0.3_dp*sub%size)
-                call ts_end_par()
+                call put_labels(doc, sub, sub%left)
+                call ts_strut(doc%engine, 0.7_dp*sub%size, 0.3_dp*sub%size)
+                call ts_end_par(doc%engine)
             end if
             deallocate (item)
             num = num + 1
             j = k
         end do
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
+        call ts_end_par(doc%engine)
+        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(doc%engine, parsep_of(doc, ctx%depth))
+        call ts_addpenalty(doc%engine, -51)
         if (ctx%depth == 0) then
-            call ts_addvspace(add_glue(topsep, partopsep))
+            call ts_addvspace(doc%engine, add_glue(topsep, partopsep))
         else
-            call ts_addvspace(topsep)
+            call ts_addvspace(doc%engine, topsep)
         end if
         i = m + 1
     end subroutine list_block
 
-    function parsep_of(depth) result(g)
+    recursive function parsep_of(doc, depth) result(g)
+        type(md_document_t), intent(in) :: doc
         integer, intent(in) :: depth
         type(ts_glue_t) :: g
         real(dp) :: f
-        f = BASE/10.0_dp
+        f = doc%BASE/10.0_dp
         select case (depth)
         case (1)
             g = ts_glue_t(4.0_dp*f, 2.0_dp*f, 1.0_dp*f, 0, 0)
@@ -1166,7 +1152,8 @@ contains
 
     ! A block quote: LaTeX's quote environment, a list with no label and
     ! equal margins.
-    recursive subroutine quote_block(L, n, ctx)
+    recursive subroutine quote_block(doc, L, n, ctx)
+        type(md_document_t), intent(inout) :: doc
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         type(md_ctx_t), intent(in) :: ctx
@@ -1189,43 +1176,44 @@ contains
         end do
         sub = ctx
         sub%depth = ctx%depth + 1
-        sub%left = ctx%left + 2.5_dp*BASE
-        sub%right = ctx%right + 2.5_dp*BASE
+        sub%left = ctx%left + 2.5_dp*doc%BASE
+        sub%right = ctx%right + 2.5_dp*doc%BASE
         sub%indent = .false.
-        call ts_end_par()
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(parsep_of(sub%depth))
-        call blocks(q, n, sub)
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_end_par(doc%engine)
+        call ts_addpenalty(doc%engine, -51)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(doc%engine, parsep_of(doc, sub%depth))
+        call blocks(doc, q, n, sub)
+        call ts_end_par(doc%engine)
+        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(doc%engine, parsep_of(doc, ctx%depth))
+        call ts_addpenalty(doc%engine, -51)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine quote_block
 
     ! Fenced code: each line as it is, unbroken, its spaces kept.
-    subroutine code_block(L, n, ctx)
+    recursive subroutine code_block(doc, L, n, ctx)
+        type(md_document_t), intent(inout) :: doc
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         type(md_ctx_t), intent(in) :: ctx
         integer :: k, i, j
         real(dp) :: sp
         character(len=:), allocatable :: s
-        call ts_end_par()
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(ts_glue_t())
+        call ts_end_par(doc%engine)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(doc%engine, ts_glue_t())
         sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size)
         do k = 1, n
             s = L(k)%s
-            call ts_begin_par(ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*BASE, &
-                              right=ctx%right, size=0.9_dp*ctx%size, leading=LEAD*ctx%size)
-            call ts_strut(0.7_dp*ctx%size, 0.3_dp*ctx%size)
-            if (k == 1) call put_labels(ctx, ctx%left + 1.5_dp*BASE)
+            call ts_begin_par(doc%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*doc%BASE, &
+                              right=ctx%right, size=0.9_dp*ctx%size, leading=doc%LEAD*ctx%size)
+            call ts_strut(doc%engine, 0.7_dp*ctx%size, 0.3_dp*ctx%size)
+            if (k == 1) call put_labels(doc, ctx, ctx%left + 1.5_dp*doc%BASE)
             i = 1
             do while (i <= len(s))
                 if (s(i:i) == " ") then
-                    call ts_kern(sp)
+                    call ts_kern(doc%engine, sp)
                     i = i + 1
                     cycle
                 end if
@@ -1234,19 +1222,20 @@ contains
                     if (s(j:j) == " ") exit
                     j = j + 1
                 end do
-                call ts_word(s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
+                call ts_word(doc%engine, s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
                 i = j
             end do
-            call ts_end_par()
+            call ts_end_par(doc%engine)
         end do
-        call ts_set_parskip(PARSKIP_G)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
     ! A MyST directive :::{name} argument, followed by :key: value options
     ! and content, dispatched to the caller's on_directive callback when
     ! supplied.
-    recursive subroutine set_div(open_line, L, i, j, ctx)
+    recursive subroutine set_div(doc, open_line, L, i, j, ctx)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: open_line
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: i, j
@@ -1295,27 +1284,29 @@ contains
         directive%opts = opts
         directive%body = body
         handled = .false.
-        if (associated(CB_DIR)) call CB_DIR(directive, ctx, handled)
+        if (associated(doc%CB_DIR)) call doc%CB_DIR(doc, directive, ctx, handled)
         if (.not. handled .and. j - 1 >= content_at) &
-            call blocks(L(content_at:j - 1), j - content_at, ctx)
+            call blocks(doc, L(content_at:j - 1), j - content_at, ctx)
     end subroutine set_div
 
     ! --- Template helpers -------------------------------------------------
 
-    recursive subroutine md_blocks(body, ctx)
+    recursive subroutine md_blocks(doc, body, ctx)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: body
         type(md_ctx_t), intent(in) :: ctx
         type(line_t), allocatable :: L(:)
         integer :: n
         if (len_trim(body) == 0) return
         call split_lines(body, L, n)
-        if (n > 0) call blocks(L, n, ctx)
+        if (n > 0) call blocks(doc, L, n, ctx)
     end subroutine md_blocks
 
-    subroutine md_inline(text, ctx)
+    recursive subroutine md_inline(doc, text, ctx)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         type(md_ctx_t), intent(in) :: ctx
-        call inline(text, base_style(ctx))
+        call inline(doc, text, base_style(ctx))
     end subroutine md_inline
 
     function md_option(opts, key) result(val)
@@ -1345,33 +1336,37 @@ contains
         end do
     end function md_option
 
-    function md_meta(key) result(val)
+    recursive function md_meta(doc, key) result(val)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: key
         character(len=:), allocatable :: val, want
         integer :: k
         val = ""
         want = lower(trim(key))
-        do k = 1, NMETA
-            if (META(k)%key == want) then
-                val = META(k)%val
+        do k = 1, doc%NMETA
+            if (doc%META(k)%key == want) then
+                val = doc%META(k)%val
                 return
             end if
         end do
     end function md_meta
 
-    subroutine md_noindent(flag)
+    recursive subroutine md_noindent(doc, flag)
+        type(md_document_t), intent(inout) :: doc
         logical, intent(in) :: flag
-        NOINDENT = flag
+        doc%NOINDENT = flag
     end subroutine md_noindent
 
-    real(dp) function md_base_size()
-        md_base_size = BASE
+    recursive real(dp) function md_base_size(doc)
+        type(md_document_t), intent(in) :: doc
+        md_base_size = doc%BASE
     end function md_base_size
 
-    real(dp) function md_length(v, size)
+    recursive real(dp) function md_length(doc, v, size)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: v
         real(dp), intent(in) :: size
-        md_length = length(v, size)
+        md_length = length(doc, v, size)
     end function md_length
 
     integer function md_color(v, dflt)
@@ -1411,7 +1406,8 @@ contains
     end function face_of
 
     ! Set inline text s in style st0 into the current paragraph.
-    recursive subroutine inline(s, st0)
+    recursive subroutine inline(doc, s, st0)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st0
         type(style_t) :: st, sp
@@ -1439,7 +1435,7 @@ contains
                 if (c == " " .and. i + 2 <= len(s)) then
                     if (s(i:i + 2) == "  "//NL) then
                         call flush()
-                        call ts_hard_break()
+                        call ts_hard_break(doc%engine)
                         space = .false.
                         i = i + 3
                         cycle
@@ -1501,7 +1497,7 @@ contains
                 sp%code = .true.
                 sp%bold = .false.
                 sp%italic = .false.
-                call plain(trim(adjustl(s(i + r:i + r + j - 2))), sp, verbatim=.true.)
+                call plain(doc, trim(adjustl(s(i + r:i + r + j - 2))), sp, verbatim=.true.)
                 i = i + r + j - 1 + r
             case ("$")
                 if (i < len(s)) then
@@ -1513,8 +1509,9 @@ contains
                             src = s(i + 2:i + j)
                             k = i + j + 3
                             tag = ""
-                            call display_tag(s, k, tag)
-                            call ts_math(src, st%size, st%color, display=.true., tag=tag)
+                            call display_tag(doc, s, k, tag)
+                            call ts_math(doc%engine, src, st%size, st%color, display=.true., &
+                                    tag=tag)
                             space = .false.
                             i = k
                             do while (i <= len(s))
@@ -1533,7 +1530,7 @@ contains
                 if (j > 0) then
                     call flush()
                     call flush_space()
-                    call ts_math(s(i + 1:j - 1), st%size, st%color, display=.false.)
+                    call ts_math(doc%engine, s(i + 1:j - 1), st%size, st%color, display=.false.)
                     i = j + 1
                 else
                     w = w//"$"
@@ -1548,7 +1545,7 @@ contains
                 next = s(i + 1:i + 1)
                 if (next == NL) then
                     call flush()
-                    call ts_hard_break()
+                    call ts_hard_break(doc%engine)
                     space = .false.
                     i = i + 2
                 else if (punct(next)) then
@@ -1568,7 +1565,7 @@ contains
                             sp = st
                             sp%color = LINK_COL
                             call flush_space()
-                            call inline(s(i + 1:j - 1), sp)
+                            call inline(doc, s(i + 1:j - 1), sp)
                             i = j + k + 1
                             cycle
                         end if
@@ -1585,7 +1582,7 @@ contains
                         k = index(s(i + j + 1:), "`")
                         if (k > 1) then
                             arg = trim(s(i + j + 1:i + j + k - 1))
-                            w = w//reference(cmd, arg)
+                            w = w//reference(doc, cmd, arg)
                             i = i + j + k + 1
                             cycle
                         end if
@@ -1640,7 +1637,7 @@ contains
                 call utf8_next(s, i, cp, nb)
                 if (cp == 160) then
                     call flush()
-                    call ts_nbsp(face_of(st), st%size)
+                    call ts_nbsp(doc%engine, face_of(st), st%size)
                     space = .false.
                 else
                     w = w//s(i:i + nb - 1)
@@ -1657,15 +1654,15 @@ contains
             if (len(w) == 0) return
             call flush_space()
             if (st%code) then
-                call ts_word(w, FACE_REGULAR, st%size, CODE_COL)
+                call ts_word(doc%engine, w, FACE_REGULAR, st%size, CODE_COL)
             else
-                call ts_word(w, face_of(st), st%size, st%color)
+                call ts_word(doc%engine, w, face_of(st), st%size, st%color)
             end if
             w = ""
         end subroutine flush
 
         subroutine flush_space()
-            if (space) call ts_space(sp_face, sp_size)
+            if (space) call ts_space(doc%engine, sp_face, sp_size)
             space = .false.
         end subroutine flush_space
 
@@ -1759,7 +1756,8 @@ contains
     end function has_closer
 
     ! Text set as it is, without markup (code spans).
-    subroutine plain(t, st, verbatim)
+    recursive subroutine plain(doc, t, st, verbatim)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: t
         type(style_t), intent(in) :: st
         logical, intent(in) :: verbatim
@@ -1767,7 +1765,7 @@ contains
         i = 1
         do while (i <= len(t))
             if (t(i:i) == " ") then
-                call ts_space(FACE_REGULAR, st%size)
+                call ts_space(doc%engine, FACE_REGULAR, st%size)
                 i = i + 1
                 cycle
             end if
@@ -1777,9 +1775,9 @@ contains
                 j = j + 1
             end do
             if (verbatim) then
-                call ts_word(t(i:j - 1), FACE_REGULAR, st%size, CODE_COL)
+                call ts_word(doc%engine, t(i:j - 1), FACE_REGULAR, st%size, CODE_COL)
             else
-                call ts_word(t(i:j - 1), face_of(st), st%size, st%color)
+                call ts_word(doc%engine, t(i:j - 1), face_of(st), st%size, st%color)
             end if
             i = j
         end do
@@ -1814,23 +1812,24 @@ contains
     end function parse_display_label
 
     ! A MyST (label) after $$ numbers the display.
-    subroutine display_tag(s, k, tag)
+    recursive subroutine display_tag(doc, s, k, tag)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: s
         integer, intent(inout) :: k
         character(len=:), allocatable, intent(inout) :: tag
         character(len=:), allocatable :: name
         logical :: numbered
-        numbered = NUMBER_EQS
+        numbered = doc%NUMBER_EQS
         if (parse_display_label(s, k, name)) numbered = .true.
         if (numbered) then
-            EQNO = EQNO + 1
-            if (CHAPTERS) then
-                tag = itoa(CHAPTER)//"."//itoa(EQNO)
+            doc%EQNO = doc%EQNO + 1
+            if (doc%CHAPTERS) then
+                tag = itoa(doc%CHAPTER)//"."//itoa(doc%EQNO)
             else
-                tag = itoa(EQNO)
+                tag = itoa(doc%EQNO)
             end if
         end if
-        if (len(name) > 0) call add_label(name, tag, "", LAB_EQUATION)
+        if (len(name) > 0) call add_label(doc, name, tag, "", LAB_EQUATION)
     end subroutine display_tag
 
     ! ------------------------------------------------------------------
@@ -1840,34 +1839,36 @@ contains
     ! ------------------------------------------------------------------
 
     ! A label, recorded in the first pass; the second only reads them.
-    subroutine add_label(name, num, title, kind)
+    recursive subroutine add_label(doc, name, num, title, kind)
+        type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: name, num, title
         integer, intent(in) :: kind
         type(label_t), allocatable :: grown(:)
-        if (.not. FIRST_PASS) return
-        if (find_label(name) > 0) then
+        if (.not. doc%FIRST_PASS) return
+        if (find_label(doc, name) > 0) then
             write (error_unit, "(a)") "fplotlib: typeset: warning: duplicate label "//name
             return
         end if
-        if (.not. allocated(LABS)) allocate (LABS(64))
-        if (NLAB == size(LABS)) then
-            allocate (grown(2*size(LABS)))
-            grown(1:NLAB) = LABS(1:NLAB)
-            call move_alloc(grown, LABS)
+        if (.not. allocated(doc%LABS)) allocate (doc%LABS(64))
+        if (doc%NLAB == size(doc%LABS)) then
+            allocate (grown(2*size(doc%LABS)))
+            grown(1:doc%NLAB) = doc%LABS(1:doc%NLAB)
+            call move_alloc(grown, doc%LABS)
         end if
-        NLAB = NLAB + 1
-        LABS(NLAB)%name = name
-        LABS(NLAB)%num = num
-        LABS(NLAB)%title = title
-        LABS(NLAB)%kind = kind
+        doc%NLAB = doc%NLAB + 1
+        doc%LABS(doc%NLAB)%name = name
+        doc%LABS(doc%NLAB)%num = num
+        doc%LABS(doc%NLAB)%title = title
+        doc%LABS(doc%NLAB)%kind = kind
     end subroutine add_label
 
-    integer function find_label(name)
+    recursive integer function find_label(doc, name)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: name
         integer :: k
         find_label = 0
-        do k = 1, NLAB
-            if (LABS(k)%name == name) then
+        do k = 1, doc%NLAB
+            if (doc%LABS(k)%name == name) then
                 find_label = k
                 return
             end if
@@ -1880,7 +1881,8 @@ contains
     ! "text <target>", in which {numref} replaces %s and {number} with the
     ! number and {name} with the title. A reference that cannot be resolved
     ! is ??, and a warning, as in LaTeX.
-    function reference(role, arg) result(s)
+    recursive function reference(doc, role, arg) result(s)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: role, arg
         character(len=:), allocatable :: s, target, title
         integer :: r, a
@@ -1898,33 +1900,33 @@ contains
             end if
         end if
         s = "??"
-        r = find_label(target)
+        r = find_label(doc, target)
         if (r > 0) then
             select case (role)
             case ("eq")
-                if (LABS(r)%kind == LAB_EQUATION .and. len(LABS(r)%num) > 0) &
-                    s = "("//LABS(r)%num//")"
+                if (doc%LABS(r)%kind == LAB_EQUATION .and. len(doc%LABS(r)%num) > 0) &
+                    s = "("//doc%LABS(r)%num//")"
             case ("ref")
                 if (explicit) then
                     s = title
-                else if (len(LABS(r)%title) > 0) then
-                    s = LABS(r)%title
+                else if (len(doc%LABS(r)%title) > 0) then
+                    s = doc%LABS(r)%title
                 end if
             case ("numref")
-                if (len(LABS(r)%num) > 0) then
+                if (len(doc%LABS(r)%num) > 0) then
                     if (.not. explicit) then
                         title = "Section %s"
-                        if (LABS(r)%kind == LAB_EQUATION) title = "(%s)"
+                        if (doc%LABS(r)%kind == LAB_EQUATION) title = "(%s)"
                     end if
-                    s = replace(replace(replace(title, "%s", LABS(r)%num), "{number}", &
-                                        LABS(r)%num), "{name}", LABS(r)%title)
+                    s = replace(replace(replace(title, "%s", doc%LABS(r)%num), "{number}", &
+                                        doc%LABS(r)%num), "{name}", doc%LABS(r)%title)
                 end if
             end select
         else if (explicit .and. role == "ref") then
             s = title
         end if
         if (r == 0 .or. s == "??") &
-            call warn("unresolved reference {"//role//"}`"//trim(adjustl(arg))//"`")
+            call warn(doc, "unresolved reference {"//role//"}`"//trim(adjustl(arg))//"`")
     end function reference
 
     ! s with every occurrence of a replaced by b.
@@ -1945,9 +1947,10 @@ contains
 
     ! A warning about the document, as LaTeX gives one: written to the
     ! error unit in the pass that sets the pages, the document set anyway.
-    subroutine warn(message)
+    recursive subroutine warn(doc, message)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: message
-        if (FIRST_PASS) return
+        if (doc%FIRST_PASS) return
         write (error_unit, "(a)") "fplotlib: typeset: warning: "//message
     end subroutine warn
 
@@ -2310,20 +2313,22 @@ contains
 
     ! A number, for keys that take one; ok false, and a warning, when v
     ! is not one.
-    real(dp) function number(v, ok)
+    recursive real(dp) function number(doc, v, ok)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: v
         logical, intent(out) :: ok
         integer :: ios
         number = 0.0_dp
         read (v, *, iostat=ios) number
         ok = ios == 0
-        if (.not. ok) call warn("cannot read the number '"//trim(v)//"'")
+        if (.not. ok) call warn(doc, "cannot read the number '"//trim(v)//"'")
     end function number
 
     ! A length in points (1/72 in): a number with pt or bp, pc, in, cm,
     ! mm, em or ex (an em being size), a bare number in points. Nothing is
     ! 0; anything else is 0 too, with ok false and a warning.
-    real(dp) function length(v, size, ok)
+    recursive real(dp) function length(doc, v, size, ok)
+        type(md_document_t), intent(in) :: doc
         character(len=*), intent(in) :: v
         real(dp), intent(in) :: size
         logical, intent(out), optional :: ok
@@ -2368,17 +2373,18 @@ contains
         end if
         if (.not. good) then
             length = 0.0_dp
-            call warn("cannot read the length '"//t//"'")
+            call warn(doc, "cannot read the length '"//t//"'")
         end if
         if (present(ok)) ok = good
     end function length
 
     ! LaTeX's glue scaled from its 10pt values to the body size.
-    function scale(g) result(r)
+    recursive function scale(doc, g) result(r)
+        type(md_document_t), intent(in) :: doc
         type(ts_glue_t), intent(in) :: g
         type(ts_glue_t) :: r
         real(dp) :: f
-        f = BASE/10.0_dp
+        f = doc%BASE/10.0_dp
         r = ts_glue_t(g%w*f, g%st*f, g%sh*f, g%sto, g%sho)
     end function scale
 

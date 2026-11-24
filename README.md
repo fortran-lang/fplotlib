@@ -298,18 +298,18 @@ cannot be read is warned of and leaves the default. Other keys are kept for
 templates, which read them with `md_meta`.
 
 The core sets the article and book layouts and nothing else. A template is
-given to `typeset` as callbacks: `on_directive` is given each MyST directive,
-`:::{name} argument` with `:key: value` options and a body, as an
+given to `typeset` as callbacks that receive the `md_document_t` first (with
+its `doc%engine` public for `ts_*` calls): `on_directive` is given each MyST
+directive, `:::{name} argument` with `:key: value` options and a body, as an
 `md_directive_t`, and sets those it knows; `on_heading` is given each heading,
 its level, text and number, as an `md_heading_t`, and sets those it wants set its
 own way; and `on_body` adds what comes before and after the body. A callback that
 sets a block says so in `handled` (`.false.` on entry); whatever it leaves is set
-as the core sets it. A callback that sets blocks with `md_blocks` is called again
-for a directive or heading among them, before it returns, so it is declared
-`recursive`; it may not call `typeset` itself, one document being set at a time. The gallery's letter sets
-its sender, recipient and closing so, with the room for the signature from its
-`signature-skip`, and its invitation centres the card when the front matter says
-`valign: center`.
+as the core sets it. A callback that sets blocks with `md_blocks` or sets a
+nested document with `md_typeset`/`typeset` is declared `recursive`, and leaves
+the outer document untouched. The gallery's letter sets its sender, recipient
+and closing so, with the room for the signature from its `signature-skip`, and
+its invitation centres the card when the front matter says `valign: center`.
 
 `tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
 lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`

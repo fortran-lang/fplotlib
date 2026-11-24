@@ -1693,11 +1693,12 @@ contains
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
 
-    recursive subroutine doc_directive(d, ctx, handled)
-        use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, &
-                                     md_color, md_align, md_noindent, md_base_size
+    recursive subroutine doc_directive(doc, d, ctx, handled)
+        use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, &
+                                     md_option, md_color, md_align, md_noindent, md_base_size
         use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
                                     ts_glue_t, ALIGN_JUSTIFY
+        type(md_document_t), intent(inout) :: doc
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -1709,24 +1710,24 @@ contains
         handled = d%name == "div" .or. d%name == "pagebreak"
         if (.not. handled) return
         if (d%name == "pagebreak") then
-            call ts_page_break()
-            call md_noindent(.false.)
+            call ts_page_break(doc%engine)
+            call md_noindent(doc, .false.)
             return
         end if
         sub = ctx
-        f = md_base_size()/10.0_dp
+        f = md_base_size(doc)/10.0_dp
         around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
         al = md_align(md_option(d%opts, "align"), -1)
         if (al >= 0) then
             sub%align = al
             if (al /= ALIGN_JUSTIFY) sub%indent = .false.
         end if
-        if (md_option(d%opts, "size") == "large") sub%size = 1.2_dp*md_base_size()
+        if (md_option(d%opts, "size") == "large") sub%size = 1.2_dp*md_base_size(doc)
         sub%color = md_color(md_option(d%opts, "color"), sub%color)
-        if (al >= 0) call ts_addvspace(around)
-        call md_blocks(d%body, sub)
-        call ts_end_par()
-        if (al >= 0) call ts_addvspace(around)
+        if (al >= 0) call ts_addvspace(doc%engine, around)
+        call md_blocks(doc, d%body, sub)
+        call ts_end_par(doc%engine)
+        if (al >= 0) call ts_addvspace(doc%engine, around)
     end subroutine doc_directive
 
     ! A repeatable stand-in for random numbers: the fractional part of a
