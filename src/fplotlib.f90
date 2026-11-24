@@ -7526,10 +7526,12 @@ contains
     ! with exit code 2. The figures are not touched. on_directive,
     ! on_body and on_heading are a template's callbacks (fplotlib_markdown);
     ! the document is set twice, as LaTeX is run twice, and they are
-    ! called in both passes. A callback may not call typeset itself.
+    ! called in both passes. A callback may not call typeset itself; the
+    ! two are recursive only so that such a call reaches md_typeset's check.
     ! ------------------------------------------------------------------
 
-    subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, on_heading)
+    recursive subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, &
+                                      on_heading)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
@@ -7544,7 +7546,8 @@ contains
     ! The document as an array of lines, which is how a Fortran program
     ! most easily spells one; trailing blanks are dropped, so a hard line
     ! break is a backslash at the end of a line.
-    subroutine typeset_lines(lines, filename, dpi, status, on_directive, on_body, on_heading)
+    recursive subroutine typeset_lines(lines, filename, dpi, status, on_directive, on_body, &
+                                       on_heading)
         character(len=*), intent(in) :: lines(:), filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status

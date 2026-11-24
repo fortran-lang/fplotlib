@@ -189,7 +189,7 @@ contains
     ! The document is set twice (see FIRST_PASS), so the callbacks are
     ! called twice, and only the second pass's pages are kept. A callback
     ! may not set a document of its own: that is a broken precondition.
-    subroutine md_typeset(text, on_directive, on_body, on_heading)
+    recursive subroutine md_typeset(text, on_directive, on_body, on_heading)
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
