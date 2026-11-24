@@ -7,11 +7,13 @@ program test_plots
     use test_glyph_runs, only: glyph_runs_check
     use test_frame_backends, only: frame_backend_check
     use test_frames, only: frames_check
+    use test_hyph, only: hyph_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nmissing, ncontract
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
+    integer :: nhyph
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1604,6 +1606,8 @@ program test_plots
     call frame_backend_check(nbackend)
     ! Owned frames and pages; see test_frames.f90.
     call frames_check(nframe)
+    ! English hyphenation patterns; see test_hyph.f90.
+    call hyph_check(nhyph)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1616,6 +1620,7 @@ program test_plots
     if (nglyph > 0) error stop "glyph runs failed"
     if (nbackend > 0) error stop "frame backends failed"
     if (nframe > 0) error stop "owned frames failed"
+    if (nhyph > 0) error stop "hyphenation failed"
 
 contains
 
