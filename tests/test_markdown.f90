@@ -46,6 +46,7 @@ contains
         call numbering_cases(ncase, nfail)
         call role_cases(ncase, nfail)
         call display_cases(ncase, nfail)
+        call page_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -123,15 +124,39 @@ contains
         call expect("unclosed display", t, "Costs $$ 5 here.", ncase, nfail)
     end subroutine display_cases
 
+    ! A heading and the line after it that do not fit at the foot of the
+    ! last page go onto a new page, not into the margin.
+    subroutine page_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f, md
+        real(dp) :: lowest
+        integer :: k
+
+        md = "---"//NL//"paper: 300 x 322"//NL//"pagenumbers: false"//NL//"---"//NL
+        do k = 1, 30
+            md = md//"Line."//NL//NL
+        end do
+        call set_doc(md//"# Last"//NL//NL//"Final words.", t, f, lowest)
+        ncase = ncase + 1
+        if (lowest > 322.0_dp - 72.0_dp) then
+            nfail = nfail + 1
+            print "(a,f0.1,a)", "  FAIL markdown last page: a line at ", lowest, &
+                " is below the text, which ends at 250"
+        end if
+        call expect("last page", t, FF//"Last"//NL//"Final words.", ncase, nfail)
+    end subroutine page_cases
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
 
-    ! The text of document md's pages, and the face of each of its bytes
-    ! ("0" + face, " " for a space or line end).
-    subroutine set_doc(md, text, faces)
+    ! The text of document md's pages, the face of each of its bytes
+    ! ("0" + face, " " for a space or line end), and the lowest baseline
+    ! on any page.
+    subroutine set_doc(md, text, faces, lowest)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
+        real(dp), intent(out), optional :: lowest
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
@@ -140,10 +165,12 @@ contains
         call ts_page_size(w, h, col)
         text = ""
         faces = ""
+        if (present(lowest)) lowest = 0.0_dp
         do p = 1, ts_page_count()
             call r%open_canvas(w, h)
             call ts_page_draw(r, p)
             call r%close_canvas()
+            if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
             if (p > 1) then
                 text = text//FF
                 faces = faces//" "

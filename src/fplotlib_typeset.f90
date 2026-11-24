@@ -1884,7 +1884,7 @@ contains
     ! cheapest so far is remembered, and when the page is overfull or a
     ! penalty forces a break, the page ends at the cheapest.
     subroutine ts_paginate()
-        integer :: i, start, best, c, b, pi
+        integer :: i, start, best, c, pi
         integer :: least
         real(dp) :: total, depth, so_far(6), goal
         logical :: empty, legal, plain, pplain
@@ -1925,29 +1925,7 @@ contains
                     if (VP(i) == 1) pplain = .true.
                 end select
                 if (legal) then
-                    if (total < goal) then
-                        if (so_far(3) /= 0.0_dp .or. so_far(4) /= 0.0_dp .or. &
-                            so_far(5) /= 0.0_dp) then
-                            b = 0
-                        else
-                            b = badness(goal - total, so_far(2))
-                        end if
-                    else if (total - goal > so_far(6)) then
-                        b = AWFUL_BAD
-                    else
-                        b = badness(total - goal, so_far(6))
-                    end if
-                    if (b < AWFUL_BAD) then
-                        if (pi <= EJECT_PENALTY) then
-                            c = pi
-                        else if (b < INF_BAD) then
-                            c = b + pi
-                        else
-                            c = DEPLORABLE
-                        end if
-                    else
-                        c = b
-                    end if
+                    c = break_cost(total, goal, so_far, pi)
                     if (c <= least) then
                         best = i
                         least = c
@@ -1987,10 +1965,14 @@ contains
                 i = i + 1
             end do
             if (empty) exit
-            ! Running out of material ends the page, as \end{document} does.
+            ! Running out of material is a break that ends the page, as
+            ! \end{document}'s \clearpage is; when what is left does not
+            ! fit, the page ends at the best break before it.
             if (i > NV) then
-                best = NV + 1
-                plain = pplain
+                if (break_cost(total, goal, so_far, EJECT_PENALTY) <= least) then
+                    best = NV + 1
+                    plain = pplain
+                end if
             end if
             NPAGE = NPAGE + 1
             PG0(NPAGE) = start
@@ -2003,6 +1985,37 @@ contains
             start = best
         end do
     end subroutine ts_paginate
+
+    ! The cost of breaking a page whose material so far is total high,
+    ! with so_far its stretch (of each order) and shrink, at a penalty pi:
+    ! TeX's page badness, AWFUL_BAD when the page cannot shrink to goal.
+    integer function break_cost(total, goal, so_far, pi) result(c)
+        real(dp), intent(in) :: total, goal, so_far(6)
+        integer, intent(in) :: pi
+        integer :: b
+        if (total < goal) then
+            if (so_far(3) /= 0.0_dp .or. so_far(4) /= 0.0_dp .or. so_far(5) /= 0.0_dp) then
+                b = 0
+            else
+                b = badness(goal - total, so_far(2))
+            end if
+        else if (total - goal > so_far(6)) then
+            b = AWFUL_BAD
+        else
+            b = badness(total - goal, so_far(6))
+        end if
+        if (b < AWFUL_BAD) then
+            if (pi <= EJECT_PENALTY) then
+                c = pi
+            else if (b < INF_BAD) then
+                c = b + pi
+            else
+                c = DEPLORABLE
+            end if
+        else
+            c = b
+        end if
+    end function break_cost
 
     ! The running head of page p, as LaTeX's headings style has it: an
     ! even page carries the chapter's mark (the last on the page or
