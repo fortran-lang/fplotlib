@@ -96,12 +96,21 @@ module fplotlib_markdown
     character(len=64) :: META_KEY(64)
     character(len=256) :: META_VAL(64)
 
-    ! Counters and cross references.
+    ! Counters and cross references. A label is a heading's or a display's
+    ! name, its number ("" when it has none) and, for a heading, its title.
     integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
+    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2
+    type :: label_t
+        character(len=:), allocatable :: name, num, title
+        integer :: kind = LAB_SECTION
+    end type label_t
     integer :: NLAB = 0
-    character(len=64) :: LAB_NAME(512)
-    character(len=24) :: LAB_TEXT(512)
-    character(len=256) :: LAB_TITLE(512)
+    type(label_t), allocatable :: LABS(:)
+
+    ! The document is set twice, as LaTeX is run twice: the first pass
+    ! numbers the headings and displays and records their labels, and the
+    ! second, with every label known, sets the pages.
+    logical :: FIRST_PASS = .false.
 
     ! Next paragraph is not indented (after a heading or display), and any
     ! pending list item label.
@@ -116,6 +125,8 @@ contains
     ! ------------------------------------------------------------------
 
     ! Set text, a MyST Markdown document, into fplotlib_typeset's pages.
+    ! The document is set twice (see FIRST_PASS), so the callbacks are
+    ! called twice, and only the second pass's pages are kept.
     subroutine md_typeset(text, on_directive, on_body, on_heading)
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
@@ -123,7 +134,7 @@ contains
         procedure(md_heading_cb), optional :: on_heading
         type(line_t), allocatable :: lines(:)
         type(md_ctx_t) :: ctx
-        integer :: n, first
+        integer :: n, first, pass
 
         CB_DIR => null()
         CB_BODY => null()
@@ -133,24 +144,29 @@ contains
         if (present(on_heading)) CB_HEAD => on_heading
 
         call split_lines(text, lines, n)
-        call ts_reset()
-        call defaults()
-        first = 1
-        call front_matter(lines, n, first)
-        call ts_set_font(BASE, LEAD*BASE)
-        call ts_set_parskip(PARSKIP_G)
-        call ts_set_colors(TEXT_COL, PAGE_COL)
-        call labels(lines, first, n)
-        SEC = 0
-        CHAPTER = 0
-        EQNO = 0
-        ctx%size = BASE
-        ctx%color = TEXT_COL
-        ctx%align = DOC_ALIGN
-        call title_block(ctx)
-        if (associated(CB_BODY)) call CB_BODY(.false., ctx)
-        if (first <= n) call blocks(lines(first:n), n - first + 1, ctx)
-        if (associated(CB_BODY)) call CB_BODY(.true., ctx)
+        NLAB = 0
+        do pass = 1, 2
+            FIRST_PASS = pass == 1
+            call ts_reset()
+            call defaults()
+            first = 1
+            call front_matter(lines, n, first)
+            call ts_set_font(BASE, LEAD*BASE)
+            call ts_set_parskip(PARSKIP_G)
+            call ts_set_colors(TEXT_COL, PAGE_COL)
+            SEC = 0
+            CHAPTER = 0
+            EQNO = 0
+            ctx = md_ctx_t()
+            ctx%size = BASE
+            ctx%color = TEXT_COL
+            ctx%align = DOC_ALIGN
+            call title_block(ctx)
+            if (associated(CB_BODY)) call CB_BODY(.false., ctx)
+            if (first <= n) call blocks(lines(first:n), n - first + 1, ctx)
+            if (associated(CB_BODY)) call CB_BODY(.true., ctx)
+        end do
+        FIRST_PASS = .false.
         call ts_paginate()
 
         CB_DIR => null()
@@ -175,7 +191,6 @@ contains
         TEXT_COL = 0
         PAGE_COL = 16777215
         NMETA = 0
-        NLAB = 0
         NOINDENT = .false.
         PENDING_LABEL = ""
         call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
@@ -429,7 +444,7 @@ contains
 
             if (is_target(t, lab) .and. i < n) then
                 if (is_heading(trim(adjustl(L(i + 1)%s)), lev)) then
-                    call heading(heading_text(trim(adjustl(L(i + 1)%s)), lev), lev, ctx)
+                    call heading(heading_text(trim(adjustl(L(i + 1)%s)), lev), lev, ctx, lab)
                     i = i + 2
                     blank_before = .false.
                     cycle
@@ -557,10 +572,11 @@ contains
     ! for a book, \chapter for #).
     ! Headings: LaTeX's \section, \subsection and \subsubsection, with
     ! optional template override via on_heading.
-    subroutine heading(text0, level, ctx)
+    subroutine heading(text0, level, ctx, target)
         character(len=*), intent(in) :: text0
         integer, intent(in) :: level
         type(md_ctx_t), intent(in) :: ctx
+        character(len=*), intent(in), optional :: target
         character(len=:), allocatable :: text, num
         type(style_t) :: st
         real(dp) :: ex, size, lead, hang
@@ -592,6 +608,7 @@ contains
                 end do
             end if
         end if
+        if (present(target)) call add_label(target, num, strip_markup(text), LAB_SECTION)
         if (associated(CB_HEAD)) then
             handled = .false.
             call CB_HEAD(level, text, num, ctx, handled)
@@ -1270,18 +1287,7 @@ contains
                         k = index(s(i + j + 1:), "`")
                         if (k > 1) then
                             arg = trim(s(i + j + 1:i + j + k - 1))
-                            r = find_label(arg)
-                            if (r > 0) then
-                                if (cmd == "eq") then
-                                    w = w//"("//trim(LAB_TEXT(r))//")"
-                                else if (cmd == "ref" .and. len_trim(LAB_TITLE(r)) > 0) then
-                                    w = w//trim(LAB_TITLE(r))
-                                else
-                                    w = w//trim(LAB_TEXT(r))
-                                end if
-                            else
-                                w = w//"??"
-                            end if
+                            w = w//reference(cmd, arg)
                             i = i + j + k + 1
                             cycle
                         end if
@@ -1439,118 +1445,33 @@ contains
                 tag = itoa(EQNO)
             end if
         end if
+        if (len(name) > 0) call add_label(name, tag, "", LAB_EQUATION)
     end subroutine display_tag
 
     ! ------------------------------------------------------------------
-    ! Cross references: the numbers of labelled displays and headings,
-    ! found before anything is set, so that a reference may come first.
+    ! Cross references: the labels of headings and displays, with the
+    ! numbers the first pass gave them, so that a reference may come
+    ! before what it refers to.
     ! ------------------------------------------------------------------
 
-    subroutine labels(lines, first, n)
-        type(line_t), intent(in) :: lines(:)
-        integer, intent(in) :: first, n
-        character(len=:), allocatable :: all, t, name, num
-        integer :: i, j, k, lev, raw_lev, eq, sec_(4), chap, nch
-        integer, allocatable :: chstart(:)
-        integer :: last_chap
-        logical :: numbered
-        ! The text, and where each chapter starts in it.
-        all = ""
-        allocate (chstart(n + 1))
-        nch = 0
-        do i = first, n
-            t = trim(adjustl(lines(i)%s))
-            if (CHAPTERS .and. is_heading(t, lev)) then
-                if (lev == 1) then
-                    nch = nch + 1
-                    chstart(nch) = len(all) + 1
-                end if
-            end if
-            all = all//lines(i)%s//NL
-        end do
-        eq = 0
-        sec_ = 0
-        chap = 0
-        last_chap = 0
-        ! Headings, in order; a MyST target (name)= on the previous line labels it.
-        do i = first, n
-            t = trim(adjustl(lines(i)%s))
-            if (.not. is_heading(t, lev)) cycle
-            raw_lev = lev
-            if (CHAPTERS .and. lev == 1) then
-                chap = chap + 1
-                sec_ = 0
-                num = itoa(chap)
-            else
-                if (CHAPTERS) lev = lev - 1
-                if (lev > 4) cycle
-                sec_(lev) = sec_(lev) + 1
-                sec_(lev + 1:) = 0
-                if (CHAPTERS) then
-                    num = itoa(chap)
-                else
-                    num = itoa(sec_(1))
-                end if
-                do k = merge(1, 2, CHAPTERS), lev
-                    num = num//"."//itoa(sec_(k))
-                end do
-            end if
-            if (i > first) then
-                if (is_target(trim(adjustl(lines(i - 1)%s)), name)) then
-                    call add_label(name, num, strip_markup(heading_text(t, raw_lev)))
-                end if
-            end if
-        end do
-        ! Displays, in order: $$ ... $$ (eq:name)
-        i = 1
-        do while (i < len(all))
-            if (all(i:i) == BS) then
-                i = i + 2
-                cycle
-            end if
-            if (all(i:i + 1) /= "$$") then
-                i = i + 1
-                cycle
-            end if
-            j = index(all(i + 2:), "$$")
-            if (j == 0) exit
-            k = i + j + 3
-            numbered = NUMBER_EQS
-            name = ""
-            if (parse_display_label(all, k, name)) numbered = .true.
-            if (numbered) then
-                chap = count(chstart(1:nch) <= i)
-                if (CHAPTERS) then
-                    if (chap /= a_chap()) eq = 0
-                end if
-                eq = eq + 1
-                if (len(name) > 0) then
-                    if (CHAPTERS) then
-                        call add_label(name, itoa(chap)//"."//itoa(eq), "")
-                    else
-                        call add_label(name, itoa(eq), "")
-                    end if
-                end if
-                last_chap = chap
-            end if
-            i = k
-        end do
-
-    contains
-
-        integer function a_chap()
-            a_chap = last_chap
-        end function a_chap
-
-    end subroutine labels
-
-    subroutine add_label(name, text, title)
-        character(len=*), intent(in) :: name, text, title
-        if (NLAB >= size(LAB_NAME)) return
+    ! A label, recorded in the first pass; the second only reads them.
+    subroutine add_label(name, num, title, kind)
+        character(len=*), intent(in) :: name, num, title
+        integer, intent(in) :: kind
+        type(label_t), allocatable :: grown(:)
+        if (.not. FIRST_PASS) return
+        if (find_label(name) > 0) return
+        if (.not. allocated(LABS)) allocate (LABS(64))
+        if (NLAB == size(LABS)) then
+            allocate (grown(2*size(LABS)))
+            grown(1:NLAB) = LABS(1:NLAB)
+            call move_alloc(grown, LABS)
+        end if
         NLAB = NLAB + 1
-        LAB_NAME(NLAB) = name
-        LAB_TEXT(NLAB) = text
-        LAB_TITLE(NLAB) = title
+        LABS(NLAB)%name = name
+        LABS(NLAB)%num = num
+        LABS(NLAB)%title = title
+        LABS(NLAB)%kind = kind
     end subroutine add_label
 
     integer function find_label(name)
@@ -1558,12 +1479,36 @@ contains
         integer :: k
         find_label = 0
         do k = 1, NLAB
-            if (trim(LAB_NAME(k)) == name) then
+            if (LABS(k)%name == name) then
                 find_label = k
                 return
             end if
         end do
     end function find_label
+
+    ! What a role writes for its target: {eq} the display's number in
+    ! parentheses, {numref} the number, {ref} the heading's title; ?? for
+    ! a target that has no label, or no number to write.
+    function reference(role, target) result(s)
+        character(len=*), intent(in) :: role, target
+        character(len=:), allocatable :: s
+        integer :: r
+        s = "??"
+        r = find_label(target)
+        if (r == 0) return
+        select case (role)
+        case ("eq")
+            if (len(LABS(r)%num) > 0) s = "("//LABS(r)%num//")"
+        case ("ref")
+            if (len(LABS(r)%title) > 0) then
+                s = LABS(r)%title
+            else if (len(LABS(r)%num) > 0) then
+                s = LABS(r)%num
+            end if
+        case default
+            if (len(LABS(r)%num) > 0) s = LABS(r)%num
+        end select
+    end function reference
 
     ! ------------------------------------------------------------------
     ! Recognizing lines.

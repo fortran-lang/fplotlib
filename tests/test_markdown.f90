@@ -1,0 +1,248 @@
+! Documents set from Markdown, checked by what their pages say.
+!
+! Each case sets a small document with md_typeset and reads its pages back
+! through a renderer that keeps the glyphs it is handed: a line is the
+! glyphs of one baseline, left to right, with a space wherever two glyphs
+! are further apart than the first one's advance. Pages are separated by
+! a form feed. The face of every byte of that text is kept beside it, so
+! that a case can ask whether a word came out italic.
+module test_markdown
+    use fplotlib_style, only: dp, utf8_char
+    use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
+    use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv
+    use fplotlib_markdown, only: md_typeset
+    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    implicit none
+    private
+
+    public :: markdown_check
+
+    character, parameter :: NL = achar(10), FF = achar(12)
+
+    type, extends(renderer_t) :: text_renderer_t
+        integer :: n = 0
+        real(dp), allocatable :: x(:), y(:), adv(:)
+        integer, allocatable :: cp(:), face(:)
+    contains
+        procedure :: open_canvas_impl => tr_open
+        procedure :: close_canvas_impl => tr_close
+        procedure :: draw_path_impl => tr_path
+        procedure :: draw_rect_impl => tr_rect
+        procedure :: draw_circle_impl => tr_circle
+        procedure :: draw_markers_impl => tr_markers
+        procedure :: draw_glyphs_impl => tr_glyphs
+        procedure :: draw_image_impl => tr_image
+    end type text_renderer_t
+
+contains
+
+    subroutine markdown_check(nfail)
+        integer, intent(out) :: nfail
+        integer :: ncase
+
+        nfail = 0
+        ncase = 0
+        call numbering_cases(ncase, nfail)
+        print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
+    end subroutine markdown_check
+
+    ! Sections and displays are numbered as they are set, and references
+    ! give those numbers, whatever else the text holds.
+    subroutine numbering_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        ! A "#" line in a fenced code block is code, not a heading.
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "# One"//NL//NL//"```sh"//NL//"# install"//NL//"make"//NL//"```"//NL//NL// &
+                     "(sec:two)="//NL//"# Two"//NL//NL//"Two is {numref}`sec:two`.", t, f)
+        call expect("code comment", t, "Two is 2.", ncase, nfail)
+        ! $$ in a code block or a code span is no display.
+        call set_doc("```"//NL//"$$ x $$ (eq:fake)"//NL//"```"//NL//NL// &
+                     "Code `$$ z $$ (eq:z)` and $$ y $$ (eq:real)"//NL// &
+                     "Real {eq}`eq:real`, fake {eq}`eq:fake`.", t, f)
+        call expect("code display", t, "Real (1), fake ??.", ncase, nfail)
+        ! An underlined heading is numbered as a # heading is.
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "One"//NL//"==="//NL//NL//"(sec:b)="//NL//"# Two"//NL//NL// &
+                     "Two is {numref}`sec:b`.", t, f)
+        call expect("setext heading", t, "Two is 2.", ncase, nfail)
+        ! So is a heading in a quotation.
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "> # Quoted"//NL//NL//"(sec:c)="//NL//"# After"//NL//NL// &
+                     "After is {numref}`sec:c`.", t, f)
+        call expect("quoted heading", t, "After is 2.", ncase, nfail)
+        ! A heading set without a number has none to refer to, but its
+        ! title can be.
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "# A"//NL//"## B"//NL//"### C"//NL//"(sec:d)="//NL//"#### D"//NL//NL// &
+                     "Deep {numref}`sec:d`, {ref}`sec:d`.", t, f)
+        call expect("deep heading", t, "Deep ??, D.", ncase, nfail)
+        call set_doc("(sec:a)="//NL//"# Alpha"//NL//NL//"Plain {numref}`sec:a`, {ref}`sec:a`.", &
+                     t, f)
+        call expect("unnumbered heading", t, "Plain ??, Alpha.", ncase, nfail)
+        ! In a book, displays are numbered within their chapter.
+        call set_doc("---"//NL//"chapters: true"//NL//"---"//NL// &
+                     "# A"//NL//NL//"$$ x $$ (eq:a)"//NL//NL//"# B"//NL//NL// &
+                     "$$ y $$ (eq:b)"//NL//NL//"See {eq}`eq:a` and {eq}`eq:b`.", t, f)
+        call expect("chapter displays", t, "See (1.1) and (2.1).", ncase, nfail)
+    end subroutine numbering_cases
+
+    ! ------------------------------------------------------------------
+    ! Setting a document and reading it back.
+    ! ------------------------------------------------------------------
+
+    ! The text of document md's pages, and the face of each of its bytes
+    ! ("0" + face, " " for a space or line end).
+    subroutine set_doc(md, text, faces)
+        character(len=*), intent(in) :: md
+        character(len=:), allocatable, intent(out) :: text, faces
+        type(text_renderer_t) :: r
+        real(dp) :: w, h
+        integer :: p, col
+
+        call md_typeset(md)
+        call ts_page_size(w, h, col)
+        text = ""
+        faces = ""
+        do p = 1, ts_page_count()
+            call r%open_canvas(w, h)
+            call ts_page_draw(r, p)
+            call r%close_canvas()
+            if (p > 1) then
+                text = text//FF
+                faces = faces//" "
+            end if
+            call page_lines(r, text, faces)
+        end do
+    end subroutine set_doc
+
+    ! The glyphs of a page, sorted into lines, appended to text and faces.
+    subroutine page_lines(r, text, faces)
+        type(text_renderer_t), intent(inout) :: r
+        character(len=:), allocatable, intent(inout) :: text, faces
+        integer, allocatable :: order(:)
+        character(len=:), allocatable :: c
+        integer :: i, j, k, t
+        order = [(i, i=1, r%n)]
+        ! By baseline, then from left to right.
+        do i = 2, r%n
+            t = order(i)
+            j = i - 1
+            do while (j >= 1)
+                if (.not. before(r, t, order(j))) exit
+                order(j + 1) = order(j)
+                j = j - 1
+            end do
+            order(j + 1) = t
+        end do
+        do i = 1, r%n
+            k = order(i)
+            if (i > 1) then
+                j = order(i - 1)
+                if (abs(r%y(k) - r%y(j)) > 0.01_dp) then
+                    text = text//NL
+                    faces = faces//" "
+                else if (r%x(k) - (r%x(j) + r%adv(j)) > 0.1_dp) then
+                    text = text//" "
+                    faces = faces//" "
+                end if
+            end if
+            c = utf8_char(r%cp(k))
+            text = text//c
+            faces = faces//repeat(achar(48 + r%face(k)), len(c))
+        end do
+    end subroutine page_lines
+
+    logical function before(r, a, b)
+        type(text_renderer_t), intent(in) :: r
+        integer, intent(in) :: a, b
+        if (abs(r%y(a) - r%y(b)) > 0.01_dp) then
+            before = r%y(a) < r%y(b)
+        else
+            before = r%x(a) < r%x(b)
+        end if
+    end function before
+
+    subroutine expect(what, text, want, ncase, nfail)
+        character(len=*), intent(in) :: what, text, want
+        integer, intent(inout) :: ncase, nfail
+        ncase = ncase + 1
+        if (index(text, want) > 0) return
+        nfail = nfail + 1
+        print "(a)", "  FAIL markdown "//what//": no '"//want//"' in:"
+        print "(a)", text
+    end subroutine expect
+
+    ! ------------------------------------------------------------------
+    ! The renderer.
+    ! ------------------------------------------------------------------
+
+    subroutine tr_open(self, width, height, bg_rgb, bg_alpha, x0, y0)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: width, height
+        integer, intent(in), optional :: bg_rgb(3)
+        real(dp), intent(in), optional :: bg_alpha, x0, y0
+        self%n = 0
+        if (.not. allocated(self%x)) allocate (self%x(0), self%y(0), self%adv(0), self%cp(0), &
+                                               self%face(0))
+    end subroutine tr_open
+
+    subroutine tr_close(self)
+        class(text_renderer_t), intent(inout) :: self
+    end subroutine tr_close
+
+    subroutine tr_path(self, x, y, verbs, n_verb, paint)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:)
+        integer, intent(in) :: verbs(:), n_verb
+        type(paint_t), intent(in) :: paint
+    end subroutine tr_path
+
+    subroutine tr_rect(self, x, y, w, h, paint, radius)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in), optional :: radius
+    end subroutine tr_rect
+
+    subroutine tr_circle(self, cx, cy, r, paint)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: cx, cy, r
+        type(paint_t), intent(in) :: paint
+    end subroutine tr_circle
+
+    subroutine tr_markers(self, x, y, mx, my, mverbs, n_mverb, paint)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x(:), y(:), mx(:), my(:)
+        integer, intent(in) :: mverbs(:), n_mverb
+        type(paint_t), intent(in) :: paint
+    end subroutine tr_markers
+
+    ! Each glyph at its place on the baseline it is drawn on.
+    subroutine tr_glyphs(self, x, y, run, paint, angle)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y
+        type(glyphrun_t), intent(in) :: run
+        type(paint_t), intent(in) :: paint
+        real(dp), intent(in) :: angle
+        integer :: k
+        do k = 1, run%n
+            self%x = [self%x(1:self%n), x + run%x(k)]
+            self%y = [self%y(1:self%n), y]
+            self%adv = [self%adv(1:self%n), glyph_adv(run%gid(k))*run%size(k)]
+            self%cp = [self%cp(1:self%n), glyph_char(run%gid(k))]
+            self%face = [self%face(1:self%n), glyph_face(run%gid(k))]
+            self%n = self%n + 1
+        end do
+    end subroutine tr_glyphs
+
+    subroutine tr_image(self, x, y, w, h, rgba, nx, ny, paint)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: x, y, w, h
+        integer, intent(in) :: nx, ny
+        integer, intent(in) :: rgba(:, :, :)
+        type(paint_t), intent(in) :: paint
+    end subroutine tr_image
+
+end module test_markdown

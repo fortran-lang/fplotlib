@@ -9,12 +9,14 @@ program test_plots
     use test_frames, only: frames_check
     use test_hyph, only: hyph_check
     use test_typeset, only: para_ref_check
+    use test_markdown, only: markdown_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nmissing, ncontract, npara
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
     integer :: nhyph
+    integer :: nmd
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1615,6 +1617,8 @@ program test_plots
     call frames_check(nframe)
     ! English hyphenation patterns; see test_hyph.f90.
     call hyph_check(nhyph)
+    ! Markdown documents, read back from their pages; see test_markdown.f90.
+    call markdown_check(nmd)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1629,6 +1633,7 @@ program test_plots
     if (nbackend > 0) error stop "frame backends failed"
     if (nframe > 0) error stop "owned frames failed"
     if (nhyph > 0) error stop "hyphenation failed"
+    if (nmd > 0) error stop "markdown documents failed"
 
 contains
 
