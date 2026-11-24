@@ -125,8 +125,11 @@ module fplotlib_markdown
     ! second, with every label known, sets the pages.
     logical :: FIRST_PASS = .false.
 
-    ! The MyST targets, (name)=, waiting for the block they label.
+    ! The MyST targets, (name)=, waiting for the block they label; and
+    ! whether the last block was a heading (LaTeX's @nobreak), after which
+    ! a heading adds no space and no break of its own.
     character(len=:), allocatable :: TARGETS
+    logical :: AFTER_HEADING = .false.
 
     ! Next paragraph is not indented (after a heading or display), and the
     ! labels of items waiting for their first line: an item's own and, when
@@ -180,6 +183,7 @@ contains
             CHAPTER = 0
             EQNO = 0
             TARGETS = ""
+            AFTER_HEADING = .false.
             ctx = md_ctx_t()
             ctx%size = BASE
             ctx%color = TEXT_COL
@@ -603,7 +607,7 @@ contains
                 call heading(heading_text(t, lev), lev, ctx)
                 i = i + 1
             else if (is_fence(t)) then
-                call place_targets()
+                call other_block()
                 j = i + 1
                 do while (j <= n)
                     if (is_fence(trim(adjustl(L(j)%s)))) exit
@@ -622,7 +626,7 @@ contains
                         if (depth == 0) exit
                     end if
                 end do
-                call place_targets()
+                call other_block()
                 call set_div(t, L, i, j, ctx)
                 i = j + 1
             else if (t(1:1) == ">") then
@@ -631,14 +635,14 @@ contains
                     if (len_trim(L(j)%s) == 0) exit
                     j = j + 1
                 end do
-                call place_targets()
+                call other_block()
                 call quote_block(L(i:j - 1), j - i, ctx)
                 i = j
             else if (is_item(s, k, lev)) then
-                call place_targets()
+                call other_block()
                 call list_block(L, n, i, ctx, blank_before)
             else if (is_rule(t)) then
-                call place_targets()
+                call other_block()
                 call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
                 call ts_begin_par(ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
                 call ts_end_par()
@@ -675,13 +679,20 @@ contains
                         cycle
                     end if
                 end if
-                call place_targets()
+                call other_block()
                 call paragraph(para, ctx)
                 i = j
             end if
             blank_before = .false.
         end do
     end subroutine blocks
+
+    ! A block that is not a heading: the targets before it label it, and a
+    ! heading after it is not one straight after a heading.
+    subroutine other_block()
+        call place_targets()
+        AFTER_HEADING = .false.
+    end subroutine other_block
 
     ! The targets waiting for a block label it: a heading with its number
     ! and title, anything else with neither, for a reference that gives
@@ -846,7 +857,10 @@ contains
         if (associated(CB_HEAD)) then
             handled = .false.
             call CB_HEAD(level, text, num, ctx, handled)
-            if (handled) return
+            if (handled) then
+                AFTER_HEADING = .true.
+                return
+            end if
         end if
         select case (lv)
         case (1)
@@ -865,8 +879,12 @@ contains
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
-        call ts_addpenalty(-300)
-        call ts_addvspace(before)
+        ! Straight after a heading, the space after that one is all there
+        ! is, as \@startsection has it when @nobreak is set.
+        if (.not. AFTER_HEADING) then
+            call ts_addpenalty(-300)
+            call ts_addvspace(before)
+        end if
         st = base_style(ctx)
         st%bold = .true.
         st%size = size
@@ -884,6 +902,7 @@ contains
         call ts_vskip(after)
         call ts_nobreak_next()
         NOINDENT = .true.
+        AFTER_HEADING = .true.
     end subroutine heading
 
     ! A list: LaTeX's itemize or enumerate, with its spacing at the depth

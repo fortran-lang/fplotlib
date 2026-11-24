@@ -261,6 +261,7 @@ contains
         integer, intent(inout) :: ncase, nfail
         character(len=:), allocatable :: t, f
         real(dp), allocatable :: ys(:)
+        real(dp) :: ex
 
         call set_doc("---"//NL//"paper: 200 x 300"//NL//"margin: 20pt"//NL//"pagenumbers: false"// &
                      NL//"---"//NL//"### A subsubsection long enough for two lines", t, f, &
@@ -272,6 +273,19 @@ contains
             print "(a)", t
         else
             call near("subsubsection leading", ys(2) - ys(1), 12.0_dp, ncase, nfail)
+        end if
+        ! A heading straight after another adds no space of its own; after
+        ! text, it adds 3.25ex.
+        ex = face_xheight(FACE_REGULAR)*10.0_dp
+        call set_doc("### C"//NL//"### D"//NL//NL//"Text."//NL//NL//"### E", t, f, baselines=ys)
+        ncase = ncase + 1
+        if (size(ys) /= 5) then
+            nfail = nfail + 1
+            print "(a,i0,a)", "  FAIL markdown consecutive headings: ", size(ys), " baselines in:"
+            print "(a)", t
+        else
+            call near("heading after heading", ys(2) - ys(1), 12.0_dp + 1.5_dp*ex, ncase, nfail)
+            call near("heading after text", ys(4) - ys(3), 12.0_dp + 3.25_dp*ex, ncase, nfail)
         end if
     end subroutine heading_cases
 
