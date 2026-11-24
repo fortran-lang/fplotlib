@@ -53,6 +53,7 @@ contains
         call emphasis_cases(ncase, nfail)
         call target_cases(ncase, nfail)
         call tab_cases(ncase, nfail)
+        call abstract_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -209,10 +210,11 @@ contains
         character(len=:), allocatable :: t, f
 
         call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
-                     "(par:x)="//NL//"A paragraph."//NL//NL//"(sec:a)="//NL//NL//"# Alpha"//NL//NL// &
+                     "(par:x)="//NL//"A paragraph."//NL//NL// &
+                     "(sec:a)="//NL//NL//"# Alpha"//NL//NL// &
                      "(sec:s)="//NL//"(sec:t)="//NL//"Setext"//NL//"------"//NL//NL// &
-                     "See {ref}`this one <par:x>`, {numref}`par:x`, {ref}`sec:a`, {numref}`sec:s`,"// &
-                     " {ref}`sec:t`."//NL//NL//"(end)=", t, f)
+                     "See {ref}`this one <par:x>`, {numref}`par:x`, {ref}`sec:a`,"// &
+                     " {numref}`sec:s`, {ref}`sec:t`."//NL//NL//"(end)=", t, f)
         call reject("target text", t, ")=", ncase, nfail)
         call expect("targets", t, "See this one, ??, Alpha, Section 1.1, Setext.", ncase, nfail)
     end subroutine target_cases
@@ -227,6 +229,16 @@ contains
         call expect("tab nesting", t, BULLET//" a"//NL//DASH//" nested b"//NL//BULLET//" c", &
                      ncase, nfail)
     end subroutine tab_cases
+
+    ! An abstract is set without a title as with one.
+    subroutine abstract_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("---"//NL//"abstract: What this is about."//NL//"---"//NL//"Body.", t, f)
+        call expect("abstract alone", t, "Abstract"//NL//"What this is about."//NL//"Body.", &
+                     ncase, nfail)
+    end subroutine abstract_cases
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.

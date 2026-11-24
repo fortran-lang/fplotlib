@@ -488,50 +488,53 @@ contains
         type(md_ctx_t), intent(in) :: ctx
         type(style_t) :: st
         integer :: i, j
-        if (len(TITLE) == 0) return
-        st = base_style(ctx)
-        call ts_vkeep(ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        st%size = 1.728_dp*BASE
-        call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*BASE/10.0_dp, &
-                          skip=.false.)
-        call inline(TITLE, st)
-        call ts_end_par()
-        if (len(SUBTITLE) > 0) then
-            st%size = 1.2_dp*BASE
-            call ts_vskip(ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-            call inline(SUBTITLE, st)
+        ! The title, with its authors and date; an abstract is set with or
+        ! without one.
+        if (len(TITLE) > 0) then
+            st = base_style(ctx)
+            call ts_vkeep(ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            st%size = 1.728_dp*BASE
+            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*BASE/10.0_dp, &
+                              skip=.false.)
+            call inline(TITLE, st)
             call ts_end_par()
-        end if
-        st%size = 1.2_dp*BASE
-        if (len(AUTHOR) > 0) then
-            call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            i = 1
-            do while (i <= len(AUTHOR))
-                j = index(AUTHOR(i:), NL)
-                if (j == 0) then
-                    j = len(AUTHOR) + 1
-                else
-                    j = i + j - 1
-                end if
+            if (len(SUBTITLE) > 0) then
+                st%size = 1.2_dp*BASE
+                call ts_vskip(ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
                 call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
                                   leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-                call inline(AUTHOR(i:j - 1), st)
+                call inline(SUBTITLE, st)
                 call ts_end_par()
-                i = j + 1
-            end do
+            end if
+            st%size = 1.2_dp*BASE
+            if (len(AUTHOR) > 0) then
+                call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+                i = 1
+                do while (i <= len(AUTHOR))
+                    j = index(AUTHOR(i:), NL)
+                    if (j == 0) then
+                        j = len(AUTHOR) + 1
+                    else
+                        j = i + j - 1
+                    end if
+                    call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                      leading=14.0_dp*BASE/10.0_dp, skip=.false.)
+                    call inline(AUTHOR(i:j - 1), st)
+                    call ts_end_par()
+                    i = j + 1
+                end do
+            end if
+            if (len(DATE) > 0) then
+                call ts_vskip(ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+                                  leading=14.0_dp*BASE/10.0_dp, skip=.false.)
+                call inline(DATE, st)
+                call ts_end_par()
+            end if
+            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
         end if
-        if (len(DATE) > 0) then
-            call ts_vskip(ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
-                              leading=14.0_dp*BASE/10.0_dp, skip=.false.)
-            call inline(DATE, st)
-            call ts_end_par()
-        end if
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
         if (len(ABSTRACT) > 0) then
             ! \small, a centred bold heading, and a quotation.
             st = base_style(ctx)
