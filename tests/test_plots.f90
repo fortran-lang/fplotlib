@@ -1694,7 +1694,7 @@ contains
     end subroutine document_case
 
     recursive subroutine doc_directive(d, ctx, handled)
-        use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, &
+        use fplotlib_markdown, only: md_engine, md_ctx_t, md_directive_t, md_blocks, md_option, &
                                      md_color, md_align, md_noindent, md_base_size
         use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
                                     ts_glue_t, ALIGN_JUSTIFY
@@ -1709,7 +1709,7 @@ contains
         handled = d%name == "div" .or. d%name == "pagebreak"
         if (.not. handled) return
         if (d%name == "pagebreak") then
-            call ts_page_break()
+            call ts_page_break(md_engine)
             call md_noindent(.false.)
             return
         end if
@@ -1723,10 +1723,10 @@ contains
         end if
         if (md_option(d%opts, "size") == "large") sub%size = 1.2_dp*md_base_size()
         sub%color = md_color(md_option(d%opts, "color"), sub%color)
-        if (al >= 0) call ts_addvspace(around)
+        if (al >= 0) call ts_addvspace(md_engine, around)
         call md_blocks(d%body, sub)
-        call ts_end_par()
-        if (al >= 0) call ts_addvspace(around)
+        call ts_end_par(md_engine)
+        if (al >= 0) call ts_addvspace(md_engine, around)
     end subroutine doc_directive
 
     ! A repeatable stand-in for random numbers: the fractional part of a

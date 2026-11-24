@@ -11,7 +11,8 @@
 ! justified line, the glyphs after it by up to about 0.065 bp.
 module test_typeset
     use fplotlib_style, only: dp, utf8_next
-    use fplotlib_typeset, only: ts_reset, ts_set_page, ts_set_font, ts_begin_par, &
+    use fplotlib_typeset, only: typeset_context_t, ts_reset, ts_set_page, ts_set_font, &
+                                ts_begin_par, &
                                 ts_end_par, ts_word, ts_space, ts_line_count, &
                                 ts_line_info, ALIGN_JUSTIFY
     use fplotlib_glyphs, only: glyph_char, FACE_REGULAR
@@ -74,9 +75,77 @@ contains
             call check_one(text, width, indent, nl, ltext, lx, nfail)
             npar = npar + 1
         end if
+        call check_interleaved(nfail)
         print "(a,i0,a,i0,a)", "paragraph refs: ", npar, " paragraphs, ", nfail, &
             " differ from XeTeX"
     end subroutine para_ref_check
+
+    ! Two contexts used interleaved produce the same lines as one used alone.
+    subroutine check_interleaved(nfail)
+        integer, intent(inout) :: nfail
+        type(typeset_context_t) :: alone, a, b
+        character(len=*), parameter :: p1 = &
+            "When Donald Knuth received the galley proofs of the second edition of his book "// &
+            "on algorithms in 1977, he was dismayed by the uneven spacing and typography."
+        character(len=*), parameter :: p2 = &
+            "A different paragraph set at a narrower width while the first context is open."
+        integer, allocatable :: g0(:), g1(:)
+        real(dp), allocatable :: x0(:), x1(:)
+        integer :: nl0, nl1, l, n0, n1, k
+
+        call set_par(alone, p1, 220.0_dp, 15.0_dp, finish=.true.)
+        call set_par(a, p1, 220.0_dp, 15.0_dp, finish=.false.)
+        call set_par(b, p2, 140.0_dp, 0.0_dp, finish=.true.)
+        call ts_end_par(a)
+
+        nl0 = ts_line_count(alone)
+        nl1 = ts_line_count(a)
+        if (nl0 /= nl1 .or. nl0 == 0) then
+            print "(a,i0,a,i0)", "  FAIL interleaved contexts: lines ", nl1, " vs ", nl0
+            nfail = nfail + 1
+            return
+        end if
+        do l = 1, nl0
+            call ts_line_info(alone, l, g0, x0, n0)
+            call ts_line_info(a, l, g1, x1, n1)
+            if (n0 /= n1) then
+                print "(a,i0,a,i0,a,i0)", "  FAIL interleaved line ", l, ": ", n1, " vs ", n0
+                nfail = nfail + 1
+                return
+            end if
+            do k = 1, n0
+                if (g0(k) /= g1(k) .or. abs(x0(k) - x1(k)) > 1.0e-12_dp) then
+                    print "(a,i0,a,i0)", "  FAIL interleaved line ", l, " glyph ", k
+                    nfail = nfail + 1
+                    return
+                end if
+            end do
+        end do
+    end subroutine check_interleaved
+
+    subroutine set_par(ts, text, width, indent, finish)
+        type(typeset_context_t), intent(inout) :: ts
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width, indent
+        logical, intent(in) :: finish
+        integer :: i, j
+        call ts_set_page(ts, width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
+        call ts_set_font(ts, SIZE)
+        call ts_begin_par(ts, ALIGN_JUSTIFY, indent)
+        i = 1
+        do while (i <= len(text))
+            j = index(text(i:), " ")
+            if (j == 0) then
+                j = len(text) + 1
+            else
+                j = i + j - 1
+            end if
+            if (j > i) call ts_word(ts, text(i:j - 1), FACE_REGULAR, SIZE)
+            if (j <= len(text)) call ts_space(ts, FACE_REGULAR, SIZE)
+            i = j + 1
+        end do
+        if (finish) call ts_end_par(ts)
+    end subroutine set_par
 
     subroutine check_one(text, width, indent, nl, ltext, lx, nfail)
         character(len=*), intent(in) :: text, ltext(:), lx(:)
@@ -89,11 +158,12 @@ contains
         integer :: i, j, l, n, nr, cp, nb, k
         logical :: bad
         character(len=64) :: what
+        type(typeset_context_t) :: ts
 
-        call ts_reset()
-        call ts_set_page(width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
-        call ts_set_font(SIZE)
-        call ts_begin_par(ALIGN_JUSTIFY, indent)
+        call ts_reset(ts)
+        call ts_set_page(ts, width, 10000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp)
+        call ts_set_font(ts, SIZE)
+        call ts_begin_par(ts, ALIGN_JUSTIFY, indent)
         i = 1
         do while (i <= len(text))
             j = index(text(i:), " ")
@@ -102,21 +172,21 @@ contains
             else
                 j = i + j - 1
             end if
-            if (j > i) call ts_word(text(i:j - 1), FACE_REGULAR, SIZE)
-            if (j <= len(text)) call ts_space(FACE_REGULAR, SIZE)
+            if (j > i) call ts_word(ts, text(i:j - 1), FACE_REGULAR, SIZE)
+            if (j <= len(text)) call ts_space(ts, FACE_REGULAR, SIZE)
             i = j + 1
         end do
-        call ts_end_par()
+        call ts_end_par(ts)
 
         bad = .false.
         worst = 0.0_dp
         what = ""
-        if (ts_line_count() /= nl) then
+        if (ts_line_count(ts) /= nl) then
             bad = .true.
-            write (what, "(a,i0,a,i0)") "lines ", ts_line_count(), " vs ", nl
+            write (what, "(a,i0,a,i0)") "lines ", ts_line_count(ts), " vs ", nl
         else
             do l = 1, nl
-                call ts_line_info(l, gids, xs, n)
+                call ts_line_info(ts, l, gids, xs, n)
                 nr = 0
                 read (lx(l), *, iostat=k) (rx(j), j=1, count_words(lx(l)))
                 nr = count_words(lx(l))

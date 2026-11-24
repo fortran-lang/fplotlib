@@ -25,7 +25,8 @@ module fplotlib
     use fplotlib_io, only: file_ext, write_bytes
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-    use fplotlib_markdown, only: md_typeset, md_directive_cb, md_body_cb, md_heading_cb
+    use fplotlib_markdown, only: md_typeset, md_directive_cb, md_body_cb, md_heading_cb, &
+                                 md_engine
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
@@ -7580,11 +7581,11 @@ contains
 
         res = 150.0_dp
         if (present(dpi)) res = dpi
-        call ts_page_size(w, h, col)
+        call ts_page_size(md_engine, w, h, col)
         bg = [ishft(col, -16), iand(ishft(col, -8), 255), iand(col, 255)]
-        do p = 1, max(1, ts_page_count())
+        do p = 1, max(1, ts_page_count(md_engine))
             call recorder%open_canvas(w, h, bg_rgb=bg)
-            if (p <= ts_page_count()) call ts_page_draw(recorder, p)
+            if (p <= ts_page_count(md_engine)) call ts_page_draw(md_engine, recorder, p)
             call recorder%close_canvas()
             call recorder%take(page)
             call document%add_page(page)

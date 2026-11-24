@@ -33,6 +33,7 @@ module fplotlib_markdown
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
+    public :: md_engine
 
     character, parameter :: BS = achar(92), NL = achar(10)
 
@@ -121,6 +122,9 @@ module fplotlib_markdown
 
     ! Whether a document is being set: md_typeset's state is the module's,
     ! one document at a time, so a callback may not set another.
+    ! Transitional engine instance (moved into md_document_t in #108).
+    type(typeset_context_t), save :: md_engine
+
     logical :: SETTING = .false.
 
     ! Active template callbacks for the current md_typeset call.
@@ -212,13 +216,13 @@ contains
         NLAB = 0
         do pass = 1, 2
             FIRST_PASS = pass == 1
-            call ts_reset()
+            call ts_reset(md_engine)
             call defaults()
             first = 1
             call front_matter(lines, n, first)
-            call ts_set_font(BASE, LEAD*BASE)
-            call ts_set_parskip(PARSKIP_G)
-            call ts_set_colors(TEXT_COL, PAGE_COL)
+            call ts_set_font(md_engine, BASE, LEAD*BASE)
+            call ts_set_parskip(md_engine, PARSKIP_G)
+            call ts_set_colors(md_engine, TEXT_COL, PAGE_COL)
             SEC = 0
             CHAPTER = 0
             EQNO = 0
@@ -235,7 +239,7 @@ contains
             if (associated(CB_BODY)) call CB_BODY(.true., ctx)
         end do
         FIRST_PASS = .false.
-        call ts_paginate()
+        call ts_paginate(md_engine)
 
         CB_DIR => null()
         CB_BODY => null()
@@ -262,7 +266,7 @@ contains
         NMETA = 0
         NOINDENT = .false.
         NPEND = 0
-        call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
+        call ts_set_page(md_engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
     ! The front matter: "key: value" lines between a first line of --- and
@@ -384,7 +388,7 @@ contains
         if (mr < 0.0_dp) mr = m
         if (mt < 0.0_dp) mt = m
         if (mb < 0.0_dp) mb = m
-        call ts_set_page(pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
+        call ts_set_page(md_engine, pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
     end subroutine front_matter
 
     ! The key and value of front matter line i, when it is a line that is
@@ -551,24 +555,25 @@ contains
         ! without one.
         if (len(TITLE) > 0) then
             st = base_style(ctx)
-            call ts_vkeep(ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vkeep(md_engine, ts_glue_t(2.0_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
             st%size = 1.728_dp*BASE
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, leading=22.0_dp*BASE/10.0_dp, &
+            call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
+                    leading=22.0_dp*BASE/10.0_dp, &
                               skip=.false.)
             call inline(TITLE, st)
-            call ts_end_par()
+            call ts_end_par(md_engine)
             if (len(SUBTITLE) > 0) then
                 st%size = 1.2_dp*BASE
-                call ts_vskip(ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+                call ts_vskip(md_engine, ts_glue_t(0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
                                   leading=14.0_dp*BASE/10.0_dp, skip=.false.)
                 call inline(SUBTITLE, st)
-                call ts_end_par()
+                call ts_end_par(md_engine)
             end if
             st%size = 1.2_dp*BASE
             if (len(AUTHOR) > 0) then
-                call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_vskip(md_engine, ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
                 i = 1
                 do while (i <= len(AUTHOR))
                     j = index(AUTHOR(i:), NL)
@@ -577,40 +582,40 @@ contains
                     else
                         j = i + j - 1
                     end if
-                    call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+                    call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
                                       leading=14.0_dp*BASE/10.0_dp, skip=.false.)
                     call inline(AUTHOR(i:j - 1), st)
-                    call ts_end_par()
+                    call ts_end_par(md_engine)
                     i = j + 1
                 end do
             end if
             if (len(DATE) > 0) then
-                call ts_vskip(ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+                call ts_vskip(md_engine, ts_glue_t(BASE, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
                                   leading=14.0_dp*BASE/10.0_dp, skip=.false.)
                 call inline(DATE, st)
-                call ts_end_par()
+                call ts_end_par(md_engine)
             end if
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            call ts_vskip(ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_vskip(md_engine, ts_glue_t(1.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
         end if
         if (len(ABSTRACT) > 0) then
             ! \small, a centred bold heading, and a quotation.
             st = base_style(ctx)
             st%size = 0.9_dp*BASE
             st%bold = .true.
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-            call ts_begin_par(ALIGN_CENTER, 0.0_dp, size=st%size, &
+            call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, size=st%size, &
                               leading=11.0_dp*BASE/10.0_dp, skip=.false.)
             call inline("Abstract", st)
-            call ts_end_par()
+            call ts_end_par(md_engine)
             st%bold = .false.
-            call ts_vskip(ts_glue_t(-0.5_dp*st%size + 0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
-            call ts_begin_par(ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*BASE, &
+            call ts_vskip(md_engine, ts_glue_t(-0.5_dp*st%size + 0.5_dp*BASE, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_begin_par(md_engine, ALIGN_JUSTIFY, 1.5_dp*st%size, left=2.5_dp*BASE, &
                               right=2.5_dp*BASE, size=st%size, leading=11.0_dp*BASE/10.0_dp)
             call inline(ABSTRACT, st)
-            call ts_end_par()
-            call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+            call ts_end_par(md_engine)
+            call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
         end if
         NOINDENT = .false.
     end subroutine title_block
@@ -684,11 +689,12 @@ contains
                 call list_block(L, n, i, ctx, blank_before)
             else if (is_rule(t)) then
                 call other_block()
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-                call ts_begin_par(ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
-                call ts_end_par()
-                call ts_rule(0.5_dp*(ts_hsize() - ctx%left - ctx%right), 0.5_dp, ctx%color)
-                call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+                call ts_begin_par(md_engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
+                call ts_end_par(md_engine)
+                call ts_rule(md_engine, 0.5_dp*(ts_hsize(md_engine) - ctx%left - ctx%right), &
+                        0.5_dp, ctx%color)
+                call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
                 i = i + 1
             else
                 para = ""
@@ -815,11 +821,12 @@ contains
         ind = 0.0_dp
         if (ctx%indent .and. .not. NOINDENT .and. ctx%align == ALIGN_JUSTIFY) ind = PARINDENT
         NOINDENT = .false.
-        call ts_begin_par(ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
+        call ts_begin_par(md_engine, ctx%align, ind, left=ctx%left, right=ctx%right, &
+                size=ctx%size, &
                           leading=LEAD*ctx%size)
         call put_labels(ctx, ctx%left)
         call inline(s, base_style(ctx))
-        call ts_end_par()
+        call ts_end_par(md_engine)
     end subroutine paragraph
 
     ! An item's label, waiting for the item's first line.
@@ -845,7 +852,7 @@ contains
         real(dp), intent(in) :: left
         integer :: k
         do k = 1, NPEND
-            call ts_label(PENDING(k)%s, label_face(ctx), ctx%size, &
+            call ts_label(md_engine, PENDING(k)%s, label_face(ctx), ctx%size, &
                           0.5_dp*BASE + left - PENDING(k)%left, ctx%color)
         end do
         NPEND = 0
@@ -927,25 +934,26 @@ contains
         ! Straight after a heading, the space after that one is all there
         ! is, as \@startsection has it when @nobreak is set.
         if (.not. AFTER_HEADING) then
-            call ts_addpenalty(-300)
-            call ts_addvspace(before)
+            call ts_addpenalty(md_engine, -300)
+            call ts_addvspace(md_engine, before)
         end if
         st = base_style(ctx)
         st%bold = .true.
         st%size = size
         hang = 0.0_dp
         if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
-        call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
+        call ts_begin_par(md_engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, &
+                size=size, &
                           leading=baseline, hang=hang, nobreak=.true.)
         if (len(num) > 0) then
-            call ts_word(num, FACE_BOLD, size, ctx%color)
-            call ts_kern(size)
+            call ts_word(md_engine, num, FACE_BOLD, size, ctx%color)
+            call ts_kern(md_engine, size)
         end if
         call inline(text, st)
-        call ts_end_par()
-        call ts_penalty(10000)
-        call ts_vskip(after)
-        call ts_nobreak_next()
+        call ts_end_par(md_engine)
+        call ts_penalty(md_engine, 10000)
+        call ts_vskip(md_engine, after)
+        call ts_nobreak_next(md_engine)
         NOINDENT = .true.
         AFTER_HEADING = .true.
     end subroutine heading
@@ -1049,14 +1057,14 @@ contains
         if (NPEND > 0) then
             ! A list that begins an item starts on the item's first line,
             ! its labels after the item's, as LaTeX's \@donoparitem has it.
-            call ts_end_par()
-        else if (blank_before .and. .not. ts_in_par()) then
-            call ts_addpenalty(-51)
-            call ts_addvspace(add_glue(topsep, partopsep))
+            call ts_end_par(md_engine)
+        else if (blank_before .and. .not. ts_in_par(md_engine)) then
+            call ts_addpenalty(md_engine, -51)
+            call ts_addvspace(md_engine, add_glue(topsep, partopsep))
         else
-            call ts_end_par()
-            call ts_addpenalty(-51)
-            call ts_addvspace(topsep)
+            call ts_end_par(md_engine)
+            call ts_addpenalty(md_engine, -51)
+            call ts_addvspace(md_engine, topsep)
         end if
 
         num = start_num
@@ -1089,32 +1097,32 @@ contains
             end do
             nitem = nitem + 1
             if (nitem > 1) then
-                call ts_addpenalty(-51)
-                call ts_addvspace(itemsep)
+                call ts_addpenalty(md_engine, -51)
+                call ts_addvspace(md_engine, itemsep)
             end if
             call push_label(list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num), sub%left)
-            call ts_set_parskip(parsep)
+            call ts_set_parskip(md_engine, parsep)
             call blocks(item, ni, sub)
             if (NPEND > 0) then
                 ! An item with no paragraph of its own still has its label.
-                call ts_begin_par(sub%align, 0.0_dp, left=sub%left, right=sub%right, &
+                call ts_begin_par(md_engine, sub%align, 0.0_dp, left=sub%left, right=sub%right, &
                                   size=sub%size)
                 call put_labels(sub, sub%left)
-                call ts_strut(0.7_dp*sub%size, 0.3_dp*sub%size)
-                call ts_end_par()
+                call ts_strut(md_engine, 0.7_dp*sub%size, 0.3_dp*sub%size)
+                call ts_end_par(md_engine)
             end if
             deallocate (item)
             num = num + 1
             j = k
         end do
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
+        call ts_end_par(md_engine)
+        call ts_set_parskip(md_engine, PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(md_engine, parsep_of(ctx%depth))
+        call ts_addpenalty(md_engine, -51)
         if (ctx%depth == 0) then
-            call ts_addvspace(add_glue(topsep, partopsep))
+            call ts_addvspace(md_engine, add_glue(topsep, partopsep))
         else
-            call ts_addvspace(topsep)
+            call ts_addvspace(md_engine, topsep)
         end if
         i = m + 1
     end subroutine list_block
@@ -1192,16 +1200,16 @@ contains
         sub%left = ctx%left + 2.5_dp*BASE
         sub%right = ctx%right + 2.5_dp*BASE
         sub%indent = .false.
-        call ts_end_par()
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(parsep_of(sub%depth))
+        call ts_end_par(md_engine)
+        call ts_addpenalty(md_engine, -51)
+        call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(md_engine, parsep_of(sub%depth))
         call blocks(q, n, sub)
-        call ts_end_par()
-        call ts_set_parskip(PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(parsep_of(ctx%depth))
-        call ts_addpenalty(-51)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_end_par(md_engine)
+        call ts_set_parskip(md_engine, PARSKIP_G)
+        if (ctx%depth > 0) call ts_set_parskip(md_engine, parsep_of(ctx%depth))
+        call ts_addpenalty(md_engine, -51)
+        call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine quote_block
 
     ! Fenced code: each line as it is, unbroken, its spaces kept.
@@ -1212,20 +1220,20 @@ contains
         integer :: k, i, j
         real(dp) :: sp
         character(len=:), allocatable :: s
-        call ts_end_par()
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
-        call ts_set_parskip(ts_glue_t())
+        call ts_end_par(md_engine)
+        call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(md_engine, ts_glue_t())
         sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size)
         do k = 1, n
             s = L(k)%s
-            call ts_begin_par(ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*BASE, &
+            call ts_begin_par(md_engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*BASE, &
                               right=ctx%right, size=0.9_dp*ctx%size, leading=LEAD*ctx%size)
-            call ts_strut(0.7_dp*ctx%size, 0.3_dp*ctx%size)
+            call ts_strut(md_engine, 0.7_dp*ctx%size, 0.3_dp*ctx%size)
             if (k == 1) call put_labels(ctx, ctx%left + 1.5_dp*BASE)
             i = 1
             do while (i <= len(s))
                 if (s(i:i) == " ") then
-                    call ts_kern(sp)
+                    call ts_kern(md_engine, sp)
                     i = i + 1
                     cycle
                 end if
@@ -1234,13 +1242,13 @@ contains
                     if (s(j:j) == " ") exit
                     j = j + 1
                 end do
-                call ts_word(s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
+                call ts_word(md_engine, s(i:j - 1), FACE_REGULAR, 0.9_dp*ctx%size, CODE_COL)
                 i = j
             end do
-            call ts_end_par()
+            call ts_end_par(md_engine)
         end do
-        call ts_set_parskip(PARSKIP_G)
-        call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
+        call ts_set_parskip(md_engine, PARSKIP_G)
+        call ts_addvspace(md_engine, scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
     ! A MyST directive :::{name} argument, followed by :key: value options
@@ -1439,7 +1447,7 @@ contains
                 if (c == " " .and. i + 2 <= len(s)) then
                     if (s(i:i + 2) == "  "//NL) then
                         call flush()
-                        call ts_hard_break()
+                        call ts_hard_break(md_engine)
                         space = .false.
                         i = i + 3
                         cycle
@@ -1514,7 +1522,7 @@ contains
                             k = i + j + 3
                             tag = ""
                             call display_tag(s, k, tag)
-                            call ts_math(src, st%size, st%color, display=.true., tag=tag)
+                            call ts_math(md_engine, src, st%size, st%color, display=.true., tag=tag)
                             space = .false.
                             i = k
                             do while (i <= len(s))
@@ -1533,7 +1541,7 @@ contains
                 if (j > 0) then
                     call flush()
                     call flush_space()
-                    call ts_math(s(i + 1:j - 1), st%size, st%color, display=.false.)
+                    call ts_math(md_engine, s(i + 1:j - 1), st%size, st%color, display=.false.)
                     i = j + 1
                 else
                     w = w//"$"
@@ -1548,7 +1556,7 @@ contains
                 next = s(i + 1:i + 1)
                 if (next == NL) then
                     call flush()
-                    call ts_hard_break()
+                    call ts_hard_break(md_engine)
                     space = .false.
                     i = i + 2
                 else if (punct(next)) then
@@ -1640,7 +1648,7 @@ contains
                 call utf8_next(s, i, cp, nb)
                 if (cp == 160) then
                     call flush()
-                    call ts_nbsp(face_of(st), st%size)
+                    call ts_nbsp(md_engine, face_of(st), st%size)
                     space = .false.
                 else
                     w = w//s(i:i + nb - 1)
@@ -1657,15 +1665,15 @@ contains
             if (len(w) == 0) return
             call flush_space()
             if (st%code) then
-                call ts_word(w, FACE_REGULAR, st%size, CODE_COL)
+                call ts_word(md_engine, w, FACE_REGULAR, st%size, CODE_COL)
             else
-                call ts_word(w, face_of(st), st%size, st%color)
+                call ts_word(md_engine, w, face_of(st), st%size, st%color)
             end if
             w = ""
         end subroutine flush
 
         subroutine flush_space()
-            if (space) call ts_space(sp_face, sp_size)
+            if (space) call ts_space(md_engine, sp_face, sp_size)
             space = .false.
         end subroutine flush_space
 
@@ -1767,7 +1775,7 @@ contains
         i = 1
         do while (i <= len(t))
             if (t(i:i) == " ") then
-                call ts_space(FACE_REGULAR, st%size)
+                call ts_space(md_engine, FACE_REGULAR, st%size)
                 i = i + 1
                 cycle
             end if
@@ -1777,9 +1785,9 @@ contains
                 j = j + 1
             end do
             if (verbatim) then
-                call ts_word(t(i:j - 1), FACE_REGULAR, st%size, CODE_COL)
+                call ts_word(md_engine, t(i:j - 1), FACE_REGULAR, st%size, CODE_COL)
             else
-                call ts_word(t(i:j - 1), face_of(st), st%size, st%color)
+                call ts_word(md_engine, t(i:j - 1), face_of(st), st%size, st%color)
             end if
             i = j
         end do

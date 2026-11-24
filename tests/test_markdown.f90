@@ -11,7 +11,7 @@ module test_markdown
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
-    use fplotlib_markdown, only: md_typeset, md_meta, md_directive_cb, md_directive_t, md_ctx_t, &
+    use fplotlib_markdown, only: md_engine, md_typeset, md_meta, md_directive_cb, md_directive_t, md_ctx_t, &
                                  md_heading_cb, md_heading_t, md_blocks, md_option
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
@@ -390,14 +390,14 @@ contains
         integer :: p, col
 
         call md_typeset(md, on_directive=on_directive, on_heading=on_heading)
-        call ts_page_size(w, h, col)
+        call ts_page_size(md_engine, w, h, col)
         text = ""
         faces = ""
         if (present(lowest)) lowest = 0.0_dp
         if (present(leftmost)) leftmost = huge(1.0_dp)
-        do p = 1, ts_page_count()
+        do p = 1, ts_page_count(md_engine)
             call r%open_canvas(w, h)
-            call ts_page_draw(r, p)
+            call ts_page_draw(md_engine, r, p)
             call r%close_canvas()
             if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
             if (present(leftmost) .and. r%n > 0) leftmost = min(leftmost, minval(r%x(1:r%n)))

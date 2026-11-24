@@ -11,7 +11,7 @@
 
 program plot_letter
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_meta, md_length, &
+    use fplotlib_markdown, only: md_engine, md_ctx_t, md_directive_t, md_blocks, md_meta, md_length, &
                                  md_base_size
     use fplotlib_typeset, only: ts_addvspace, ts_vskip, ts_end_par, ts_glue_t, ALIGN_RIGHT
     implicit none
@@ -89,26 +89,26 @@ contains
         case ("sender")
             sub%align = ALIGN_RIGHT
             sub%indent = .false.
-            call ts_addvspace(around)
+            call ts_addvspace(md_engine, around)
             call md_blocks(d%body, sub)
-            call ts_end_par()
-            call ts_addvspace(around)
+            call ts_end_par(md_engine)
+            call ts_addvspace(md_engine, around)
         case ("recipient")
             call md_blocks(d%body, sub)
-            call ts_end_par()
-            call ts_vskip(big)
+            call ts_end_par(md_engine)
+            call ts_vskip(md_engine, big)
         case ("closing")
-            call ts_vskip(big)
+            call ts_vskip(md_engine, big)
             sig = md_length(md_meta("signature-skip"), md_base_size())
             p = index(d%body, NL//NL)
             if (p > 0) then
                 call md_blocks(d%body(1:p - 1), sub)
-                call ts_vskip(ts_glue_t(sig, 0.0_dp, 0.0_dp, 0, 0))
+                call ts_vskip(md_engine, ts_glue_t(sig, 0.0_dp, 0.0_dp, 0, 0))
                 call md_blocks(d%body(p + 2:), sub)
             else
                 call md_blocks(d%body, sub)
             end if
-            call ts_end_par()
+            call ts_end_par(md_engine)
         case default
             handled = .false.
         end select

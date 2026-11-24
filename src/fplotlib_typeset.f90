@@ -26,8 +26,8 @@
 ! integer formula, so that it is exactly TeX's.
 !
 ! The document is built by calls (ts_begin_par, ts_word, ts_space, ...)
-! into module state, then ts_paginate cuts it into pages and ts_page_draw
-! draws one page on any renderer.
+! into a typeset_context_t, then ts_paginate cuts it into pages and
+! ts_page_draw draws one page on any renderer.
 module fplotlib_typeset
     use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, paint_t, glyphrun_t
@@ -41,6 +41,7 @@ module fplotlib_typeset
     private
 
     public :: ts_reset, ts_set_page, ts_set_font
+    public :: typeset_context_t
     public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break
     public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_in_par
     public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule
@@ -76,93 +77,71 @@ module fplotlib_typeset
     integer, parameter :: DISPLAY_WIDOW_PENALTY = 50, BROKEN_PENALTY = 100
     integer, parameter :: PRE_DISPLAY_PENALTY = 10000, POST_DISPLAY_PENALTY = 0
     integer, parameter :: LEFT_HYPHEN_MIN = 2, RIGHT_HYPHEN_MIN = 3
-    integer :: CLUB_PENALTY = 150
 
     integer, parameter :: VERY_LOOSE = 0, LOOSE = 1, DECENT = 2, TIGHT = 3
-
-    ! --- the horizontal list of the paragraph being built ---------------
-
     integer, parameter :: HK_WORD = 1, HK_GLUE = 2, HK_KERN = 3, HK_PEN = 4, &
                           HK_DISC = 5, HK_BOX = 6
-
-    integer :: HN = 0
-    integer, allocatable :: HK(:), HFACE(:), HCOL(:), HC0(:), HC1(:), HI0(:), HI1(:)
-    integer, allocatable :: HSO(:), HHO(:), HP(:)
-    logical, allocatable :: HEXPL(:)
-    real(dp), allocatable :: HW(:), HH(:), HD(:), HST(:), HSH(:), HSZ(:), HRAISE(:)
-    ! The code points of the words.
-    integer :: NCP = 0
-    integer, allocatable :: CPA(:)
-    ! The items of the boxes in the list (formulas, labels), about each
-    ! box's origin, y up.
-    integer :: NBX = 0
-    integer, allocatable :: BXK(:), BXG(:), BXC(:)
-    real(dp), allocatable :: BXX(:), BXY(:), BXS(:), BXW(:), BXH(:)
-
-    ! The paragraph's settings.
-    logical :: IN_PAR = .false.
-    integer :: P_ALIGN = ALIGN_JUSTIFY
-    real(dp) :: P_LEFT = 0.0_dp, P_RIGHT = 0.0_dp, P_HANG = 0.0_dp
-    real(dp) :: P_SF = 1000.0_dp
-    integer :: P_PREV_GRAF = 0
-    real(dp) :: P_SIZE = 10.0_dp
-    ! Lines of the paragraph may not be broken between (a heading's).
-    logical :: P_NOBREAK = .false.
-    ! The \baselineskip the paragraph's lines are set with.
-    type(ts_glue_t) :: CUR_BASELINE
-
-    ! --- the items of the finished boxes, about their box's origin --------
-
-    integer :: NIT = 0
-    integer, allocatable :: ITK(:), ITG(:), ITC(:)
-    real(dp), allocatable :: ITX(:), ITY(:), ITS(:), ITW(:), ITH(:)
-
-    ! --- the main vertical list -------------------------------------------
-
     integer, parameter :: VK_BOX = 1, VK_GLUE = 2, VK_KERN = 3, VK_PEN = 4, VK_MARK = 5
-    integer :: NV = 0
-    integer, allocatable :: VK(:), VSO(:), VHO(:), VP(:), VI0(:), VI1(:)
-    real(dp), allocatable :: VW(:), VH(:), VD(:), VST(:), VSH(:), VX(:)
-    ! VK_MARK: a running head, MARKS(VI0) to MARKS(VI1); VSO 0 for the
-    ! chapter's (LaTeX's left mark), 1 for a section's (the right mark);
-    ! VP 1 for a page that is to have no head (a chapter's first).
-    character(len=:), allocatable :: MARKS
-    real(dp) :: PREV_DEPTH = -1000.0_dp
     real(dp), parameter :: IGNORE_DEPTH = -1000.0_dp
-    ! A paragraph after a heading may not break after its first line.
-    logical :: NOBREAK_NEXT = .false.
 
-    ! --- the document's settings -------------------------------------------
-
-    real(dp) :: PAPER_W = 595.2756_dp, PAPER_H = 841.8898_dp
-    real(dp) :: MARGIN_L = 72.0_dp, MARGIN_R = 72.0_dp, MARGIN_T = 72.0_dp, &
-                MARGIN_B = 72.0_dp
-    real(dp) :: HSIZE = 451.2756_dp, VSIZE = 697.8898_dp
-    real(dp) :: FONT_SIZE = 10.0_dp
-    type(ts_glue_t) :: BASELINESKIP, LINESKIP, PARSKIP
-    real(dp) :: LINESKIPLIMIT = 0.0_dp, TOPSKIP = 10.0_dp, MAXDEPTH = 5.0_dp
-    real(dp) :: FOOTSKIP = 30.0_dp
-    logical :: PAGE_NUMBERS = .true.
-    logical :: HEADINGS = .false.
-    ! LaTeX's \flushbottom (the book class): a page's glue stretches to
-    ! fill it; otherwise \raggedbottom, the glue at its natural size.
-    logical :: FLUSH_BOTTOM = .false.
-    integer :: TEXT_COLOR = 0
-    integer :: PAGE_COLOR = 16777215
-
-    ! --- the pages -------------------------------------------------------
-
-    integer :: NPAGE = 0
-    integer, allocatable :: PG0(:), PG1(:), PGHEAD0(:), PGHEAD1(:), PGSTART(:)
-    logical, allocatable :: PGPLAIN(:)
-    ! How a page's glue is set: by PGSET times its stretch (positive) or
-    ! shrink (negative) of order PGORD.
-    real(dp), allocatable :: PGSET(:)
-    integer, allocatable :: PGORD(:)
-
-    ! The lines of the last paragraph, for tests: their vertical list
-    ! entries.
-    integer :: LAST_PAR0 = 0, LAST_PAR1 = -1
+    type :: typeset_context_t
+        private
+        integer :: CLUB_PENALTY = 150
+        ! Horizontal list of the paragraph being built.
+        integer :: HN = 0
+        integer, allocatable :: HK(:), HFACE(:), HCOL(:), HC0(:), HC1(:), HI0(:), HI1(:)
+        integer, allocatable :: HSO(:), HHO(:), HP(:)
+        logical, allocatable :: HEXPL(:)
+        real(dp), allocatable :: HW(:), HH(:), HD(:), HST(:), HSH(:), HSZ(:), HRAISE(:)
+        integer :: NCP = 0
+        integer, allocatable :: CPA(:)
+        integer :: NBX = 0
+        integer, allocatable :: BXK(:), BXG(:), BXC(:)
+        real(dp), allocatable :: BXX(:), BXY(:), BXS(:), BXW(:), BXH(:)
+        ! Paragraph settings.
+        logical :: IN_PAR = .false.
+        integer :: P_ALIGN = ALIGN_JUSTIFY
+        real(dp) :: P_LEFT = 0.0_dp, P_RIGHT = 0.0_dp, P_HANG = 0.0_dp
+        real(dp) :: P_SF = 1000.0_dp
+        integer :: P_PREV_GRAF = 0
+        real(dp) :: P_SIZE = 10.0_dp
+        logical :: P_NOBREAK = .false.
+        type(ts_glue_t) :: CUR_BASELINE = ts_glue_t(12.0_dp, 0.0_dp, 0.0_dp, 0, 0)
+        ! Items of finished boxes, about each box's origin.
+        integer :: NIT = 0
+        integer, allocatable :: ITK(:), ITG(:), ITC(:)
+        real(dp), allocatable :: ITX(:), ITY(:), ITS(:), ITW(:), ITH(:)
+        ! Main vertical list.
+        integer :: NV = 0
+        integer, allocatable :: VK(:), VSO(:), VHO(:), VP(:), VI0(:), VI1(:)
+        real(dp), allocatable :: VW(:), VH(:), VD(:), VST(:), VSH(:), VX(:)
+        character(len=:), allocatable :: MARKS
+        real(dp) :: PREV_DEPTH = -1000.0_dp
+        logical :: NOBREAK_NEXT = .false.
+        ! Document settings.
+        real(dp) :: PAPER_W = 595.2756_dp, PAPER_H = 841.8898_dp
+        real(dp) :: MARGIN_L = 72.0_dp, MARGIN_R = 72.0_dp, MARGIN_T = 72.0_dp, &
+                    MARGIN_B = 72.0_dp
+        real(dp) :: HSIZE = 451.2756_dp, VSIZE = 697.8898_dp
+        real(dp) :: FONT_SIZE = 10.0_dp
+        type(ts_glue_t) :: BASELINESKIP = ts_glue_t(12.0_dp, 0.0_dp, 0.0_dp, 0, 0)
+        type(ts_glue_t) :: LINESKIP = ts_glue_t(1.0_dp, 0.0_dp, 0.0_dp, 0, 0)
+        type(ts_glue_t) :: PARSKIP = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
+        real(dp) :: LINESKIPLIMIT = 0.0_dp, TOPSKIP = 10.0_dp, MAXDEPTH = 5.0_dp
+        real(dp) :: FOOTSKIP = 30.0_dp
+        logical :: PAGE_NUMBERS = .true.
+        logical :: HEADINGS = .false.
+        logical :: FLUSH_BOTTOM = .false.
+        integer :: TEXT_COLOR = 0
+        integer :: PAGE_COLOR = 16777215
+        ! Paginated pages.
+        integer :: NPAGE = 0
+        integer, allocatable :: PG0(:), PG1(:), PGHEAD0(:), PGHEAD1(:), PGSTART(:)
+        logical, allocatable :: PGPLAIN(:)
+        real(dp), allocatable :: PGSET(:)
+        integer, allocatable :: PGORD(:)
+        integer :: LAST_PAR0 = 0, LAST_PAR1 = -1
+    end type typeset_context_t
 
 contains
 
@@ -171,74 +150,82 @@ contains
     ! ------------------------------------------------------------------
 
     ! Start a new document.
-    subroutine ts_reset()
-        HN = 0
-        NCP = 0
-        NBX = 0
-        NIT = 0
-        NV = 0
-        NPAGE = 0
-        IN_PAR = .false.
-        PREV_DEPTH = IGNORE_DEPTH
-        NOBREAK_NEXT = .false.
-        CLUB_PENALTY = 150
-        MARKS = ""
-        call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
-        call ts_set_font(10.0_dp)
-        PAGE_NUMBERS = .true.
-        HEADINGS = .false.
-        FLUSH_BOTTOM = .false.
-        TEXT_COLOR = 0
-        PAGE_COLOR = 16777215
+    subroutine ts_reset(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        ts%HN = 0
+        ts%NCP = 0
+        ts%NBX = 0
+        ts%NIT = 0
+        ts%NV = 0
+        ts%NPAGE = 0
+        ts%LAST_PAR0 = 0
+        ts%LAST_PAR1 = -1
+        ts%IN_PAR = .false.
+        ts%PREV_DEPTH = IGNORE_DEPTH
+        ts%NOBREAK_NEXT = .false.
+        ts%CLUB_PENALTY = 150
+        ts%MARKS = ""
+        call ts_set_page(ts, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
+        call ts_set_font(ts, 10.0_dp)
+        ts%PAGE_NUMBERS = .true.
+        ts%HEADINGS = .false.
+        ts%FLUSH_BOTTOM = .false.
+        ts%TEXT_COLOR = 0
+        ts%PAGE_COLOR = 16777215
     end subroutine ts_reset
 
     ! The colours of the text and of the page, as 0xRRGGBB.
-    subroutine ts_set_colors(text, page)
+    subroutine ts_set_colors(ts, text, page)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: text, page
-        TEXT_COLOR = text
-        PAGE_COLOR = page
+        ts%TEXT_COLOR = text
+        ts%PAGE_COLOR = page
     end subroutine ts_set_colors
 
-    pure real(dp) function ts_hsize()
-        ts_hsize = HSIZE
+    pure real(dp) function ts_hsize(ts)
+        type(typeset_context_t), intent(in) :: ts
+        ts_hsize = ts%HSIZE
     end function ts_hsize
 
-    pure real(dp) function ts_font_size()
-        ts_font_size = FONT_SIZE
+    pure real(dp) function ts_font_size(ts)
+        type(typeset_context_t), intent(in) :: ts
+        ts_font_size = ts%FONT_SIZE
     end function ts_font_size
 
-    subroutine ts_set_page(w, h, left, right, top, bottom, numbers, headings_, flush)
+    subroutine ts_set_page(ts, w, h, left, right, top, bottom, numbers, headings_, flush)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: w, h, left, right, top, bottom
         logical, intent(in), optional :: numbers, headings_, flush
-        PAPER_W = w
-        PAPER_H = h
-        MARGIN_L = left
-        MARGIN_R = right
-        MARGIN_T = top
-        MARGIN_B = bottom
-        HSIZE = w - left - right
-        VSIZE = h - top - bottom
-        if (present(numbers)) PAGE_NUMBERS = numbers
-        if (present(headings_)) HEADINGS = headings_
-        if (present(flush)) FLUSH_BOTTOM = flush
+        ts%PAPER_W = w
+        ts%PAPER_H = h
+        ts%MARGIN_L = left
+        ts%MARGIN_R = right
+        ts%MARGIN_T = top
+        ts%MARGIN_B = bottom
+        ts%HSIZE = w - left - right
+        ts%VSIZE = h - top - bottom
+        if (present(numbers)) ts%PAGE_NUMBERS = numbers
+        if (present(headings_)) ts%HEADINGS = headings_
+        if (present(flush)) ts%FLUSH_BOTTOM = flush
     end subroutine ts_set_page
 
     ! The body size and what goes with it, LaTeX's lengths scaled from its
     ! 10pt ones: \baselineskip 1.2 em, \parskip 0pt plus 1pt, \topskip one
     ! em, \maxdepth half of it, \footskip 30pt.
-    subroutine ts_set_font(size, leading)
+    subroutine ts_set_font(ts, size, leading)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: size
         real(dp), intent(in), optional :: leading
-        FONT_SIZE = size
-        BASELINESKIP = ts_glue_t(1.2_dp*size, 0.0_dp, 0.0_dp, 0, 0)
-        if (present(leading)) BASELINESKIP%w = leading
-        LINESKIP = ts_glue_t(1.0_dp, 0.0_dp, 0.0_dp, 0, 0)
-        LINESKIPLIMIT = 0.0_dp
-        PARSKIP = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
-        TOPSKIP = size
-        MAXDEPTH = 0.5_dp*size
-        FOOTSKIP = 3.0_dp*size
-        CUR_BASELINE = BASELINESKIP
+        ts%FONT_SIZE = size
+        ts%BASELINESKIP = ts_glue_t(1.2_dp*size, 0.0_dp, 0.0_dp, 0, 0)
+        if (present(leading)) ts%BASELINESKIP%w = leading
+        ts%LINESKIP = ts_glue_t(1.0_dp, 0.0_dp, 0.0_dp, 0, 0)
+        ts%LINESKIPLIMIT = 0.0_dp
+        ts%PARSKIP = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
+        ts%TOPSKIP = size
+        ts%MAXDEPTH = 0.5_dp*size
+        ts%FOOTSKIP = 3.0_dp*size
+        ts%CUR_BASELINE = ts%BASELINESKIP
     end subroutine ts_set_font
 
     pure real(dp) function ts_xheight(size)
@@ -251,27 +238,31 @@ contains
         ts_quad = size
     end function ts_quad
 
-    pure logical function ts_in_par()
-        ts_in_par = IN_PAR
+    pure logical function ts_in_par(ts)
+        type(typeset_context_t), intent(in) :: ts
+        ts_in_par = ts%IN_PAR
     end function ts_in_par
 
-    subroutine ts_page_size(w, h, color)
+    subroutine ts_page_size(ts, w, h, color)
+        type(typeset_context_t), intent(in) :: ts
         real(dp), intent(out) :: w, h
         integer, intent(out), optional :: color
-        w = PAPER_W
-        h = PAPER_H
-        if (present(color)) color = PAGE_COLOR
+        w = ts%PAPER_W
+        h = ts%PAPER_H
+        if (present(color)) color = ts%PAGE_COLOR
     end subroutine ts_page_size
 
     ! The glue \parskip puts between paragraphs from here on.
-    subroutine ts_set_parskip(g)
+    subroutine ts_set_parskip(ts, g)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: g
-        PARSKIP = g
+        ts%PARSKIP = g
     end subroutine ts_set_parskip
 
-    subroutine ts_set_clubpenalty(p)
+    subroutine ts_set_clubpenalty(ts, p)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: p
-        CLUB_PENALTY = p
+        ts%CLUB_PENALTY = p
     end subroutine ts_set_clubpenalty
 
     ! ------------------------------------------------------------------
@@ -281,49 +272,51 @@ contains
     ! Start a paragraph: its alignment, how far its lines are moved in
     ! from the left and right margins, its indentation (0 for none), and a
     ! hanging indentation of all lines but the first.
-    subroutine ts_begin_par(align, indent, left, right, size, hang, skip, leading, &
+    subroutine ts_begin_par(ts, align, indent, left, right, size, hang, skip, leading, &
                             nobreak)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: align
         real(dp), intent(in) :: indent
         real(dp), intent(in), optional :: left, right, size, hang, leading
         logical, intent(in), optional :: skip, nobreak
         logical :: sk
-        if (IN_PAR) call ts_end_par()
-        IN_PAR = .true.
-        P_ALIGN = align
-        P_LEFT = 0.0_dp
-        P_RIGHT = 0.0_dp
-        P_HANG = 0.0_dp
-        P_SIZE = FONT_SIZE
-        P_NOBREAK = .false.
-        CUR_BASELINE = BASELINESKIP
-        if (present(left)) P_LEFT = left
-        if (present(right)) P_RIGHT = right
-        if (present(size)) P_SIZE = size
-        if (present(hang)) P_HANG = hang
-        if (present(leading)) CUR_BASELINE%w = leading
-        if (present(nobreak)) P_NOBREAK = nobreak
-        P_SF = 1000.0_dp
-        P_PREV_GRAF = 0
-        HN = 0
-        NCP = 0
-        NBX = 0
+        if (ts%IN_PAR) call ts_end_par(ts)
+        ts%IN_PAR = .true.
+        ts%P_ALIGN = align
+        ts%P_LEFT = 0.0_dp
+        ts%P_RIGHT = 0.0_dp
+        ts%P_HANG = 0.0_dp
+        ts%P_SIZE = ts%FONT_SIZE
+        ts%P_NOBREAK = .false.
+        ts%CUR_BASELINE = ts%BASELINESKIP
+        if (present(left)) ts%P_LEFT = left
+        if (present(right)) ts%P_RIGHT = right
+        if (present(size)) ts%P_SIZE = size
+        if (present(hang)) ts%P_HANG = hang
+        if (present(leading)) ts%CUR_BASELINE%w = leading
+        if (present(nobreak)) ts%P_NOBREAK = nobreak
+        ts%P_SF = 1000.0_dp
+        ts%P_PREV_GRAF = 0
+        ts%HN = 0
+        ts%NCP = 0
+        ts%NBX = 0
         ! \parskip goes between paragraphs, not at the top of the list.
         sk = .true.
         if (present(skip)) sk = skip
-        if (sk .and. NV > 0) call v_glue(PARSKIP)
+        if (sk .and. ts%NV > 0) call v_glue(ts, ts%PARSKIP)
         if (indent > 0.0_dp) then
-            call h_new(HK_BOX)
-            HW(HN) = indent
-            HI0(HN) = 1
-            HI1(HN) = 0
+            call h_new(ts, HK_BOX)
+            ts%HW(ts%HN) = indent
+            ts%HI0(ts%HN) = 1
+            ts%HI1(ts%HN) = 0
         end if
     end subroutine ts_begin_par
 
     ! Words: s is one word or a piece of one (no spaces), in face at size.
     ! Explicit hyphens in it are places it may break, as TeX's
     ! \exhyphenpenalty allows.
-    subroutine ts_word(s, face, size, color, raise)
+    subroutine ts_word(ts, s, face, size, color, raise)
+        type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
         real(dp), intent(in) :: size
@@ -332,8 +325,8 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, k0, col
         real(dp) :: up
-        if (.not. IN_PAR) call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp)
-        col = TEXT_COLOR
+        if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
+        col = ts%TEXT_COLOR
         if (present(color)) col = color
         up = 0.0_dp
         if (present(raise)) up = raise
@@ -343,35 +336,36 @@ contains
             ! A hyphen ends a piece, and a discretionary with nothing
             ! before the break follows it.
             if (cps(k) == 45 .and. k > 1 .and. k < n) then
-                call word_piece(cps(k0:k), face, size, col, up)
-                call h_new(HK_DISC)
-                HFACE(HN) = face
-                HSZ(HN) = size
-                HC0(HN) = 0
-                HW(HN) = 0.0_dp
+                call word_piece(ts, cps(k0:k), face, size, col, up)
+                call h_new(ts, HK_DISC)
+                ts%HFACE(ts%HN) = face
+                ts%HSZ(ts%HN) = size
+                ts%HC0(ts%HN) = 0
+                ts%HW(ts%HN) = 0.0_dp
                 k0 = k + 1
             end if
         end do
-        if (k0 <= n) call word_piece(cps(k0:n), face, size, col, up)
+        if (k0 <= n) call word_piece(ts, cps(k0:n), face, size, col, up)
     end subroutine ts_word
 
-    subroutine word_piece(cps, face, fs, col, up)
+    subroutine word_piece(ts, cps, face, fs, col, up)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: cps(:), face, col
         real(dp), intent(in) :: fs, up
         integer :: k
-        call h_new(HK_WORD)
-        call cp_reserve(size(cps))
-        HC0(HN) = NCP + 1
-        CPA(NCP + 1:NCP + size(cps)) = cps
-        NCP = NCP + size(cps)
-        HC1(HN) = NCP
-        HFACE(HN) = face
-        HSZ(HN) = fs
-        HCOL(HN) = col
-        HRAISE(HN) = up
-        call measure(HN)
+        call h_new(ts, HK_WORD)
+        call cp_reserve(ts, size(cps))
+        ts%HC0(ts%HN) = ts%NCP + 1
+        ts%CPA(ts%NCP + 1:ts%NCP + size(cps)) = cps
+        ts%NCP = ts%NCP + size(cps)
+        ts%HC1(ts%HN) = ts%NCP
+        ts%HFACE(ts%HN) = face
+        ts%HSZ(ts%HN) = fs
+        ts%HCOL(ts%HN) = col
+        ts%HRAISE(ts%HN) = up
+        call measure(ts, ts%HN)
         do k = 1, size(cps)
-            call space_factor(cps(k))
+            call space_factor(ts, cps(k))
         end do
     end subroutine word_piece
 
@@ -379,7 +373,8 @@ contains
     ! 3000 after a full stop, 2000 after a colon and so on, 999 for a
     ! capital letter, which keeps the space after an initial normal, and 0
     ! for closing brackets and quotes, which leave it as it was).
-    subroutine space_factor(cp)
+    subroutine space_factor(ts, cp)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: cp
         real(dp) :: s
         select case (cp)
@@ -400,13 +395,13 @@ contains
             if (cp >= 256 .and. cp < 384 .and. mod(cp, 2) == 0) s = 999.0_dp
         end select
         if (s == 1000.0_dp) then
-            P_SF = 1000.0_dp
+            ts%P_SF = 1000.0_dp
         else if (s < 1000.0_dp) then
-            if (s > 0.0_dp) P_SF = s
-        else if (P_SF < 1000.0_dp) then
-            P_SF = 1000.0_dp
+            if (s > 0.0_dp) ts%P_SF = s
+        else if (ts%P_SF < 1000.0_dp) then
+            ts%P_SF = 1000.0_dp
         else
-            P_SF = s
+            ts%P_SF = s
         end if
     end subroutine space_factor
 
@@ -430,9 +425,11 @@ contains
 
     ! A word's width, height and depth: its glyphs' advances and kerning,
     ! and their ink, as XeTeX measures a word.
-    subroutine measure(i)
+    subroutine measure(ts, i)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: i
-        call shape(CPA(HC0(i):HC1(i)), HFACE(i), HSZ(i), HW(i), HH(i), HD(i))
+        call shape(ts%CPA(ts%HC0(i):ts%HC1(i)), ts%HFACE(i), ts%HSZ(i), ts%HW(i), ts%HH(i), &
+                ts%HD(i))
     end subroutine measure
 
     subroutine shape(cps, face, s, w, h, d)
@@ -461,59 +458,64 @@ contains
     ! The space between words, in face at size: XeTeX's glue for an
     ! OpenType font, the width of the space with half of it to stretch and
     ! a third to shrink, adjusted by the space factor.
-    subroutine ts_space(face, size)
+    subroutine ts_space(ts, face, size)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: face
         real(dp), intent(in) :: size
         real(dp) :: sp
         integer :: gf
-        if (.not. IN_PAR) return
-        if (HN == 0) return
-        if (HK(HN) == HK_GLUE) return
+        if (.not. ts%IN_PAR) return
+        if (ts%HN == 0) return
+        if (ts%HK(ts%HN) == HK_GLUE) return
         sp = glyph_adv(glyph_for(face, 32, gf))*size
-        call h_new(HK_GLUE)
-        HW(HN) = sp
-        HST(HN) = sp/2.0_dp
-        HSH(HN) = sp/3.0_dp
-        if (P_SF /= 1000.0_dp) then
-            if (P_SF >= 2000.0_dp) HW(HN) = HW(HN) + sp/3.0_dp
-            HST(HN) = HST(HN)*P_SF/1000.0_dp
-            HSH(HN) = HSH(HN)*1000.0_dp/P_SF
+        call h_new(ts, HK_GLUE)
+        ts%HW(ts%HN) = sp
+        ts%HST(ts%HN) = sp/2.0_dp
+        ts%HSH(ts%HN) = sp/3.0_dp
+        if (ts%P_SF /= 1000.0_dp) then
+            if (ts%P_SF >= 2000.0_dp) ts%HW(ts%HN) = ts%HW(ts%HN) + sp/3.0_dp
+            ts%HST(ts%HN) = ts%HST(ts%HN)*ts%P_SF/1000.0_dp
+            ts%HSH(ts%HN) = ts%HSH(ts%HN)*1000.0_dp/ts%P_SF
         end if
     end subroutine ts_space
 
     ! A space that does not break: the same glue behind a penalty.
-    subroutine ts_nbsp(face, size)
+    subroutine ts_nbsp(ts, face, size)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: face
         real(dp), intent(in) :: size
-        if (.not. IN_PAR) call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp)
-        P_SF = 1000.0_dp
-        call h_new(HK_PEN)
-        HP(HN) = INF_PENALTY
-        call ts_space(face, size)
-        if (HK(HN) /= HK_GLUE) then
-            HN = HN - 1
+        if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
+        ts%P_SF = 1000.0_dp
+        call h_new(ts, HK_PEN)
+        ts%HP(ts%HN) = INF_PENALTY
+        call ts_space(ts, face, size)
+        if (ts%HK(ts%HN) /= HK_GLUE) then
+            ts%HN = ts%HN - 1
         end if
     end subroutine ts_nbsp
 
     ! Infinitely stretchable glue, \hfil, and a fixed kern.
-    subroutine ts_hfil()
-        call h_new(HK_GLUE)
-        HSO(HN) = 1
-        HST(HN) = 1.0_dp
+    subroutine ts_hfil(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        call h_new(ts, HK_GLUE)
+        ts%HSO(ts%HN) = 1
+        ts%HST(ts%HN) = 1.0_dp
     end subroutine ts_hfil
 
-    subroutine ts_kern(w)
+    subroutine ts_kern(ts, w)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: w
-        call h_new(HK_KERN)
-        HW(HN) = w
-        HEXPL(HN) = .true.
+        call h_new(ts, HK_KERN)
+        ts%HW(ts%HN) = w
+        ts%HEXPL(ts%HN) = .true.
     end subroutine ts_kern
 
     ! A formula: inline, in text style as one box of the paragraph, or,
     ! with display, displayed (TeX's $$...$$, below) with the number tag.
     ! The layout of the formula itself is the same, math_formula's; only
     ! its style and where it goes differ.
-    subroutine ts_math(src, size, color, display, tag)
+    subroutine ts_math(ts, src, size, color, display, tag)
+        type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         integer, intent(in), optional :: color
@@ -523,32 +525,33 @@ contains
         type(mrules_t) :: rules
         real(dp) :: w, h, d
         integer :: col
-        col = TEXT_COLOR
+        col = ts%TEXT_COLOR
         if (present(color)) col = color
         if (present(display)) then
             if (display) then
                 if (present(tag)) then
-                    call set_display(src, size, tag, col)
+                    call set_display(ts, src, size, tag, col)
                 else
-                    call set_display(src, size, "", col)
+                    call set_display(ts, src, size, "", col)
                 end if
                 return
             end if
         end if
-        if (.not. IN_PAR) call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp)
+        if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
         call math_formula(src, size, .false., run, rules, w, h, d)
-        call h_new(HK_BOX)
-        HW(HN) = w
-        HH(HN) = h
-        HD(HN) = d
-        call box_items(run, rules, col, HI0(HN), HI1(HN))
-        P_SF = 1000.0_dp
+        call h_new(ts, HK_BOX)
+        ts%HW(ts%HN) = w
+        ts%HH(ts%HN) = h
+        ts%HD(ts%HN) = d
+        call box_items(ts, run, rules, col, ts%HI0(ts%HN), ts%HI1(ts%HN))
+        ts%P_SF = 1000.0_dp
     end subroutine ts_math
 
     ! A label hung to the left of the paragraph's first line, ending sep
     ! before the text, as a LaTeX \item puts it; a penalty of 0 follows,
     ! as there.
-    subroutine ts_label(s, face, size, sep, color)
+    subroutine ts_label(ts, s, face, size, sep, color)
+        type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: s
         integer, intent(in) :: face
         real(dp), intent(in) :: size, sep
@@ -558,7 +561,7 @@ contains
         integer, allocatable :: cps(:)
         integer :: n, k, g, gf, prev, pf, col
         real(dp) :: pen, w
-        col = TEXT_COLOR
+        col = ts%TEXT_COLOR
         if (present(color)) col = color
         call code_points(s, cps, n)
         pen = 0.0_dp
@@ -576,46 +579,47 @@ contains
         do k = 1, run%n
             run%x(k) = run%x(k) - sep - w
         end do
-        call h_new(HK_BOX)
-        HW(HN) = 0.0_dp
-        HH(HN) = 0.0_dp
-        HD(HN) = 0.0_dp
-        call box_items(run, rules, col, HI0(HN), HI1(HN))
-        call h_new(HK_PEN)
-        HP(HN) = 0
+        call h_new(ts, HK_BOX)
+        ts%HW(ts%HN) = 0.0_dp
+        ts%HH(ts%HN) = 0.0_dp
+        ts%HD(ts%HN) = 0.0_dp
+        call box_items(ts, run, rules, col, ts%HI0(ts%HN), ts%HI1(ts%HN))
+        call h_new(ts, HK_PEN)
+        ts%HP(ts%HN) = 0
     end subroutine ts_label
 
     ! A line break within the paragraph, LaTeX's \\: in justified or
     ! ragged right text \nobreak\hfil\break; in centred or ragged left
     ! text the paragraph ends and a new one goes on with the same settings,
     ! as \centering's \\ does.
-    subroutine ts_hard_break()
+    subroutine ts_hard_break(ts)
+        type(typeset_context_t), intent(inout) :: ts
         integer :: al
         real(dp) :: l, r, s, hg, lead
         logical :: nb
-        if (.not. IN_PAR) return
-        do while (HN > 0)
-            if (HK(HN) /= HK_GLUE) exit
-            HN = HN - 1
+        if (.not. ts%IN_PAR) return
+        do while (ts%HN > 0)
+            if (ts%HK(ts%HN) /= HK_GLUE) exit
+            ts%HN = ts%HN - 1
         end do
-        if (P_ALIGN == ALIGN_CENTER .or. P_ALIGN == ALIGN_RIGHT) then
-            al = P_ALIGN
-            l = P_LEFT
-            r = P_RIGHT
-            s = P_SIZE
-            hg = P_HANG
-            lead = CUR_BASELINE%w
-            nb = P_NOBREAK
-            call ts_end_par()
-            call ts_begin_par(al, 0.0_dp, l, r, s, hg, skip=.false., leading=lead, &
+        if (ts%P_ALIGN == ALIGN_CENTER .or. ts%P_ALIGN == ALIGN_RIGHT) then
+            al = ts%P_ALIGN
+            l = ts%P_LEFT
+            r = ts%P_RIGHT
+            s = ts%P_SIZE
+            hg = ts%P_HANG
+            lead = ts%CUR_BASELINE%w
+            nb = ts%P_NOBREAK
+            call ts_end_par(ts)
+            call ts_begin_par(ts, al, 0.0_dp, l, r, s, hg, skip=.false., leading=lead, &
                               nobreak=nb)
             return
         end if
-        call h_new(HK_PEN)
-        HP(HN) = INF_PENALTY
-        call ts_hfil()
-        call h_new(HK_PEN)
-        HP(HN) = EJECT_PENALTY
+        call h_new(ts, HK_PEN)
+        ts%HP(ts%HN) = INF_PENALTY
+        call ts_hfil(ts)
+        call h_new(ts, HK_PEN)
+        ts%HP(ts%HN) = EJECT_PENALTY
     end subroutine ts_hard_break
 
     ! ------------------------------------------------------------------
@@ -624,19 +628,21 @@ contains
 
     ! End the paragraph: break it into lines and put them on the vertical
     ! list.
-    subroutine ts_end_par()
-        if (.not. IN_PAR) return
-        IN_PAR = .false.
-        if (HN > 0) then
-            call line_break(.false.)
-            NOBREAK_NEXT = .false.
+    subroutine ts_end_par(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        if (.not. ts%IN_PAR) return
+        ts%IN_PAR = .false.
+        if (ts%HN > 0) then
+            call line_break(ts, .false.)
+            ts%NOBREAK_NEXT = .false.
         end if
-        CUR_BASELINE = BASELINESKIP
+        ts%CUR_BASELINE = ts%BASELINESKIP
     end subroutine ts_end_par
 
     ! TeX's line_break. d is true when a display follows, which changes
     ! the penalty before the last line.
-    subroutine line_break(d)
+    subroutine line_break(ts, d)
+        type(typeset_context_t), intent(inout) :: ts
         logical, intent(in) :: d
         type(ts_glue_t) :: lskip, rskip, pfill
         integer :: nlines
@@ -644,28 +650,29 @@ contains
         logical, allocatable :: hyph(:)
 
         ! The glue at the end goes, and \penalty10000 \parfillskip comes.
-        if (HK(HN) == HK_GLUE) HN = HN - 1
-        call align_glue(lskip, rskip, pfill)
-        call h_new(HK_PEN)
-        HP(HN) = INF_PENALTY
-        call h_new(HK_GLUE)
-        HW(HN) = pfill%w
-        HST(HN) = pfill%st
-        HSO(HN) = pfill%sto
+        if (ts%HK(ts%HN) == HK_GLUE) ts%HN = ts%HN - 1
+        call align_glue(ts, lskip, rskip, pfill)
+        call h_new(ts, HK_PEN)
+        ts%HP(ts%HN) = INF_PENALTY
+        call h_new(ts, HK_GLUE)
+        ts%HW(ts%HN) = pfill%w
+        ts%HST(ts%HN) = pfill%st
+        ts%HSO(ts%HN) = pfill%sto
 
-        call find_breaks(lskip, rskip, brk, hyph, nlines)
-        call post_line_break(lskip, rskip, brk, hyph, nlines, d)
+        call find_breaks(ts, lskip, rskip, brk, hyph, nlines)
+        call post_line_break(ts, lskip, rskip, brk, hyph, nlines, d)
     end subroutine line_break
 
     ! \leftskip, \rightskip and \parfillskip for the alignment, LaTeX's:
     ! \raggedright, \centering and \raggedleft use \@flushglue.
-    subroutine align_glue(lskip, rskip, pfill)
+    subroutine align_glue(ts, lskip, rskip, pfill)
+        type(typeset_context_t), intent(in) :: ts
         type(ts_glue_t), intent(out) :: lskip, rskip, pfill
         type(ts_glue_t), parameter :: FIL = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0)
         lskip = ts_glue_t()
         rskip = ts_glue_t()
         pfill = FIL
-        select case (P_ALIGN)
+        select case (ts%P_ALIGN)
         case (ALIGN_LEFT)
             rskip = FIL
         case (ALIGN_CENTER)
@@ -708,7 +715,8 @@ contains
     ! Knuth and Plass: the breaks of least total demerits, brk(1..n) the
     ! nodes the n lines end at (HN + 1 for the end of the paragraph) and
     ! hyph(k) whether line k ends at a hyphen.
-    subroutine find_breaks(lskip, rskip, brk, hyph, nlines)
+    subroutine find_breaks(ts, lskip, rskip, brk, hyph, nlines)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: lskip, rskip
         integer, allocatable, intent(out) :: brk(:)
         logical, allocatable, intent(out) :: hyph(:)
@@ -749,13 +757,13 @@ contains
 
         do pass = 1, 3
             if (second .and. .not. hyphenated) then
-                call hyphenate_all()
+                call hyphenate_all(ts)
                 hyphenated = .true.
             end if
             if (allocated(sw)) deallocate (sw)
-            allocate (sw(6, 0:HN))
+            allocate (sw(6, 0:ts%HN))
             call prefix_sums(sw)
-            nfree = 4*HN + 16
+            nfree = 4*ts%HN + 16
             if (allocated(a_pas)) deallocate (a_pas, a_line, a_fit, a_next, a_hyph, a_dem, &
                                               p_at, p_prev, p_hyph)
             allocate (a_pas(nfree), a_line(nfree), a_fit(nfree), a_next(nfree), &
@@ -767,36 +775,36 @@ contains
             np = 0
             head = 1
             a_pas(1) = 0
-            a_line(1) = P_PREV_GRAF + 1
+            a_line(1) = ts%P_PREV_GRAF + 1
             a_fit(1) = DECENT
             a_hyph(1) = .false.
             a_dem(1) = 0
             a_next(1) = 0
 
             cur = 1
-            do while (cur <= HN + 1 .and. head /= 0)
+            do while (cur <= ts%HN + 1 .and. head /= 0)
                 legal = .false.
                 pi = 0
                 ishyph = .false.
                 discw = 0.0_dp
-                if (cur == HN + 1) then
+                if (cur == ts%HN + 1) then
                     legal = .true.
                     pi = EJECT_PENALTY
                     ishyph = .true.
                 else
-                    select case (HK(cur))
+                    select case (ts%HK(cur))
                     case (HK_GLUE)
                         if (cur > 1) legal = precedes_break(cur - 1)
                     case (HK_KERN)
-                        if (HEXPL(cur) .and. cur < HN) legal = HK(cur + 1) == HK_GLUE
+                        if (ts%HEXPL(cur) .and. cur < ts%HN) legal = ts%HK(cur + 1) == HK_GLUE
                     case (HK_PEN)
-                        legal = HP(cur) < INF_PENALTY
-                        pi = HP(cur)
+                        legal = ts%HP(cur) < INF_PENALTY
+                        pi = ts%HP(cur)
                     case (HK_DISC)
                         legal = .true.
                         ishyph = .true.
-                        discw = HW(cur)
-                        if (HC0(cur) == 0) then
+                        discw = ts%HW(cur)
+                        if (ts%HC0(cur) == 0) then
                             pi = EX_HYPHEN_PENALTY
                         else
                             pi = HYPHEN_PENALTY
@@ -819,7 +827,7 @@ contains
                     end if
                     r = a_next(r)
                 end do
-                nlines = a_line(best) - 1 - P_PREV_GRAF
+                nlines = a_line(best) - 1 - ts%P_PREV_GRAF
                 allocate (brk(nlines), hyph(nlines))
                 bp = a_pas(best)
                 do k = nlines, 1, -1
@@ -846,8 +854,8 @@ contains
         ! discardable: a word, a box, a discretionary, or a font kern.
         logical function precedes_break(i)
             integer, intent(in) :: i
-            precedes_break = HK(i) == HK_WORD .or. HK(i) == HK_BOX .or. &
-                             HK(i) == HK_DISC .or. (HK(i) == HK_KERN .and. .not. HEXPL(i))
+            precedes_break = ts%HK(i) == HK_WORD .or. ts%HK(i) == HK_BOX .or. &
+                             ts%HK(i) == HK_DISC .or. (ts%HK(i) == HK_KERN .and. .not. ts%HEXPL(i))
         end function precedes_break
 
         ! TeX's try_break(pi, break_type) at node cur.
@@ -874,14 +882,14 @@ contains
                     ! there is a hanging indentation, so one class of
                     ! line numbers ends after line 1 and the other at
                     ! the end of the active list.
-                    if (minimum < int(AWFUL_BAD, 8) .and. (old_l /= easy_line() .or. r == 0)) then
+                    if (minimum < int(AWFUL_BAD, 8) .and. (old_l /= easy_line(ts) .or. r == 0)) then
                         call new_active(prev_r)
                         minimum = int(AWFUL_BAD, 8)
                         mind = int(AWFUL_BAD, 8)
                     end if
                     if (r == 0) return
-                    linew = line_width(l)
-                    if (l > easy_line()) then
+                    linew = line_width(ts, l)
+                    if (l > easy_line(ts)) then
                         old_l = huge(1) - 1
                     else
                         old_l = l
@@ -964,7 +972,7 @@ contains
                         end if
                     end if
                     if (ishyph .and. a_hyph(r)) then
-                        if (cur <= HN) then
+                        if (cur <= ts%HN) then
                             dd = dd + DOUBLE_HYPHEN_DEMERITS
                         else
                             dd = dd + FINAL_HYPHEN_DEMERITS
@@ -1048,15 +1056,15 @@ contains
             end if
             at = p_at(p)
             s = at + 1
-            if (at <= HN) then
-                if (HK(at) == HK_DISC) return
+            if (at <= ts%HN) then
+                if (ts%HK(at) == HK_DISC) return
             end if
-            do while (s <= HN)
-                select case (HK(s))
+            do while (s <= ts%HN)
+                select case (ts%HK(s))
                 case (HK_GLUE, HK_PEN)
                     s = s + 1
                 case (HK_KERN)
-                    if (.not. HEXPL(s)) exit
+                    if (.not. ts%HEXPL(s)) exit
                     s = s + 1
                 case default
                     exit
@@ -1071,7 +1079,7 @@ contains
             real(dp), intent(out) :: t(6)
             integer :: last
             last = cur - 1
-            if (cur == HN + 1) last = HN
+            if (cur == ts%HN + 1) last = ts%HN
             t = bg
             if (last >= start) t = t + sw(:, last) - sw(:, start - 1)
             t(1) = t(1) + discw
@@ -1081,13 +1089,13 @@ contains
             real(dp), intent(inout) :: s(:, 0:)
             integer :: i
             s(:, 0) = 0.0_dp
-            do i = 1, HN
+            do i = 1, ts%HN
                 s(:, i) = s(:, i - 1)
-                select case (HK(i))
+                select case (ts%HK(i))
                 case (HK_WORD, HK_BOX, HK_KERN)
-                    s(1, i) = s(1, i) + HW(i)
+                    s(1, i) = s(1, i) + ts%HW(i)
                 case (HK_GLUE)
-                    call add_glue(s(:, i), HW(i), HST(i), HSO(i), HSH(i))
+                    call add_glue(s(:, i), ts%HW(i), ts%HST(i), ts%HSO(i), ts%HSH(i))
                 end select
             end do
         end subroutine prefix_sums
@@ -1105,8 +1113,9 @@ contains
 
     ! The line number up to which lines are special (have widths of their
     ! own): the first, when there is a hanging indentation.
-    pure integer function easy_line()
-        if (P_HANG /= 0.0_dp) then
+    pure integer function easy_line(ts)
+        type(typeset_context_t), intent(in) :: ts
+        if (ts%P_HANG /= 0.0_dp) then
             easy_line = 1
         else
             easy_line = 0
@@ -1114,17 +1123,19 @@ contains
     end function easy_line
 
     ! The width of line l of the paragraph.
-    pure real(dp) function line_width(l)
+    pure real(dp) function line_width(ts, l)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: l
-        line_width = HSIZE - P_LEFT - P_RIGHT
-        if (l > 1) line_width = line_width - abs(P_HANG)
+        line_width = ts%HSIZE - ts%P_LEFT - ts%P_RIGHT
+        if (l > 1) line_width = line_width - abs(ts%P_HANG)
     end function line_width
 
     ! Where line l starts, from the left margin.
-    pure real(dp) function line_indent(l)
+    pure real(dp) function line_indent(ts, l)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: l
-        line_indent = P_LEFT
-        if (l > 1 .and. P_HANG > 0.0_dp) line_indent = line_indent + P_HANG
+        line_indent = ts%P_LEFT
+        if (l > 1 .and. ts%P_HANG > 0.0_dp) line_indent = line_indent + ts%P_HANG
     end function line_indent
 
     ! TeX's second pass hyphenates every word that follows glue: each such
@@ -1132,19 +1143,20 @@ contains
     ! word of an OpenType font, and its letters are cut again at the
     ! places the patterns allow, with a discretionary hyphen in each cut.
     ! The pieces are measured separately, as in XeTeX.
-    subroutine hyphenate_all()
+    subroutine hyphenate_all(ts)
+        type(typeset_context_t), intent(inout) :: ts
         integer :: i, j, k, a, b, n, npos, pos(64), m
         character(len=64) :: lw
         logical :: ok
         i = 1
-        do while (i <= HN)
-            if (HK(i) /= HK_GLUE) then
+        do while (i <= ts%HN)
+            if (ts%HK(i) /= HK_GLUE) then
                 i = i + 1
                 cycle
             end if
             j = i + 1
-            if (j > HN) exit
-            if (HK(j) /= HK_WORD) then
+            if (j > ts%HN) exit
+            if (ts%HK(j) /= HK_WORD) then
                 i = i + 1
                 cycle
             end if
@@ -1152,11 +1164,11 @@ contains
             ! penalty, a font kern, another word, or nothing; anything
             ! else and it is left whole.
             ok = .true.
-            if (j < HN) then
-                select case (HK(j + 1))
+            if (j < ts%HN) then
+                select case (ts%HK(j + 1))
                 case (HK_GLUE, HK_PEN, HK_WORD)
                 case (HK_KERN)
-                    ok = .not. HEXPL(j + 1)
+                    ok = .not. ts%HEXPL(j + 1)
                 case default
                     ok = .false.
                 end select
@@ -1167,8 +1179,8 @@ contains
             end if
             ! The first letter, which must be in the word.
             a = 0
-            do k = HC0(j), HC1(j)
-                if (is_letter(CPA(k))) then
+            do k = ts%HC0(j), ts%HC1(j)
+                if (is_letter(ts%CPA(k))) then
                     a = k
                     exit
                 end if
@@ -1177,64 +1189,66 @@ contains
                 i = j + 1
                 cycle
             end if
-            if (a > HC0(j)) then
-                call split_word(j, a)
+            if (a > ts%HC0(j)) then
+                call split_word(ts, j, a)
                 j = j + 1
             end if
             ! The letters run to b.
-            b = HC1(j)
-            do k = HC0(j), HC1(j)
-                if (.not. is_letter(CPA(k))) then
+            b = ts%HC1(j)
+            do k = ts%HC0(j), ts%HC1(j)
+                if (.not. is_letter(ts%CPA(k))) then
                     b = k - 1
                     exit
                 end if
             end do
-            if (b < HC1(j)) call split_word(j, b + 1)
-            n = b - HC0(j) + 1
+            if (b < ts%HC1(j)) call split_word(ts, j, b + 1)
+            n = b - ts%HC0(j) + 1
             if (n < LEFT_HYPHEN_MIN + RIGHT_HYPHEN_MIN .or. n > 63) then
                 i = j + 1
                 cycle
             end if
             do k = 1, n
-                lw(k:k) = lower(CPA(HC0(j) + k - 1))
+                lw(k:k) = lower(ts%CPA(ts%HC0(j) + k - 1))
             end do
             call hyph_points(lw(1:n), LEFT_HYPHEN_MIN, RIGHT_HYPHEN_MIN, pos, npos)
             ! Cut from the end, so that the earlier positions stay valid.
             do m = npos, 1, -1
-                call split_word(j, HC0(j) + pos(m))
-                call insert_disc(j + 1)
+                call split_word(ts, j, ts%HC0(j) + pos(m))
+                call insert_disc(ts, j + 1)
             end do
             i = j + 1
         end do
     end subroutine hyphenate_all
 
     ! Node j becomes two words, the second starting at code point c.
-    subroutine split_word(j, c)
+    subroutine split_word(ts, j, c)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: j, c
-        call h_insert(j + 1)
-        HK(j + 1) = HK_WORD
-        HFACE(j + 1) = HFACE(j)
-        HSZ(j + 1) = HSZ(j)
-        HCOL(j + 1) = HCOL(j)
-        HC0(j + 1) = c
-        HC1(j + 1) = HC1(j)
-        HC1(j) = c - 1
-        call measure(j)
-        call measure(j + 1)
+        call h_insert(ts, j + 1)
+        ts%HK(j + 1) = HK_WORD
+        ts%HFACE(j + 1) = ts%HFACE(j)
+        ts%HSZ(j + 1) = ts%HSZ(j)
+        ts%HCOL(j + 1) = ts%HCOL(j)
+        ts%HC0(j + 1) = c
+        ts%HC1(j + 1) = ts%HC1(j)
+        ts%HC1(j) = c - 1
+        call measure(ts, j)
+        call measure(ts, j + 1)
     end subroutine split_word
 
     ! A discretionary hyphen at position j, in the face of the word
     ! before it.
-    subroutine insert_disc(j)
+    subroutine insert_disc(ts, j)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: j
         integer :: gf
-        call h_insert(j)
-        HK(j) = HK_DISC
-        HFACE(j) = HFACE(j - 1)
-        HSZ(j) = HSZ(j - 1)
-        HCOL(j) = HCOL(j - 1)
-        HC0(j) = 45
-        HW(j) = glyph_adv(glyph_for(HFACE(j), 45, gf))*HSZ(j)
+        call h_insert(ts, j)
+        ts%HK(j) = HK_DISC
+        ts%HFACE(j) = ts%HFACE(j - 1)
+        ts%HSZ(j) = ts%HSZ(j - 1)
+        ts%HCOL(j) = ts%HCOL(j - 1)
+        ts%HC0(j) = 45
+        ts%HW(j) = glyph_adv(glyph_for(ts%HFACE(j), 45, gf))*ts%HSZ(j)
     end subroutine insert_disc
 
     ! Letters are what TeX gives a \lccode: the Latin, Greek and Cyrillic
@@ -1266,7 +1280,8 @@ contains
     ! TeX's post_line_break: each line packed to its width, with \leftskip
     ! and \rightskip, and appended to the vertical list with the penalties
     ! between lines.
-    subroutine post_line_break(lskip, rskip, brk, hyph, nlines, d)
+    subroutine post_line_break(ts, lskip, rskip, brk, hyph, nlines, d)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: lskip, rskip
         integer, intent(in) :: brk(:), nlines
         logical, intent(in) :: hyph(:), d
@@ -1274,21 +1289,21 @@ contains
         real(dp) :: w, h, dp_
         integer :: i0, i1
         s = 1
-        best_line = P_PREV_GRAF + nlines + 1
-        LAST_PAR0 = NV + 1
+        best_line = ts%P_PREV_GRAF + nlines + 1
+        ts%LAST_PAR0 = ts%NV + 1
         do l = 1, nlines
-            cur_line = P_PREV_GRAF + l
+            cur_line = ts%P_PREV_GRAF + l
             e = brk(l)
-            call pack_line(s, e, lskip, rskip, line_width(cur_line), i0, i1, w, h, dp_)
-            call append_box(i0, i1, w, h, dp_, line_indent(cur_line))
+            call pack_line(ts, s, e, lskip, rskip, line_width(ts, cur_line), i0, i1, w, h, dp_)
+            call append_box(ts, i0, i1, w, h, dp_, line_indent(ts, cur_line))
             if (cur_line + 1 /= best_line) then
                 pen = INTERLINE_PENALTY
-                if (P_NOBREAK) pen = INF_PENALTY
-                if (cur_line == P_PREV_GRAF + 1) then
-                    if (NOBREAK_NEXT) then
+                if (ts%P_NOBREAK) pen = INF_PENALTY
+                if (cur_line == ts%P_PREV_GRAF + 1) then
+                    if (ts%NOBREAK_NEXT) then
                         pen = pen + INF_PENALTY
                     else
-                        pen = pen + CLUB_PENALTY
+                        pen = pen + ts%CLUB_PENALTY
                     end if
                 end if
                 if (cur_line + 2 == best_line) then
@@ -1299,15 +1314,15 @@ contains
                     end if
                 end if
                 if (hyph(l)) pen = pen + BROKEN_PENALTY
-                if (pen /= 0) call ts_penalty(min(pen, INF_PENALTY))
+                if (pen /= 0) call ts_penalty(ts, min(pen, INF_PENALTY))
             end if
             ! The next line starts after the break, discardables dropped.
             s = e + 1
-            if (e <= HN) then
-                if (HK(e) /= HK_DISC) then
-                    do while (s <= HN)
-                        if (HK(s) == HK_GLUE .or. HK(s) == HK_PEN .or. &
-                            (HK(s) == HK_KERN .and. HEXPL(s))) then
+            if (e <= ts%HN) then
+                if (ts%HK(e) /= HK_DISC) then
+                    do while (s <= ts%HN)
+                        if (ts%HK(s) == HK_GLUE .or. ts%HK(s) == HK_PEN .or. &
+                            (ts%HK(s) == HK_KERN .and. ts%HEXPL(s))) then
                             s = s + 1
                         else
                             exit
@@ -1316,14 +1331,15 @@ contains
                 end if
             end if
         end do
-        LAST_PAR1 = NV
-        P_PREV_GRAF = P_PREV_GRAF + nlines
+        ts%LAST_PAR1 = ts%NV
+        ts%P_PREV_GRAF = ts%P_PREV_GRAF + nlines
     end subroutine post_line_break
 
     ! Pack nodes s..e-1 (and the hyphen of a discretionary at e) into a
     ! line width wide: TeX's hpack, glue set to fit, shrink no further
     ! than its total. The items are appended to the item arena.
-    subroutine pack_line(s, e, lskip, rskip, width, i0, i1, w, h, d)
+    subroutine pack_line(ts, s, e, lskip, rskip, width, i0, i1, w, h, d)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: s, e
         type(ts_glue_t), intent(in) :: lskip, rskip
         real(dp), intent(in) :: width
@@ -1332,7 +1348,7 @@ contains
         real(dp) :: t(6), x, ratio, gw, cw, ch, cd
         integer :: k, k1, last, ord, sgn
         logical :: hy
-        last = min(e - 1, HN)
+        last = min(e - 1, ts%HN)
         t = 0.0_dp
         call add_glue(t, lskip%w, lskip%st, lskip%sto, lskip%sh)
         call add_glue(t, rskip%w, rskip%st, rskip%sto, rskip%sh)
@@ -1340,29 +1356,29 @@ contains
         d = 0.0_dp
         k = s
         do while (k <= last)
-            select case (HK(k))
+            select case (ts%HK(k))
             case (HK_WORD)
-                call chain(k, last, e, k1, hy)
-                call chain_size(k, k1, hy, cw, ch, cd)
+                call chain(ts, k, last, e, k1, hy)
+                call chain_size(ts, k, k1, hy, cw, ch, cd)
                 t(1) = t(1) + cw
-                h = max(h, ch + HRAISE(k))
-                d = max(d, cd - HRAISE(k))
+                h = max(h, ch + ts%HRAISE(k))
+                d = max(d, cd - ts%HRAISE(k))
                 k = k1
             case (HK_BOX)
-                t(1) = t(1) + HW(k)
-                h = max(h, HH(k) + HRAISE(k))
-                d = max(d, HD(k) - HRAISE(k))
+                t(1) = t(1) + ts%HW(k)
+                h = max(h, ts%HH(k) + ts%HRAISE(k))
+                d = max(d, ts%HD(k) - ts%HRAISE(k))
             case (HK_KERN)
-                t(1) = t(1) + HW(k)
+                t(1) = t(1) + ts%HW(k)
             case (HK_GLUE)
-                call add_glue(t, HW(k), HST(k), HSO(k), HSH(k))
+                call add_glue(t, ts%HW(k), ts%HST(k), ts%HSO(k), ts%HSH(k))
             end select
             k = k + 1
         end do
         ! A hyphen not joined to a word before it stands alone.
-        if (e <= HN) then
-            if (HK(e) == HK_DISC .and. HC0(e) /= 0) then
-                if (.not. joins_hyphen(last, e)) t(1) = t(1) + HW(e)
+        if (e <= ts%HN) then
+            if (ts%HK(e) == HK_DISC .and. ts%HC0(e) /= 0) then
+                if (.not. joins_hyphen(ts, last, e)) t(1) = t(1) + ts%HW(e)
             end if
         end if
         x = width - t(1)
@@ -1385,33 +1401,33 @@ contains
             end if
         end if
 
-        i0 = NIT + 1
+        i0 = ts%NIT + 1
         x = glue_set(lskip%w, lskip%st, lskip%sto, lskip%sh)
         k = s
         do while (k <= last)
-            select case (HK(k))
+            select case (ts%HK(k))
             case (HK_WORD)
-                call chain(k, last, e, k1, hy)
-                call emit_chain(k, k1, hy, x, cw)
+                call chain(ts, k, last, e, k1, hy)
+                call emit_chain(ts, k, k1, hy, x, cw)
                 x = x + cw
                 k = k1
             case (HK_BOX)
-                call emit_box(k, x)
-                x = x + HW(k)
+                call emit_box(ts, k, x)
+                x = x + ts%HW(k)
             case (HK_KERN)
-                x = x + HW(k)
+                x = x + ts%HW(k)
             case (HK_GLUE)
-                gw = glue_set(HW(k), HST(k), HSO(k), HSH(k))
+                gw = glue_set(ts%HW(k), ts%HST(k), ts%HSO(k), ts%HSH(k))
                 x = x + gw
             end select
             k = k + 1
         end do
-        if (e <= HN) then
-            if (HK(e) == HK_DISC .and. HC0(e) /= 0) then
-                if (.not. joins_hyphen(last, e)) call emit_hyphen(e, x)
+        if (e <= ts%HN) then
+            if (ts%HK(e) == HK_DISC .and. ts%HC0(e) /= 0) then
+                if (.not. joins_hyphen(ts, last, e)) call emit_hyphen(ts, e, x)
             end if
         end if
-        i1 = NIT
+        i1 = ts%NIT
         w = width
 
     contains
@@ -1433,7 +1449,8 @@ contains
     ! words k..k1 of one face, size and colour whose characters follow on
     ! from each other, with the discretionaries between them not taken;
     ! hy is whether the hyphen of the break at e ends it.
-    subroutine chain(k, last, e, k1, hy)
+    subroutine chain(ts, k, last, e, k1, hy)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: k, last, e
         integer, intent(out) :: k1
         logical, intent(out) :: hy
@@ -1442,13 +1459,13 @@ contains
         do
             n = k1 + 1
             if (n > last) exit
-            if (HK(n) == HK_DISC .and. n + 1 <= last) then
-                if (same_font(k, n + 1) .and. HC0(n + 1) == HC1(k1) + 1) then
+            if (ts%HK(n) == HK_DISC .and. n + 1 <= last) then
+                if (same_font(ts, k, n + 1) .and. ts%HC0(n + 1) == ts%HC1(k1) + 1) then
                     k1 = n + 1
                     cycle
                 end if
-            else if (HK(n) == HK_WORD) then
-                if (same_font(k, n) .and. HC0(n) == HC1(k1) + 1) then
+            else if (ts%HK(n) == HK_WORD) then
+                if (same_font(ts, k, n) .and. ts%HC0(n) == ts%HC1(k1) + 1) then
                     k1 = n
                     cycle
                 end if
@@ -1456,52 +1473,58 @@ contains
             exit
         end do
         hy = .false.
-        if (k1 == last .and. e <= HN) hy = joins_hyphen(last, e)
+        if (k1 == last .and. e <= ts%HN) hy = joins_hyphen(ts, last, e)
     end subroutine chain
 
-    logical function same_font(a, b)
+    logical function same_font(ts, a, b)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: a, b
-        same_font = HK(b) == HK_WORD .and. HFACE(a) == HFACE(b) .and. &
-                    HSZ(a) == HSZ(b) .and. HCOL(a) == HCOL(b) .and. HRAISE(a) == HRAISE(b)
+        same_font = ts%HK(b) == HK_WORD .and. ts%HFACE(a) == ts%HFACE(b) .and. &
+                    ts%HSZ(a) == ts%HSZ(b) .and. ts%HCOL(a) == ts%HCOL(b) .and. &
+                    ts%HRAISE(a) == ts%HRAISE(b)
     end function same_font
 
     ! Whether the hyphen of the break at e is joined to the word at last.
-    logical function joins_hyphen(last, e)
+    logical function joins_hyphen(ts, last, e)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: last, e
         joins_hyphen = .false.
-        if (last < 1 .or. e > HN) return
-        if (HK(e) /= HK_DISC .or. HC0(e) == 0) return
-        if (HK(last) /= HK_WORD) return
-        joins_hyphen = HFACE(last) == HFACE(e) .and. HSZ(last) == HSZ(e) .and. &
-                       HCOL(last) == HCOL(e)
+        if (last < 1 .or. e > ts%HN) return
+        if (ts%HK(e) /= HK_DISC .or. ts%HC0(e) == 0) return
+        if (ts%HK(last) /= HK_WORD) return
+        joins_hyphen = ts%HFACE(last) == ts%HFACE(e) .and. ts%HSZ(last) == ts%HSZ(e) .and. &
+                       ts%HCOL(last) == ts%HCOL(e)
     end function joins_hyphen
 
     ! The code points of a chain, with the hyphen when it has one.
-    subroutine chain_cps(k, k1, hy, c)
+    subroutine chain_cps(ts, k, k1, hy, c)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: k, k1
         logical, intent(in) :: hy
         integer, allocatable, intent(out) :: c(:)
         integer :: n
-        n = HC1(k1) - HC0(k) + 1
+        n = ts%HC1(k1) - ts%HC0(k) + 1
         if (hy) then
             allocate (c(n + 1))
             c(n + 1) = 45
         else
             allocate (c(n))
         end if
-        c(1:n) = CPA(HC0(k):HC1(k1))
+        c(1:n) = ts%CPA(ts%HC0(k):ts%HC1(k1))
     end subroutine chain_cps
 
-    subroutine chain_size(k, k1, hy, w, h, d)
+    subroutine chain_size(ts, k, k1, hy, w, h, d)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: k, k1
         logical, intent(in) :: hy
         real(dp), intent(out) :: w, h, d
         integer, allocatable :: c(:)
-        call chain_cps(k, k1, hy, c)
-        call shape(c, HFACE(k), HSZ(k), w, h, d)
+        call chain_cps(ts, k, k1, hy, c)
+        call shape(c, ts%HFACE(k), ts%HSZ(k), w, h, d)
     end subroutine chain_size
 
-    subroutine emit_chain(k, k1, hy, x0, w)
+    subroutine emit_chain(ts, k, k1, hy, x0, w)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: k, k1
         logical, intent(in) :: hy
         real(dp), intent(in) :: x0
@@ -1509,15 +1532,15 @@ contains
         integer, allocatable :: c(:)
         integer :: j, g, gf, prev, pf
         real(dp) :: x, s
-        call chain_cps(k, k1, hy, c)
-        s = HSZ(k)
+        call chain_cps(ts, k, k1, hy, c)
+        s = ts%HSZ(k)
         x = x0
         prev = 0
         pf = 0
         do j = 1, size(c)
-            g = glyph_for(HFACE(k), c(j), gf)
+            g = glyph_for(ts%HFACE(k), c(j), gf)
             if (prev > 0 .and. gf == pf) x = x + glyph_kern(gf, prev, g)*s
-            call it_glyph(g, x, HRAISE(k), s, HCOL(k))
+            call it_glyph(ts, g, x, ts%HRAISE(k), s, ts%HCOL(k))
             x = x + glyph_adv(g)*s
             prev = g
             pf = gf
@@ -1525,54 +1548,59 @@ contains
         w = x - x0
     end subroutine emit_chain
 
-    subroutine emit_hyphen(k, x0)
+    subroutine emit_hyphen(ts, k, x0)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: k
         real(dp), intent(in) :: x0
         integer :: gf
-        call it_glyph(glyph_for(HFACE(k), 45, gf), x0, 0.0_dp, HSZ(k), HCOL(k))
+        call it_glyph(ts, glyph_for(ts%HFACE(k), 45, gf), x0, 0.0_dp, ts%HSZ(k), ts%HCOL(k))
     end subroutine emit_hyphen
 
-    subroutine emit_box(k, x0)
+    subroutine emit_box(ts, k, x0)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: k
         real(dp), intent(in) :: x0
         integer :: j
-        do j = HI0(k), HI1(k)
-            if (BXK(j) == 1) then
-                call it_glyph(BXG(j), x0 + BXX(j), BXY(j) + HRAISE(k), BXS(j), BXC(j))
+        do j = ts%HI0(k), ts%HI1(k)
+            if (ts%BXK(j) == 1) then
+                call it_glyph(ts, ts%BXG(j), x0 + ts%BXX(j), ts%BXY(j) + ts%HRAISE(k), ts%BXS(j), &
+                        ts%BXC(j))
             else
-                call it_rule(x0 + BXX(j), BXY(j) + HRAISE(k), BXW(j), BXH(j), BXC(j))
+                call it_rule(ts, x0 + ts%BXX(j), ts%BXY(j) + ts%HRAISE(k), ts%BXW(j), ts%BXH(j), &
+                        ts%BXC(j))
             end if
         end do
     end subroutine emit_box
 
     ! A formula's glyphs and rules as box items, y up.
-    subroutine box_items(run, rules, col, i0, i1)
+    subroutine box_items(ts, run, rules, col, i0, i1)
+        type(typeset_context_t), intent(inout) :: ts
         type(glyphrun_t), intent(in) :: run
         type(mrules_t), intent(in) :: rules
         integer, intent(in) :: col
         integer, intent(out) :: i0, i1
         integer :: k
-        i0 = NBX + 1
+        i0 = ts%NBX + 1
         do k = 1, run%n
-            call bx_new()
-            BXK(NBX) = 1
-            BXG(NBX) = run%gid(k)
-            BXX(NBX) = run%x(k)
-            BXY(NBX) = -run%y(k)
-            BXS(NBX) = run%size(k)
-            BXC(NBX) = col
+            call bx_new(ts)
+            ts%BXK(ts%NBX) = 1
+            ts%BXG(ts%NBX) = run%gid(k)
+            ts%BXX(ts%NBX) = run%x(k)
+            ts%BXY(ts%NBX) = -run%y(k)
+            ts%BXS(ts%NBX) = run%size(k)
+            ts%BXC(ts%NBX) = col
         end do
         do k = 1, rules%n
-            call bx_new()
-            BXK(NBX) = 2
-            BXX(NBX) = rules%x(k)
+            call bx_new(ts)
+            ts%BXK(ts%NBX) = 2
+            ts%BXX(ts%NBX) = rules%x(k)
             ! rules%y is the top, y down.
-            BXY(NBX) = -(rules%y(k) + rules%h(k))
-            BXW(NBX) = rules%w(k)
-            BXH(NBX) = rules%h(k)
-            BXC(NBX) = col
+            ts%BXY(ts%NBX) = -(rules%y(k) + rules%h(k))
+            ts%BXW(ts%NBX) = rules%w(k)
+            ts%BXH(ts%NBX) = rules%h(k)
+            ts%BXC(ts%NBX) = col
         end do
-        i1 = NBX
+        i1 = ts%NBX
     end subroutine box_items
 
     ! ------------------------------------------------------------------
@@ -1584,7 +1612,8 @@ contains
     ! between \abovedisplayskip and \belowdisplayskip (or the short ones
     ! when the line before ends well before it), with its number, tag, at
     ! the right margin, and the paragraph goes on after it, not indented.
-    subroutine set_display(src, size, tag, col)
+    subroutine set_display(ts, src, size, tag, col)
+        type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         character(len=*), intent(in) :: tag
@@ -1599,25 +1628,25 @@ contains
         real(dp) :: lft, rgt, hg
 
         f = size/10.0_dp
-        inpar = IN_PAR .and. HN > 0
-        al = P_ALIGN
-        lft = P_LEFT
-        rgt = P_RIGHT
-        hg = P_HANG
+        inpar = ts%IN_PAR .and. ts%HN > 0
+        al = ts%P_ALIGN
+        lft = ts%P_LEFT
+        rgt = ts%P_RIGHT
+        hg = ts%P_HANG
         pre = -huge(1.0_dp)
         pg = 0
         if (inpar) then
-            call line_break(.true.)
-            pre = pre_display_size(size)
-            pg = P_PREV_GRAF
-        else if (NV > 0) then
+            call line_break(ts, .true.)
+            pre = pre_display_size(ts, size)
+            pg = ts%P_PREV_GRAF
+        else if (ts%NV > 0) then
             ! A display that starts a paragraph, as \noindent$$ does.
-            call v_glue(PARSKIP)
+            call v_glue(ts, ts%PARSKIP)
         end if
-        IN_PAR = .false.
+        ts%IN_PAR = .false.
 
         call math_formula(src, size, .true., run, rules, w, h, d)
-        z = HSIZE - lft - rgt
+        z = ts%HSIZE - lft - rgt
         s = lft
         ! The number, in the text font.
         e = 0.0_dp
@@ -1641,7 +1670,7 @@ contains
         if (dd < 0.0_dp) dd = 0.0_dp
 
         ! LaTeX's display skips, scaled from its 10pt ones.
-        call ts_penalty(PRE_DISPLAY_PENALTY)
+        call ts_penalty(ts, PRE_DISPLAY_PENALTY)
         if (dd + s <= pre) then
             g1 = ts_glue_t(10.0_dp*f, 2.0_dp*f, 5.0_dp*f, 0, 0)
             g2 = g1
@@ -1653,62 +1682,64 @@ contains
             g1 = ts_glue_t(10.0_dp*f, 2.0_dp*f, 5.0_dp*f, 0, 0)
             g2 = g1
         end if
-        call v_glue(g1)
+        call v_glue(ts, g1)
 
-        i0 = NIT + 1
+        i0 = ts%NIT + 1
         x0 = dd
         do k = 1, run%n
-            call it_glyph(run%gid(k), x0 + run%x(k), -run%y(k), run%size(k), col)
+            call it_glyph(ts, run%gid(k), x0 + run%x(k), -run%y(k), run%size(k), col)
         end do
         do k = 1, rules%n
-            call it_rule(x0 + rules%x(k), -(rules%y(k) + rules%h(k)), rules%w(k), &
+            call it_rule(ts, x0 + rules%x(k), -(rules%y(k) + rules%h(k)), rules%w(k), &
                          rules%h(k), col)
         end do
         ts_ = 0.0_dp
         if (e > 0.0_dp) then
             ts_ = z - e
             do k = 1, trun%n
-                call it_glyph(trun%gid(k), ts_ + trun%x(k), 0.0_dp, trun%size(k), col)
+                call it_glyph(ts, trun%gid(k), ts_ + trun%x(k), 0.0_dp, trun%size(k), col)
             end do
         end if
-        i1 = NIT
-        call append_box(i0, i1, z, h, d, s)
-        call ts_penalty(POST_DISPLAY_PENALTY)
-        call v_glue(g2)
+        i1 = ts%NIT
+        call append_box(ts, i0, i1, z, h, d, s)
+        call ts_penalty(ts, POST_DISPLAY_PENALTY)
+        call v_glue(ts, g2)
 
         ! The paragraph resumes, unindented, if anything follows.
-        call ts_begin_par(al, 0.0_dp, lft, rgt, P_SIZE, hg, skip=.false.)
-        P_PREV_GRAF = pg + 3
+        call ts_begin_par(ts, al, 0.0_dp, lft, rgt, ts%P_SIZE, hg, skip=.false.)
+        ts%P_PREV_GRAF = pg + 3
     end subroutine set_display
 
     ! TeX's \predisplaysize: where the last line's text ends, from the
     ! left margin, plus two ems.
-    real(dp) function pre_display_size(size) result(p)
+    real(dp) function pre_display_size(ts, size) result(p)
+        type(typeset_context_t), intent(in) :: ts
         real(dp), intent(in) :: size
         integer :: k, last
         real(dp) :: xend
-        last = NV
+        last = ts%NV
         p = -huge(1.0_dp)
         do k = last, 1, -1
-            if (VK(k) == VK_BOX) exit
+            if (ts%VK(k) == VK_BOX) exit
         end do
         if (k < 1) return
         xend = 0.0_dp
-        if (VI1(k) >= VI0(k)) then
-            xend = maxval(ITX(VI0(k):VI1(k)) + item_width(VI0(k), VI1(k)))
+        if (ts%VI1(k) >= ts%VI0(k)) then
+            xend = maxval(ts%ITX(ts%VI0(k):ts%VI1(k)) + item_width(ts, ts%VI0(k), ts%VI1(k)))
         end if
-        p = VX(k) + xend + 2.0_dp*size
+        p = ts%VX(k) + xend + 2.0_dp*size
     end function pre_display_size
 
-    function item_width(i0, i1) result(w)
+    function item_width(ts, i0, i1) result(w)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: i0, i1
         real(dp) :: w(i1 - i0 + 1)
         integer :: k
         do k = i0, i1
-            if (ITK(k) == 1) then
-                w(k - i0 + 1) = glyph_adv(ITG(k))*ITS(k)
+            if (ts%ITK(k) == 1) then
+                w(k - i0 + 1) = glyph_adv(ts%ITG(k))*ts%ITS(k)
             else
-                w(k - i0 + 1) = ITW(k)
+                w(k - i0 + 1) = ts%ITW(k)
             end if
         end do
     end function item_width
@@ -1718,160 +1749,175 @@ contains
     ! ------------------------------------------------------------------
 
     ! TeX's append_to_vlist: the interline glue, then the box.
-    subroutine append_box(i0, i1, w, h, d, shift)
+    subroutine append_box(ts, i0, i1, w, h, d, shift)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: i0, i1
         real(dp), intent(in) :: w, h, d, shift
         real(dp) :: g
-        if (PREV_DEPTH > IGNORE_DEPTH) then
-            g = CUR_BASELINE%w - PREV_DEPTH - h
+        if (ts%PREV_DEPTH > IGNORE_DEPTH) then
+            g = ts%CUR_BASELINE%w - ts%PREV_DEPTH - h
             ! In scaled points, as TeX compares: a hair under is equal.
-            if (g < LINESKIPLIMIT - 1.0e-6_dp) then
-                call v_glue(LINESKIP)
+            if (g < ts%LINESKIPLIMIT - 1.0e-6_dp) then
+                call v_glue(ts, ts%LINESKIP)
             else
-                call v_glue(ts_glue_t(g, CUR_BASELINE%st, CUR_BASELINE%sh, &
-                                      CUR_BASELINE%sto, CUR_BASELINE%sho))
+                call v_glue(ts, ts_glue_t(g, ts%CUR_BASELINE%st, ts%CUR_BASELINE%sh, &
+                                      ts%CUR_BASELINE%sto, ts%CUR_BASELINE%sho))
             end if
         end if
-        call v_new(VK_BOX)
-        VI0(NV) = i0
-        VI1(NV) = i1
-        VW(NV) = w
-        VH(NV) = h
-        VD(NV) = d
-        VX(NV) = shift
-        PREV_DEPTH = d
+        call v_new(ts, VK_BOX)
+        ts%VI0(ts%NV) = i0
+        ts%VI1(ts%NV) = i1
+        ts%VW(ts%NV) = w
+        ts%VH(ts%NV) = h
+        ts%VD(ts%NV) = d
+        ts%VX(ts%NV) = shift
+        ts%PREV_DEPTH = d
     end subroutine append_box
 
-    subroutine v_glue(g)
+    subroutine v_glue(ts, g)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: g
-        call v_new(VK_GLUE)
-        VW(NV) = g%w
-        VST(NV) = g%st
-        VSH(NV) = g%sh
-        VSO(NV) = g%sto
-        VHO(NV) = g%sho
+        call v_new(ts, VK_GLUE)
+        ts%VW(ts%NV) = g%w
+        ts%VST(ts%NV) = g%st
+        ts%VSH(ts%NV) = g%sh
+        ts%VSO(ts%NV) = g%sto
+        ts%VHO(ts%NV) = g%sho
     end subroutine v_glue
 
-    subroutine ts_vskip(g)
+    subroutine ts_vskip(ts, g)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: g
-        if (IN_PAR) call ts_end_par()
-        call v_glue(g)
+        if (ts%IN_PAR) call ts_end_par(ts)
+        call v_glue(ts, g)
     end subroutine ts_vskip
 
     ! LaTeX's \addvspace: a skip that merges with one just before it, the
     ! larger of the two winning.
-    subroutine ts_addvspace(g)
+    subroutine ts_addvspace(ts, g)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: g
-        if (IN_PAR) call ts_end_par()
-        if (NV > 0) then
-            if (VK(NV) == VK_GLUE .and. VP(NV) == 1) then
-                if (g%w > VW(NV)) then
-                    VW(NV) = g%w
-                    VST(NV) = g%st
-                    VSH(NV) = g%sh
-                    VSO(NV) = g%sto
+        if (ts%IN_PAR) call ts_end_par(ts)
+        if (ts%NV > 0) then
+            if (ts%VK(ts%NV) == VK_GLUE .and. ts%VP(ts%NV) == 1) then
+                if (g%w > ts%VW(ts%NV)) then
+                    ts%VW(ts%NV) = g%w
+                    ts%VST(ts%NV) = g%st
+                    ts%VSH(ts%NV) = g%sh
+                    ts%VSO(ts%NV) = g%sto
                 end if
                 return
             end if
         end if
-        call v_glue(g)
-        VP(NV) = 1
+        call v_glue(ts, g)
+        ts%VP(ts%NV) = 1
     end subroutine ts_addvspace
 
-    subroutine ts_vfil()
-        if (IN_PAR) call ts_end_par()
-        call v_glue(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
+    subroutine ts_vfil(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        if (ts%IN_PAR) call ts_end_par(ts)
+        call v_glue(ts, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine ts_vfil
 
     ! A skip that stays at the top of a page, LaTeX's \vspace*: an empty
     ! rule before it, which is not discarded, and which, as a rule does,
     ! leaves no \baselineskip to the line after it.
-    subroutine ts_vkeep(g)
+    subroutine ts_vkeep(ts, g)
+        type(typeset_context_t), intent(inout) :: ts
         type(ts_glue_t), intent(in) :: g
-        if (IN_PAR) call ts_end_par()
-        call v_new(VK_BOX)
-        VI0(NV) = 1
-        VI1(NV) = 0
-        PREV_DEPTH = IGNORE_DEPTH
-        call v_glue(g)
+        if (ts%IN_PAR) call ts_end_par(ts)
+        call v_new(ts, VK_BOX)
+        ts%VI0(ts%NV) = 1
+        ts%VI1(ts%NV) = 0
+        ts%PREV_DEPTH = IGNORE_DEPTH
+        call v_glue(ts, g)
     end subroutine ts_vkeep
 
     ! An invisible box of the given height and depth in the paragraph,
     ! LaTeX's \strut.
-    subroutine ts_strut(h, d)
+    subroutine ts_strut(ts, h, d)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: h, d
-        call h_new(HK_BOX)
-        HH(HN) = h
-        HD(HN) = d
+        call h_new(ts, HK_BOX)
+        ts%HH(ts%HN) = h
+        ts%HD(ts%HN) = d
     end subroutine ts_strut
 
-    subroutine ts_penalty(p)
+    subroutine ts_penalty(ts, p)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: p
-        call v_new(VK_PEN)
-        VP(NV) = p
+        call v_new(ts, VK_PEN)
+        ts%VP(ts%NV) = p
     end subroutine ts_penalty
 
     ! LaTeX's \addpenalty: a penalty that goes before a skip just added.
-    subroutine ts_addpenalty(p)
+    subroutine ts_addpenalty(ts, p)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: p
         type(ts_glue_t) :: g
         integer :: m
-        if (IN_PAR) call ts_end_par()
-        if (NV == 0) return
-        if (VK(NV) == VK_GLUE) then
-            g = ts_glue_t(VW(NV), VST(NV), VSH(NV), VSO(NV), VHO(NV))
-            m = VP(NV)
-            NV = NV - 1
-            call ts_penalty(p)
-            call v_glue(g)
-            VP(NV) = m
+        if (ts%IN_PAR) call ts_end_par(ts)
+        if (ts%NV == 0) return
+        if (ts%VK(ts%NV) == VK_GLUE) then
+            g = ts_glue_t(ts%VW(ts%NV), ts%VST(ts%NV), ts%VSH(ts%NV), ts%VSO(ts%NV), ts%VHO(ts%NV))
+            m = ts%VP(ts%NV)
+            ts%NV = ts%NV - 1
+            call ts_penalty(ts, p)
+            call v_glue(ts, g)
+            ts%VP(ts%NV) = m
         else
-            call ts_penalty(p)
+            call ts_penalty(ts, p)
         end if
     end subroutine ts_addpenalty
 
     ! LaTeX's \newpage: \vfil\penalty-10000.
-    subroutine ts_page_break()
-        if (IN_PAR) call ts_end_par()
-        if (NV == 0) return
-        call ts_vfil()
-        call ts_penalty(EJECT_PENALTY)
-        PREV_DEPTH = IGNORE_DEPTH
+    subroutine ts_page_break(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        if (ts%IN_PAR) call ts_end_par(ts)
+        if (ts%NV == 0) return
+        call ts_vfil(ts)
+        call ts_penalty(ts, EJECT_PENALTY)
+        ts%PREV_DEPTH = IGNORE_DEPTH
     end subroutine ts_page_break
 
     ! The next paragraph may not break after its first line, nor before
     ! it: what follows a heading.
-    subroutine ts_nobreak_next()
-        NOBREAK_NEXT = .true.
+    subroutine ts_nobreak_next(ts)
+        type(typeset_context_t), intent(inout) :: ts
+        ts%NOBREAK_NEXT = .true.
     end subroutine ts_nobreak_next
 
     ! A horizontal rule, width wide and thick high, centred.
-    subroutine ts_rule(width, thick, color)
+    subroutine ts_rule(ts, width, thick, color)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: width, thick
         integer, intent(in), optional :: color
         integer :: col, i0
-        col = TEXT_COLOR
+        col = ts%TEXT_COLOR
         if (present(color)) col = color
-        if (IN_PAR) call ts_end_par()
-        i0 = NIT + 1
-        call it_rule(0.5_dp*(HSIZE - width), 0.0_dp, width, thick, col)
-        call append_box(i0, NIT, HSIZE, thick, 0.0_dp, 0.0_dp)
+        if (ts%IN_PAR) call ts_end_par(ts)
+        i0 = ts%NIT + 1
+        call it_rule(ts, 0.5_dp*(ts%HSIZE - width), 0.0_dp, width, thick, col)
+        call append_box(ts, i0, ts%NIT, ts%HSIZE, thick, 0.0_dp, 0.0_dp)
     end subroutine ts_rule
 
     ! A running head from here on: a chapter's (section false), which
     ! even pages carry, or a section's, which odd pages carry; plain is
     ! true for a page that is to have none (where a chapter starts).
-    subroutine ts_mark(s, plain, section)
+    subroutine ts_mark(ts, s, plain, section)
+        type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: s
         logical, intent(in) :: plain
         logical, intent(in), optional :: section
-        call v_new(VK_MARK)
-        VI0(NV) = len(MARKS) + 1
-        MARKS = MARKS//s
-        VI1(NV) = len(MARKS)
-        VP(NV) = merge(1, 0, plain)
-        VSO(NV) = 0
-        if (present(section)) VSO(NV) = merge(1, 0, section)
+        call v_new(ts, VK_MARK)
+        if (.not. allocated(ts%MARKS)) ts%MARKS = ""
+        ts%VI0(ts%NV) = len(ts%MARKS) + 1
+        ts%MARKS = ts%MARKS//s
+        if (.not. allocated(ts%MARKS)) ts%MARKS = ""
+        ts%VI1(ts%NV) = len(ts%MARKS)
+        ts%VP(ts%NV) = merge(1, 0, plain)
+        ts%VSO(ts%NV) = 0
+        if (present(section)) ts%VSO(ts%NV) = merge(1, 0, section)
     end subroutine ts_mark
 
     ! ------------------------------------------------------------------
@@ -1883,46 +1929,50 @@ contains
     ! there is computed from the page's badness and the penalty, the
     ! cheapest so far is remembered, and when the page is overfull or a
     ! penalty forces a break, the page ends at the cheapest.
-    subroutine ts_paginate()
+    subroutine ts_paginate(ts)
+        type(typeset_context_t), intent(inout) :: ts
         integer :: i, start, best, c, pi
         integer :: least
         real(dp) :: total, depth, so_far(6), goal
         logical :: empty, legal, plain, pplain
 
-        if (IN_PAR) call ts_end_par()
-        NPAGE = 0
-        if (allocated(PG0)) deallocate (PG0, PG1, PGHEAD0, PGHEAD1, PGPLAIN, PGSET, PGORD, &
-                                        PGSTART)
-        allocate (PG0(NV + 1), PG1(NV + 1), PGHEAD0(NV + 1), PGHEAD1(NV + 1), &
-                  PGPLAIN(NV + 1), PGSET(NV + 1), PGORD(NV + 1), PGSTART(NV + 1))
+        if (ts%IN_PAR) call ts_end_par(ts)
+        ts%NPAGE = 0
+        if (allocated(ts%PG0)) deallocate (ts%PG0, ts%PG1, ts%PGHEAD0, ts%PGHEAD1, ts%PGPLAIN, &
+                ts%PGSET, ts%PGORD, &
+                                        ts%PGSTART)
+        allocate (ts%PG0(ts%NV + 1), ts%PG1(ts%NV + 1), ts%PGHEAD0(ts%NV + 1), &
+                ts%PGHEAD1(ts%NV + 1), &
+                  ts%PGPLAIN(ts%NV + 1), ts%PGSET(ts%NV + 1), ts%PGORD(ts%NV + 1), &
+                          ts%PGSTART(ts%NV + 1))
         start = 1
-        do while (start <= NV)
-            PGSTART(NPAGE + 1) = start
+        do while (start <= ts%NV)
+            ts%PGSTART(ts%NPAGE + 1) = start
             empty = .true.
             total = 0.0_dp
             depth = 0.0_dp
             so_far = 0.0_dp
-            goal = VSIZE
+            goal = ts%VSIZE
             least = AWFUL_BAD
             best = 0
             plain = .false.
             pplain = .false.
             i = start
-            do while (i <= NV)
+            do while (i <= ts%NV)
                 legal = .false.
                 pi = 0
-                select case (VK(i))
+                select case (ts%VK(i))
                 case (VK_GLUE)
-                    if (.not. empty) legal = VK(i - 1) == VK_BOX
+                    if (.not. empty) legal = ts%VK(i - 1) == VK_BOX
                 case (VK_KERN)
-                    if (.not. empty .and. i < NV) legal = VK(i + 1) == VK_GLUE
+                    if (.not. empty .and. i < ts%NV) legal = ts%VK(i + 1) == VK_GLUE
                 case (VK_PEN)
                     if (.not. empty) then
-                        legal = VP(i) < INF_PENALTY
-                        pi = VP(i)
+                        legal = ts%VP(i) < INF_PENALTY
+                        pi = ts%VP(i)
                     end if
                 case (VK_MARK)
-                    if (VP(i) == 1) pplain = .true.
+                    if (ts%VP(i) == 1) pplain = .true.
                 end select
                 if (legal) then
                     c = break_cost(total, goal, so_far, pi)
@@ -1934,33 +1984,33 @@ contains
                     if (c == AWFUL_BAD .or. pi <= EJECT_PENALTY) exit
                 end if
                 ! The item goes onto the page.
-                select case (VK(i))
+                select case (ts%VK(i))
                 case (VK_BOX)
                     if (empty) then
                         ! \topskip less the box's height comes first.
                         empty = .false.
                         start = i
-                        total = max(TOPSKIP - VH(i), 0.0_dp) + VH(i)
+                        total = max(ts%TOPSKIP - ts%VH(i), 0.0_dp) + ts%VH(i)
                     else
-                        total = total + depth + VH(i)
+                        total = total + depth + ts%VH(i)
                     end if
-                    depth = VD(i)
+                    depth = ts%VD(i)
                 case (VK_GLUE)
                     if (.not. empty) then
-                        so_far(2 + VSO(i)) = so_far(2 + VSO(i)) + VST(i)
-                        if (VHO(i) == 0) so_far(6) = so_far(6) + VSH(i)
-                        total = total + depth + VW(i)
+                        so_far(2 + ts%VSO(i)) = so_far(2 + ts%VSO(i)) + ts%VST(i)
+                        if (ts%VHO(i) == 0) so_far(6) = so_far(6) + ts%VSH(i)
+                        total = total + depth + ts%VW(i)
                         depth = 0.0_dp
                     end if
                 case (VK_KERN)
                     if (.not. empty) then
-                        total = total + depth + VW(i)
+                        total = total + depth + ts%VW(i)
                         depth = 0.0_dp
                     end if
                 end select
-                if (depth > MAXDEPTH) then
-                    total = total + depth - MAXDEPTH
-                    depth = MAXDEPTH
+                if (depth > ts%MAXDEPTH) then
+                    total = total + depth - ts%MAXDEPTH
+                    depth = ts%MAXDEPTH
                 end if
                 i = i + 1
             end do
@@ -1968,18 +2018,18 @@ contains
             ! Running out of material is a break that ends the page, as
             ! \end{document}'s \clearpage is; when what is left does not
             ! fit, the page ends at the best break before it.
-            if (i > NV) then
+            if (i > ts%NV) then
                 if (break_cost(total, goal, so_far, EJECT_PENALTY) <= least) then
-                    best = NV + 1
+                    best = ts%NV + 1
                     plain = pplain
                 end if
             end if
-            NPAGE = NPAGE + 1
-            PG0(NPAGE) = start
-            PG1(NPAGE) = best - 1
-            PGPLAIN(NPAGE) = plain
-            call page_head(NPAGE, PGHEAD0(NPAGE), PGHEAD1(NPAGE))
-            call set_page_glue(NPAGE)
+            ts%NPAGE = ts%NPAGE + 1
+            ts%PG0(ts%NPAGE) = start
+            ts%PG1(ts%NPAGE) = best - 1
+            ts%PGPLAIN(ts%NPAGE) = plain
+            call page_head(ts, ts%NPAGE, ts%PGHEAD0(ts%NPAGE), ts%PGHEAD1(ts%NPAGE))
+            call set_page_glue(ts, ts%NPAGE)
             ! What is left starts at the break, where the glue or penalty
             ! of the break is discarded at the top of the next page.
             start = best
@@ -2021,7 +2071,8 @@ contains
     ! even page carries the chapter's mark (the last on the page or
     ! before it), an odd one the section's (the first on the page, or the
     ! last before it).
-    subroutine page_head(p, h0, h1)
+    subroutine page_head(ts, p, h0, h1)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: p
         integer, intent(out) :: h0, h1
         integer :: k, want
@@ -2029,18 +2080,18 @@ contains
         h1 = 0
         want = merge(0, 1, mod(p, 2) == 0)
         if (want == 1) then
-            do k = PGSTART(p), PG1(p)
-                if (VK(k) == VK_MARK .and. VSO(k) == 1) then
-                    h0 = VI0(k)
-                    h1 = VI1(k)
+            do k = ts%PGSTART(p), ts%PG1(p)
+                if (ts%VK(k) == VK_MARK .and. ts%VSO(k) == 1) then
+                    h0 = ts%VI0(k)
+                    h1 = ts%VI1(k)
                     return
                 end if
             end do
         end if
-        do k = min(PG1(p), NV), 1, -1
-            if (VK(k) == VK_MARK .and. VSO(k) == want) then
-                h0 = VI0(k)
-                h1 = VI1(k)
+        do k = min(ts%PG1(p), ts%NV), 1, -1
+            if (ts%VK(k) == VK_MARK .and. ts%VSO(k) == want) then
+                h0 = ts%VI0(k)
+                h1 = ts%VI1(k)
                 return
             end if
         end do
@@ -2051,7 +2102,8 @@ contains
     ! left; otherwise \raggedbottom leaves the glue at its natural size
     ! and \flushbottom stretches it to fill the page; a page too full
     ! shrinks its glue, no further than its shrink.
-    subroutine set_page_glue(p)
+    subroutine set_page_glue(ts, p)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: p
         real(dp) :: total, depth, st(0:3), shrink
         integer :: k, o
@@ -2061,149 +2113,158 @@ contains
         st = 0.0_dp
         shrink = 0.0_dp
         first = .true.
-        do k = PG0(p), PG1(p)
-            select case (VK(k))
+        do k = ts%PG0(p), ts%PG1(p)
+            select case (ts%VK(k))
             case (VK_BOX)
                 if (first) then
-                    total = max(TOPSKIP, VH(k))
+                    total = max(ts%TOPSKIP, ts%VH(k))
                     first = .false.
                 else
-                    total = total + depth + VH(k)
+                    total = total + depth + ts%VH(k)
                 end if
-                depth = VD(k)
+                depth = ts%VD(k)
             case (VK_GLUE)
                 if (.not. first) then
-                    total = total + depth + VW(k)
+                    total = total + depth + ts%VW(k)
                     depth = 0.0_dp
-                    st(VSO(k)) = st(VSO(k)) + VST(k)
-                    if (VHO(k) == 0) shrink = shrink + VSH(k)
+                    st(ts%VSO(k)) = st(ts%VSO(k)) + ts%VST(k)
+                    if (ts%VHO(k) == 0) shrink = shrink + ts%VSH(k)
                 end if
             case (VK_KERN)
                 if (.not. first) then
-                    total = total + depth + VW(k)
+                    total = total + depth + ts%VW(k)
                     depth = 0.0_dp
                 end if
             end select
         end do
-        PGSET(p) = 0.0_dp
-        PGORD(p) = 0
-        if (total < VSIZE) then
+        ts%PGSET(p) = 0.0_dp
+        ts%PGORD(p) = 0
+        if (total < ts%VSIZE) then
             do o = 3, 1, -1
                 if (st(o) > 0.0_dp) exit
             end do
             if (o >= 1) then
-                PGSET(p) = (VSIZE - total)/st(o)
-                PGORD(p) = o
-            else if (FLUSH_BOTTOM .and. st(0) > 0.0_dp .and. p < filling_limit()) then
-                PGSET(p) = (VSIZE - total)/st(0)
+                ts%PGSET(p) = (ts%VSIZE - total)/st(o)
+                ts%PGORD(p) = o
+            else if (ts%FLUSH_BOTTOM .and. st(0) > 0.0_dp .and. p < filling_limit(ts)) then
+                ts%PGSET(p) = (ts%VSIZE - total)/st(0)
             end if
-        else if (total > VSIZE .and. shrink > 0.0_dp) then
-            PGSET(p) = -min((total - VSIZE)/shrink, 1.0_dp)
+        else if (total > ts%VSIZE .and. shrink > 0.0_dp) then
+            ts%PGSET(p) = -min((total - ts%VSIZE)/shrink, 1.0_dp)
         end if
     end subroutine set_page_glue
 
     ! Pages before the last are filled; the last ends with LaTeX's
     ! \clearpage, whose \vfil takes up what is left.
-    integer function filling_limit()
+    integer function filling_limit(ts)
+        type(typeset_context_t), intent(in) :: ts
         filling_limit = huge(1)
-        if (PG1(NPAGE) >= NV) filling_limit = NPAGE
+        if (ts%PG1(ts%NPAGE) >= ts%NV) filling_limit = ts%NPAGE
     end function filling_limit
 
-    integer function ts_page_count()
-        ts_page_count = NPAGE
+    integer function ts_page_count(ts)
+        type(typeset_context_t), intent(in) :: ts
+        ts_page_count = ts%NPAGE
     end function ts_page_count
 
     ! Draw page p on r, which the caller has opened at the paper's size.
-    subroutine ts_page_draw(r, p)
+    subroutine ts_page_draw(ts, r, p)
+        type(typeset_context_t), intent(in) :: ts
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: p
         real(dp) :: y, depth, gw
         integer :: k
         logical :: first
         character(len=16) :: num
-        y = MARGIN_T
+        if (p < 1 .or. p > ts%NPAGE) return
+        y = ts%MARGIN_T
         depth = 0.0_dp
         first = .true.
-        do k = PG0(p), PG1(p)
-            select case (VK(k))
+        do k = ts%PG0(p), ts%PG1(p)
+            select case (ts%VK(k))
             case (VK_BOX)
                 if (first) then
-                    y = y + max(TOPSKIP, VH(k))
+                    y = y + max(ts%TOPSKIP, ts%VH(k))
                     first = .false.
                 else
-                    y = y + depth + VH(k)
+                    y = y + depth + ts%VH(k)
                 end if
-                call draw_box(r, k, MARGIN_L + VX(k), y)
-                depth = VD(k)
+                call draw_box(ts, r, k, ts%MARGIN_L + ts%VX(k), y)
+                depth = ts%VD(k)
             case (VK_GLUE)
                 if (.not. first) then
-                    gw = VW(k)
-                    if (PGSET(p) < 0.0_dp .and. VHO(k) == 0) gw = gw + PGSET(p)*VSH(k)
-                    if (PGSET(p) > 0.0_dp .and. VSO(k) == PGORD(p)) gw = gw + PGSET(p)*VST(k)
+                    gw = ts%VW(k)
+                    if (ts%PGSET(p) < 0.0_dp .and. ts%VHO(k) == 0) gw = gw + ts%PGSET(p)*ts%VSH(k)
+                    if (ts%PGSET(p) > 0.0_dp .and. ts%VSO(k) == ts%PGORD(p)) &
+                        gw = gw + ts%PGSET(p)*ts%VST(k)
                     y = y + depth + gw
                     depth = 0.0_dp
                 end if
             case (VK_KERN)
                 if (.not. first) then
-                    y = y + depth + VW(k)
+                    y = y + depth + ts%VW(k)
                     depth = 0.0_dp
                 end if
             end select
         end do
-        if (PAGE_NUMBERS .and. (.not. HEADINGS .or. PGPLAIN(p))) then
+        if (ts%PAGE_NUMBERS .and. (.not. ts%HEADINGS .or. ts%PGPLAIN(p))) then
             write (num, "(I0)") p
-            call draw_string(r, trim(num), FACE_REGULAR, FONT_SIZE, &
-                             MARGIN_L + 0.5_dp*HSIZE, MARGIN_T + VSIZE + FOOTSKIP, 1)
-        else if (HEADINGS) then
+            call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, &
+                             ts%MARGIN_L + 0.5_dp*ts%HSIZE, ts%MARGIN_T + ts%VSIZE + ts%FOOTSKIP, 1)
+        else if (ts%HEADINGS) then
             write (num, "(I0)") p
             ! LaTeX's headings: the number at the outer edge, the head in
             ! slanted capitals at the inner one; here, italic.
             if (mod(p, 2) == 0) then
-                call draw_string(r, trim(num), FACE_REGULAR, FONT_SIZE, MARGIN_L, &
-                                 MARGIN_T - 2.5_dp*FONT_SIZE, 0)
-                if (PGHEAD1(p) >= PGHEAD0(p)) &
-                    call draw_string(r, MARKS(PGHEAD0(p):PGHEAD1(p)), FACE_ITALIC, &
-                                     FONT_SIZE, MARGIN_L + HSIZE, &
-                                     MARGIN_T - 2.5_dp*FONT_SIZE, 2)
+                call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, ts%MARGIN_L, &
+                                 ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 0)
+                if (ts%PGHEAD1(p) >= ts%PGHEAD0(p)) &
+                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), FACE_ITALIC, &
+                                     ts%FONT_SIZE, ts%MARGIN_L + ts%HSIZE, &
+                                     ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 2)
             else
-                call draw_string(r, trim(num), FACE_REGULAR, FONT_SIZE, MARGIN_L + HSIZE, &
-                                 MARGIN_T - 2.5_dp*FONT_SIZE, 2)
-                if (PGHEAD1(p) >= PGHEAD0(p)) &
-                    call draw_string(r, MARKS(PGHEAD0(p):PGHEAD1(p)), FACE_ITALIC, &
-                                     FONT_SIZE, MARGIN_L, MARGIN_T - 2.5_dp*FONT_SIZE, 0)
+                call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, &
+                        ts%MARGIN_L + ts%HSIZE, &
+                                 ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 2)
+                if (ts%PGHEAD1(p) >= ts%PGHEAD0(p)) &
+                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), FACE_ITALIC, &
+                                     ts%FONT_SIZE, ts%MARGIN_L, &
+                                             ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 0)
             end if
         end if
     end subroutine ts_page_draw
 
     ! A box's items, its origin at (x, y) on the page, y down: a run of
     ! glyphs and then the rules, for each colour in it.
-    subroutine draw_box(r, k, x, y)
+    subroutine draw_box(ts, r, k, x, y)
+        type(typeset_context_t), intent(in) :: ts
         class(renderer_t), intent(inout) :: r
         integer, intent(in) :: k
         real(dp), intent(in) :: x, y
         type(glyphrun_t) :: run
         integer :: j, c, ncol
         integer, allocatable :: cols(:)
-        allocate (cols(max(1, VI1(k) - VI0(k) + 1)))
+        allocate (cols(max(1, ts%VI1(k) - ts%VI0(k) + 1)))
         ncol = 0
-        do j = VI0(k), VI1(k)
-            if (any(cols(1:ncol) == ITC(j))) cycle
+        do j = ts%VI0(k), ts%VI1(k)
+            if (any(cols(1:ncol) == ts%ITC(j))) cycle
             ncol = ncol + 1
-            cols(ncol) = ITC(j)
+            cols(ncol) = ts%ITC(j)
         end do
         do c = 1, ncol
             run%n = 0
-            do j = VI0(k), VI1(k)
-                if (ITK(j) == 1 .and. ITC(j) == cols(c)) &
-                    call run_add(run, ITG(j), ITX(j), -ITY(j), ITS(j))
+            do j = ts%VI0(k), ts%VI1(k)
+                if (ts%ITK(j) == 1 .and. ts%ITC(j) == cols(c)) &
+                    call run_add(run, ts%ITG(j), ts%ITX(j), -ts%ITY(j), ts%ITS(j))
             end do
             if (run%n > 0) then
                 run%text = ""
                 call r%draw_glyphs(x, y, run, color_paint(cols(c)), 0.0_dp)
             end if
-            do j = VI0(k), VI1(k)
-                if (ITK(j) == 2 .and. ITC(j) == cols(c)) &
-                    call r%draw_rect(x + ITX(j), y - ITY(j) - ITH(j), ITW(j), ITH(j), &
+            do j = ts%VI0(k), ts%VI1(k)
+                if (ts%ITK(j) == 2 .and. ts%ITC(j) == cols(c)) &
+                    call r%draw_rect(x + ts%ITX(j), y - ts%ITY(j) - ts%ITH(j), ts%ITW(j), &
+                            ts%ITH(j), &
                                      color_paint(cols(c)))
             end do
         end do
@@ -2218,7 +2279,8 @@ contains
 
     ! A string on the page, anchored at its start (0), middle (1) or end
     ! (2), its baseline at y.
-    subroutine draw_string(r, s, face, size, x, y, anchor)
+    subroutine draw_string(ts, r, s, face, size, x, y, anchor)
+        type(typeset_context_t), intent(in) :: ts
         class(renderer_t), intent(inout) :: r
         character(len=*), intent(in) :: s
         integer, intent(in) :: face, anchor
@@ -2239,30 +2301,33 @@ contains
         end do
         if (run%n == 0) return
         run%text = s
-        call r%draw_glyphs(x - 0.5_dp*anchor*pen, y, run, color_paint(TEXT_COLOR), 0.0_dp)
+        call r%draw_glyphs(x - 0.5_dp*anchor*pen, y, run, color_paint(ts%TEXT_COLOR), 0.0_dp)
     end subroutine draw_string
 
     ! ------------------------------------------------------------------
     ! For tests: the lines of the last paragraph.
     ! ------------------------------------------------------------------
 
-    subroutine ts_par_lines(i0, i1)
+    subroutine ts_par_lines(ts, i0, i1)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(out) :: i0, i1
-        i0 = LAST_PAR0
-        i1 = LAST_PAR1
+        i0 = ts%LAST_PAR0
+        i1 = ts%LAST_PAR1
     end subroutine ts_par_lines
 
-    integer function ts_line_count()
+    integer function ts_line_count(ts)
+        type(typeset_context_t), intent(in) :: ts
         integer :: k
         ts_line_count = 0
-        do k = LAST_PAR0, LAST_PAR1
-            if (VK(k) == VK_BOX) ts_line_count = ts_line_count + 1
+        do k = ts%LAST_PAR0, ts%LAST_PAR1
+            if (ts%VK(k) == VK_BOX) ts_line_count = ts_line_count + 1
         end do
     end function ts_line_count
 
     ! Line l of the last paragraph: its glyphs' code points (as glyph ids)
     ! and x positions.
-    subroutine ts_line_info(l, gids, xs, n)
+    subroutine ts_line_info(ts, l, gids, xs, n)
+        type(typeset_context_t), intent(in) :: ts
         integer, intent(in) :: l
         integer, allocatable, intent(out) :: gids(:)
         real(dp), allocatable, intent(out) :: xs(:)
@@ -2270,16 +2335,16 @@ contains
         integer :: k, c, j
         c = 0
         n = 0
-        do k = LAST_PAR0, LAST_PAR1
-            if (VK(k) /= VK_BOX) cycle
+        do k = ts%LAST_PAR0, ts%LAST_PAR1
+            if (ts%VK(k) /= VK_BOX) cycle
             c = c + 1
             if (c /= l) cycle
-            allocate (gids(VI1(k) - VI0(k) + 1), xs(VI1(k) - VI0(k) + 1))
-            do j = VI0(k), VI1(k)
-                if (ITK(j) /= 1) cycle
+            allocate (gids(ts%VI1(k) - ts%VI0(k) + 1), xs(ts%VI1(k) - ts%VI0(k) + 1))
+            do j = ts%VI0(k), ts%VI1(k)
+                if (ts%ITK(j) /= 1) cycle
                 n = n + 1
-                gids(n) = ITG(j)
-                xs(n) = ITX(j) + VX(k)
+                gids(n) = ts%ITG(j)
+                xs(n) = ts%ITX(j) + ts%VX(k)
             end do
             return
         end do
@@ -2290,222 +2355,232 @@ contains
     ! The arenas.
     ! ------------------------------------------------------------------
 
-    subroutine h_new(kind)
+    subroutine h_new(ts, kind)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: kind
-        call h_reserve(HN + 1)
-        HN = HN + 1
-        call h_clear(HN)
-        HK(HN) = kind
+        call h_reserve(ts, ts%HN + 1)
+        ts%HN = ts%HN + 1
+        call h_clear(ts, ts%HN)
+        ts%HK(ts%HN) = kind
     end subroutine h_new
 
-    subroutine h_clear(i)
+    subroutine h_clear(ts, i)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: i
-        HK(i) = 0
-        HFACE(i) = FACE_REGULAR
-        HCOL(i) = TEXT_COLOR
-        HC0(i) = 1
-        HC1(i) = 0
-        HI0(i) = 1
-        HI1(i) = 0
-        HSO(i) = 0
-        HHO(i) = 0
-        HP(i) = 0
-        HEXPL(i) = .false.
-        HW(i) = 0.0_dp
-        HH(i) = 0.0_dp
-        HD(i) = 0.0_dp
-        HST(i) = 0.0_dp
-        HSH(i) = 0.0_dp
-        HSZ(i) = FONT_SIZE
-        HRAISE(i) = 0.0_dp
+        ts%HK(i) = 0
+        ts%HFACE(i) = FACE_REGULAR
+        ts%HCOL(i) = ts%TEXT_COLOR
+        ts%HC0(i) = 1
+        ts%HC1(i) = 0
+        ts%HI0(i) = 1
+        ts%HI1(i) = 0
+        ts%HSO(i) = 0
+        ts%HHO(i) = 0
+        ts%HP(i) = 0
+        ts%HEXPL(i) = .false.
+        ts%HW(i) = 0.0_dp
+        ts%HH(i) = 0.0_dp
+        ts%HD(i) = 0.0_dp
+        ts%HST(i) = 0.0_dp
+        ts%HSH(i) = 0.0_dp
+        ts%HSZ(i) = ts%FONT_SIZE
+        ts%HRAISE(i) = 0.0_dp
     end subroutine h_clear
 
     ! Make room for a node at j, moving the nodes from j on up by one.
-    subroutine h_insert(j)
+    subroutine h_insert(ts, j)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: j
-        call h_reserve(HN + 1)
-        HK(j + 1:HN + 1) = HK(j:HN)
-        HFACE(j + 1:HN + 1) = HFACE(j:HN)
-        HCOL(j + 1:HN + 1) = HCOL(j:HN)
-        HC0(j + 1:HN + 1) = HC0(j:HN)
-        HC1(j + 1:HN + 1) = HC1(j:HN)
-        HI0(j + 1:HN + 1) = HI0(j:HN)
-        HI1(j + 1:HN + 1) = HI1(j:HN)
-        HSO(j + 1:HN + 1) = HSO(j:HN)
-        HHO(j + 1:HN + 1) = HHO(j:HN)
-        HP(j + 1:HN + 1) = HP(j:HN)
-        HEXPL(j + 1:HN + 1) = HEXPL(j:HN)
-        HW(j + 1:HN + 1) = HW(j:HN)
-        HH(j + 1:HN + 1) = HH(j:HN)
-        HD(j + 1:HN + 1) = HD(j:HN)
-        HST(j + 1:HN + 1) = HST(j:HN)
-        HSH(j + 1:HN + 1) = HSH(j:HN)
-        HSZ(j + 1:HN + 1) = HSZ(j:HN)
-        HRAISE(j + 1:HN + 1) = HRAISE(j:HN)
-        HN = HN + 1
-        call h_clear(j)
+        call h_reserve(ts, ts%HN + 1)
+        ts%HK(j + 1:ts%HN + 1) = ts%HK(j:ts%HN)
+        ts%HFACE(j + 1:ts%HN + 1) = ts%HFACE(j:ts%HN)
+        ts%HCOL(j + 1:ts%HN + 1) = ts%HCOL(j:ts%HN)
+        ts%HC0(j + 1:ts%HN + 1) = ts%HC0(j:ts%HN)
+        ts%HC1(j + 1:ts%HN + 1) = ts%HC1(j:ts%HN)
+        ts%HI0(j + 1:ts%HN + 1) = ts%HI0(j:ts%HN)
+        ts%HI1(j + 1:ts%HN + 1) = ts%HI1(j:ts%HN)
+        ts%HSO(j + 1:ts%HN + 1) = ts%HSO(j:ts%HN)
+        ts%HHO(j + 1:ts%HN + 1) = ts%HHO(j:ts%HN)
+        ts%HP(j + 1:ts%HN + 1) = ts%HP(j:ts%HN)
+        ts%HEXPL(j + 1:ts%HN + 1) = ts%HEXPL(j:ts%HN)
+        ts%HW(j + 1:ts%HN + 1) = ts%HW(j:ts%HN)
+        ts%HH(j + 1:ts%HN + 1) = ts%HH(j:ts%HN)
+        ts%HD(j + 1:ts%HN + 1) = ts%HD(j:ts%HN)
+        ts%HST(j + 1:ts%HN + 1) = ts%HST(j:ts%HN)
+        ts%HSH(j + 1:ts%HN + 1) = ts%HSH(j:ts%HN)
+        ts%HSZ(j + 1:ts%HN + 1) = ts%HSZ(j:ts%HN)
+        ts%HRAISE(j + 1:ts%HN + 1) = ts%HRAISE(j:ts%HN)
+        ts%HN = ts%HN + 1
+        call h_clear(ts, j)
     end subroutine h_insert
 
-    subroutine h_reserve(n)
+    subroutine h_reserve(ts, n)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: n
         integer :: cap
-        if (.not. allocated(HK)) then
+        if (.not. allocated(ts%HK)) then
             cap = 256
-        else if (n > size(HK)) then
+        else if (n > size(ts%HK)) then
             cap = 2*n
         else
             return
         end if
-        call grow_i(HK, cap)
-        call grow_i(HFACE, cap)
-        call grow_i(HCOL, cap)
-        call grow_i(HC0, cap)
-        call grow_i(HC1, cap)
-        call grow_i(HI0, cap)
-        call grow_i(HI1, cap)
-        call grow_i(HSO, cap)
-        call grow_i(HHO, cap)
-        call grow_i(HP, cap)
-        call grow_l(HEXPL, cap)
-        call grow_r(HW, cap)
-        call grow_r(HH, cap)
-        call grow_r(HD, cap)
-        call grow_r(HST, cap)
-        call grow_r(HSH, cap)
-        call grow_r(HSZ, cap)
-        call grow_r(HRAISE, cap)
+        call grow_i(ts%HK, cap)
+        call grow_i(ts%HFACE, cap)
+        call grow_i(ts%HCOL, cap)
+        call grow_i(ts%HC0, cap)
+        call grow_i(ts%HC1, cap)
+        call grow_i(ts%HI0, cap)
+        call grow_i(ts%HI1, cap)
+        call grow_i(ts%HSO, cap)
+        call grow_i(ts%HHO, cap)
+        call grow_i(ts%HP, cap)
+        call grow_l(ts%HEXPL, cap)
+        call grow_r(ts%HW, cap)
+        call grow_r(ts%HH, cap)
+        call grow_r(ts%HD, cap)
+        call grow_r(ts%HST, cap)
+        call grow_r(ts%HSH, cap)
+        call grow_r(ts%HSZ, cap)
+        call grow_r(ts%HRAISE, cap)
     end subroutine h_reserve
 
-    subroutine cp_reserve(extra)
+    subroutine cp_reserve(ts, extra)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: extra
-        if (.not. allocated(CPA)) then
-            call grow_i(CPA, max(1024, 2*extra))
-        else if (NCP + extra > size(CPA)) then
-            call grow_i(CPA, 2*(NCP + extra))
+        if (.not. allocated(ts%CPA)) then
+            call grow_i(ts%CPA, max(1024, 2*extra))
+        else if (ts%NCP + extra > size(ts%CPA)) then
+            call grow_i(ts%CPA, 2*(ts%NCP + extra))
         end if
     end subroutine cp_reserve
 
-    subroutine bx_new()
+    subroutine bx_new(ts)
+        type(typeset_context_t), intent(inout) :: ts
         integer :: cap
-        if (.not. allocated(BXK)) then
+        if (.not. allocated(ts%BXK)) then
             cap = 256
-        else if (NBX + 1 > size(BXK)) then
-            cap = 2*size(BXK)
+        else if (ts%NBX + 1 > size(ts%BXK)) then
+            cap = 2*size(ts%BXK)
         else
             cap = 0
         end if
         if (cap > 0) then
-            call grow_i(BXK, cap)
-            call grow_i(BXG, cap)
-            call grow_i(BXC, cap)
-            call grow_r(BXX, cap)
-            call grow_r(BXY, cap)
-            call grow_r(BXS, cap)
-            call grow_r(BXW, cap)
-            call grow_r(BXH, cap)
+            call grow_i(ts%BXK, cap)
+            call grow_i(ts%BXG, cap)
+            call grow_i(ts%BXC, cap)
+            call grow_r(ts%BXX, cap)
+            call grow_r(ts%BXY, cap)
+            call grow_r(ts%BXS, cap)
+            call grow_r(ts%BXW, cap)
+            call grow_r(ts%BXH, cap)
         end if
-        NBX = NBX + 1
-        BXK(NBX) = 0
-        BXG(NBX) = 0
-        BXC(NBX) = 0
-        BXX(NBX) = 0.0_dp
-        BXY(NBX) = 0.0_dp
-        BXS(NBX) = 0.0_dp
-        BXW(NBX) = 0.0_dp
-        BXH(NBX) = 0.0_dp
+        ts%NBX = ts%NBX + 1
+        ts%BXK(ts%NBX) = 0
+        ts%BXG(ts%NBX) = 0
+        ts%BXC(ts%NBX) = 0
+        ts%BXX(ts%NBX) = 0.0_dp
+        ts%BXY(ts%NBX) = 0.0_dp
+        ts%BXS(ts%NBX) = 0.0_dp
+        ts%BXW(ts%NBX) = 0.0_dp
+        ts%BXH(ts%NBX) = 0.0_dp
     end subroutine bx_new
 
-    subroutine it_new()
+    subroutine it_new(ts)
+        type(typeset_context_t), intent(inout) :: ts
         integer :: cap
-        if (.not. allocated(ITK)) then
+        if (.not. allocated(ts%ITK)) then
             cap = 4096
-        else if (NIT + 1 > size(ITK)) then
-            cap = 2*size(ITK)
+        else if (ts%NIT + 1 > size(ts%ITK)) then
+            cap = 2*size(ts%ITK)
         else
             cap = 0
         end if
         if (cap > 0) then
-            call grow_i(ITK, cap)
-            call grow_i(ITG, cap)
-            call grow_i(ITC, cap)
-            call grow_r(ITX, cap)
-            call grow_r(ITY, cap)
-            call grow_r(ITS, cap)
-            call grow_r(ITW, cap)
-            call grow_r(ITH, cap)
+            call grow_i(ts%ITK, cap)
+            call grow_i(ts%ITG, cap)
+            call grow_i(ts%ITC, cap)
+            call grow_r(ts%ITX, cap)
+            call grow_r(ts%ITY, cap)
+            call grow_r(ts%ITS, cap)
+            call grow_r(ts%ITW, cap)
+            call grow_r(ts%ITH, cap)
         end if
-        NIT = NIT + 1
-        ITK(NIT) = 0
-        ITG(NIT) = 0
-        ITC(NIT) = 0
-        ITX(NIT) = 0.0_dp
-        ITY(NIT) = 0.0_dp
-        ITS(NIT) = 0.0_dp
-        ITW(NIT) = 0.0_dp
-        ITH(NIT) = 0.0_dp
+        ts%NIT = ts%NIT + 1
+        ts%ITK(ts%NIT) = 0
+        ts%ITG(ts%NIT) = 0
+        ts%ITC(ts%NIT) = 0
+        ts%ITX(ts%NIT) = 0.0_dp
+        ts%ITY(ts%NIT) = 0.0_dp
+        ts%ITS(ts%NIT) = 0.0_dp
+        ts%ITW(ts%NIT) = 0.0_dp
+        ts%ITH(ts%NIT) = 0.0_dp
     end subroutine it_new
 
-    subroutine it_glyph(g, x, y, s, col)
+    subroutine it_glyph(ts, g, x, y, s, col)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: g, col
         real(dp), intent(in) :: x, y, s
-        call it_new()
-        ITK(NIT) = 1
-        ITG(NIT) = g
-        ITX(NIT) = x
-        ITY(NIT) = y
-        ITS(NIT) = s
-        ITC(NIT) = col
+        call it_new(ts)
+        ts%ITK(ts%NIT) = 1
+        ts%ITG(ts%NIT) = g
+        ts%ITX(ts%NIT) = x
+        ts%ITY(ts%NIT) = y
+        ts%ITS(ts%NIT) = s
+        ts%ITC(ts%NIT) = col
     end subroutine it_glyph
 
-    subroutine it_rule(x, y, w, h, col)
+    subroutine it_rule(ts, x, y, w, h, col)
+        type(typeset_context_t), intent(inout) :: ts
         real(dp), intent(in) :: x, y, w, h
         integer, intent(in) :: col
-        call it_new()
-        ITK(NIT) = 2
-        ITX(NIT) = x
-        ITY(NIT) = y
-        ITW(NIT) = w
-        ITH(NIT) = h
-        ITC(NIT) = col
+        call it_new(ts)
+        ts%ITK(ts%NIT) = 2
+        ts%ITX(ts%NIT) = x
+        ts%ITY(ts%NIT) = y
+        ts%ITW(ts%NIT) = w
+        ts%ITH(ts%NIT) = h
+        ts%ITC(ts%NIT) = col
     end subroutine it_rule
 
-    subroutine v_new(kind)
+    subroutine v_new(ts, kind)
+        type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: kind
         integer :: cap
-        if (.not. allocated(VK)) then
+        if (.not. allocated(ts%VK)) then
             cap = 1024
-        else if (NV + 1 > size(VK)) then
-            cap = 2*size(VK)
+        else if (ts%NV + 1 > size(ts%VK)) then
+            cap = 2*size(ts%VK)
         else
             cap = 0
         end if
         if (cap > 0) then
-            call grow_i(VK, cap)
-            call grow_i(VSO, cap)
-            call grow_i(VHO, cap)
-            call grow_i(VP, cap)
-            call grow_i(VI0, cap)
-            call grow_i(VI1, cap)
-            call grow_r(VW, cap)
-            call grow_r(VH, cap)
-            call grow_r(VD, cap)
-            call grow_r(VST, cap)
-            call grow_r(VSH, cap)
-            call grow_r(VX, cap)
+            call grow_i(ts%VK, cap)
+            call grow_i(ts%VSO, cap)
+            call grow_i(ts%VHO, cap)
+            call grow_i(ts%VP, cap)
+            call grow_i(ts%VI0, cap)
+            call grow_i(ts%VI1, cap)
+            call grow_r(ts%VW, cap)
+            call grow_r(ts%VH, cap)
+            call grow_r(ts%VD, cap)
+            call grow_r(ts%VST, cap)
+            call grow_r(ts%VSH, cap)
+            call grow_r(ts%VX, cap)
         end if
-        NV = NV + 1
-        VK(NV) = kind
-        VSO(NV) = 0
-        VHO(NV) = 0
-        VP(NV) = 0
-        VI0(NV) = 1
-        VI1(NV) = 0
-        VW(NV) = 0.0_dp
-        VH(NV) = 0.0_dp
-        VD(NV) = 0.0_dp
-        VST(NV) = 0.0_dp
-        VSH(NV) = 0.0_dp
-        VX(NV) = 0.0_dp
+        ts%NV = ts%NV + 1
+        ts%VK(ts%NV) = kind
+        ts%VSO(ts%NV) = 0
+        ts%VHO(ts%NV) = 0
+        ts%VP(ts%NV) = 0
+        ts%VI0(ts%NV) = 1
+        ts%VI1(ts%NV) = 0
+        ts%VW(ts%NV) = 0.0_dp
+        ts%VH(ts%NV) = 0.0_dp
+        ts%VD(ts%NV) = 0.0_dp
+        ts%VST(ts%NV) = 0.0_dp
+        ts%VSH(ts%NV) = 0.0_dp
+        ts%VX(ts%NV) = 0.0_dp
     end subroutine v_new
 
     subroutine grow_i(a, cap)

@@ -12,7 +12,7 @@
 
 program plot_invitation
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, md_color, &
+    use fplotlib_markdown, only: md_engine, md_ctx_t, md_directive_t, md_blocks, md_option, md_color, &
                                  md_base_size, md_meta
     use fplotlib_typeset, only: ts_vkeep, ts_end_par, ts_glue_t
     implicit none
@@ -76,7 +76,8 @@ contains
     subroutine invitation_body(after, ctx)
         logical, intent(in) :: after
         type(md_ctx_t), intent(in) :: ctx
-        if (md_meta("valign") == "center") call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
+        if (md_meta("valign") == "center") call ts_vkeep(md_engine, ts_glue_t(0.0_dp, 1.0_dp, &
+                0.0_dp, 1, 0))
     end subroutine invitation_body
 
     recursive subroutine invitation_directive(d, ctx, handled)
@@ -102,7 +103,7 @@ contains
         v = md_option(d%opts, "color")
         if (len(v) > 0) sub%color = md_color(v, sub%color)
         call md_blocks(d%body, sub)
-        call ts_end_par()
+        call ts_end_par(md_engine)
     end subroutine invitation_directive
 
 end program plot_invitation
