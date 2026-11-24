@@ -104,7 +104,7 @@ module fplotlib_markdown
     ! Counters and cross references. A label is a heading's or a display's
     ! name, its number ("" when it has none) and, for a heading, its title.
     integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
-    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2
+    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3
     type :: label_t
         character(len=:), allocatable :: name, num, title
         integer :: kind = LAB_SECTION
@@ -116,6 +116,9 @@ module fplotlib_markdown
     ! numbers the headings and displays and records their labels, and the
     ! second, with every label known, sets the pages.
     logical :: FIRST_PASS = .false.
+
+    ! The MyST targets, (name)=, waiting for the block they label.
+    character(len=:), allocatable :: TARGETS
 
     ! Next paragraph is not indented (after a heading or display), and any
     ! pending list item label.
@@ -162,6 +165,7 @@ contains
             SEC = 0
             CHAPTER = 0
             EQNO = 0
+            TARGETS = ""
             ctx = md_ctx_t()
             ctx%size = BASE
             ctx%color = TEXT_COL
@@ -169,6 +173,7 @@ contains
             call title_block(ctx)
             if (associated(CB_BODY)) call CB_BODY(.false., ctx)
             if (first <= n) call blocks(lines(first:n), n - first + 1, ctx)
+            call place_targets()
             if (associated(CB_BODY)) call CB_BODY(.true., ctx)
         end do
         FIRST_PASS = .false.
@@ -571,18 +576,17 @@ contains
                 cycle
             end if
 
-            if (is_target(t, lab) .and. i < n) then
-                if (is_heading(trim(adjustl(L(i + 1)%s)), lev)) then
-                    call heading(heading_text(trim(adjustl(L(i + 1)%s)), lev), lev, ctx, lab)
-                    i = i + 2
-                    blank_before = .false.
-                    cycle
-                end if
+            ! A MyST target labels the block after it, and is not set.
+            if (is_target(t, lab)) then
+                TARGETS = TARGETS//" "//lab
+                i = i + 1
+                cycle
             end if
             if (is_heading(t, lev)) then
                 call heading(heading_text(t, lev), lev, ctx)
                 i = i + 1
             else if (is_fence(t)) then
+                call place_targets()
                 j = i + 1
                 do while (j <= n)
                     if (is_fence(trim(adjustl(L(j)%s)))) exit
@@ -601,6 +605,7 @@ contains
                         if (depth == 0) exit
                     end if
                 end do
+                call place_targets()
                 call set_div(t, L, i, j, ctx)
                 i = j + 1
             else if (t(1:1) == ">") then
@@ -609,11 +614,14 @@ contains
                     if (len_trim(L(j)%s) == 0) exit
                     j = j + 1
                 end do
+                call place_targets()
                 call quote_block(L(i:j - 1), j - i, ctx)
                 i = j
             else if (is_item(s, k, lev)) then
+                call place_targets()
                 call list_block(L, n, i, ctx, blank_before)
             else if (is_rule(t)) then
+                call place_targets()
                 call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
                 call ts_begin_par(ALIGN_CENTER, 0.0_dp, left=ctx%left, right=ctx%right)
                 call ts_end_par()
@@ -650,12 +658,35 @@ contains
                         cycle
                     end if
                 end if
+                call place_targets()
                 call paragraph(para, ctx)
                 i = j
             end if
             blank_before = .false.
         end do
     end subroutine blocks
+
+    ! The targets waiting for a block label it: a heading with its number
+    ! and title, anything else with neither, for a reference that gives
+    ! its own text.
+    subroutine place_targets(num, title)
+        character(len=*), intent(in), optional :: num, title
+        character(len=:), allocatable :: name
+        integer :: k
+        do while (len_trim(TARGETS) > 0)
+            TARGETS = adjustl(TARGETS)
+            k = index(TARGETS, " ")
+            if (k == 0) k = len(TARGETS) + 1
+            name = TARGETS(1:k - 1)
+            TARGETS = TARGETS(k:)
+            if (present(num)) then
+                call add_label(name, num, title, LAB_SECTION)
+            else
+                call add_label(name, "", "", LAB_OTHER)
+            end if
+        end do
+        TARGETS = ""
+    end subroutine place_targets
 
     ! Whether a line starts a block that ends a paragraph before it.
     logical function interrupts(s)
@@ -735,11 +766,10 @@ contains
     ! for a book, \chapter for #).
     ! Headings: LaTeX's \section, \subsection and \subsubsection, with
     ! optional template override via on_heading.
-    subroutine heading(text0, level, ctx, target)
+    subroutine heading(text0, level, ctx)
         character(len=*), intent(in) :: text0
         integer, intent(in) :: level
         type(md_ctx_t), intent(in) :: ctx
-        character(len=*), intent(in), optional :: target
         character(len=:), allocatable :: text, num
         type(style_t) :: st
         real(dp) :: ex, size, lead, hang
@@ -771,7 +801,7 @@ contains
                 end do
             end if
         end if
-        if (present(target)) call add_label(target, num, strip_markup(text), LAB_SECTION)
+        call place_targets(num, strip_markup(text))
         if (associated(CB_HEAD)) then
             handled = .false.
             call CB_HEAD(level, text, num, ctx, handled)
@@ -1761,7 +1791,7 @@ contains
             case ("ref")
                 if (explicit) then
                     s = title
-                else if (LABS(r)%kind == LAB_SECTION) then
+                else if (len(LABS(r)%title) > 0) then
                     s = LABS(r)%title
                 end if
             case ("numref")

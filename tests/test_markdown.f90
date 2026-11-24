@@ -50,6 +50,7 @@ contains
         call page_cases(ncase, nfail)
         call front_matter_cases(ncase, nfail)
         call emphasis_cases(ncase, nfail)
+        call target_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -198,6 +199,21 @@ contains
         call face("strong", t, f, "bold both", FACE_BOLD, ncase, nfail)
         call face("past code and math", t, f, "x y* z", FACE_ITALIC, ncase, nfail)
     end subroutine emphasis_cases
+
+    ! A target is not set: it labels the block after it, a heading with
+    ! its number and title.
+    subroutine target_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL// &
+                     "(par:x)="//NL//"A paragraph."//NL//NL//"(sec:a)="//NL//NL//"# Alpha"//NL//NL// &
+                     "(sec:s)="//NL//"(sec:t)="//NL//"Setext"//NL//"------"//NL//NL// &
+                     "See {ref}`this one <par:x>`, {numref}`par:x`, {ref}`sec:a`, {numref}`sec:s`,"// &
+                     " {ref}`sec:t`."//NL//NL//"(end)=", t, f)
+        call reject("target text", t, ")=", ncase, nfail)
+        call expect("targets", t, "See this one, ??, Alpha, Section 1.1, Setext.", ncase, nfail)
+    end subroutine target_cases
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
