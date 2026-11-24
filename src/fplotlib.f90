@@ -7523,7 +7523,10 @@ contains
     ! written as name-1.svg, name-2.svg, ... A PNG is 150 dpi unless dpi
     ! is given. As for savefig, a file that cannot be written is returned
     ! in status when the caller passes one, and otherwise stops the program
-    ! with exit code 2. The figures are not touched.
+    ! with exit code 2. The figures are not touched. on_directive,
+    ! on_body and on_heading are a template's callbacks (fplotlib_markdown);
+    ! the document is set twice, as LaTeX is run twice, and they are
+    ! called in both passes.
     ! ------------------------------------------------------------------
 
     subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, on_heading)

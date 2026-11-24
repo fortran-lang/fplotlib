@@ -9,11 +9,12 @@
 ! (:::{name} with :key: value options, dispatched to an optional callback).
 !
 ! Inline: *emphasis*, **strong**, `code`, [links](url), hard line breaks
-! (trailing \ or two spaces), smart quotes, --/--- dashes, ... ellipsis,
-! and MyST cross-references: $$ ... $$ (eq:name) numbers a display,
-! {eq}`eq:name` writes (n), {numref}`sec:name` writes "Section n" (and
-! {numref}`Part %s <sec:name>` "Part n"), and {ref}`sec:name` writes the
-! section title (and {ref}`text <sec:name>` the text).
+! (a backslash at the end of a line, or two spaces before it), smart
+! quotes, --/--- dashes, ... ellipsis, and MyST cross-references:
+! $$ ... $$ (eq:name) numbers a display, {eq}`eq:name` writes (n),
+! {numref}`sec:name` writes "Section n" (and {numref}`Part %s <sec:name>`
+! "Part n"), and {ref}`sec:name` writes the section title (and
+! {ref}`text <sec:name>` the text).
 !
 ! Lengths are in points (1/72 in; pt and bp alike), or in pc, in, cm, mm,
 ! em or ex.
@@ -804,10 +805,8 @@ contains
         if (ctx%bold) label_face = FACE_BOLD
     end function label_face
 
-    ! Headings: LaTeX's \section, \subsection and \subsubsection (and,
-    ! for a book, \chapter for #).
-    ! Headings: LaTeX's \section, \subsection and \subsubsection, with
-    ! optional template override via on_heading.
+    ! Headings: LaTeX's \section, \subsection and \subsubsection, numbered
+    ! within the chapter in a book, unless on_heading sets them.
     subroutine heading(text0, level, ctx)
         character(len=*), intent(in) :: text0
         integer, intent(in) :: level
@@ -1181,7 +1180,6 @@ contains
         call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
-    ! The TeX commands a line may hold by itself.
     ! A MyST directive :::{name} followed by :key: value options and content,
     ! dispatched to the caller's on_directive callback when supplied.
     recursive subroutine set_div(open_line, L, i, j, ctx)
