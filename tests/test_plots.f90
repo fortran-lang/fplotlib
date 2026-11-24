@@ -9,12 +9,14 @@ program test_plots
     use test_frames, only: frames_check
     use test_hyph, only: hyph_check
     use test_typeset, only: para_ref_check
+    use test_markdown, only: markdown_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nmissing, ncontract, npara
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
     integer :: nhyph
+    integer :: nmd
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1590,6 +1592,10 @@ program test_plots
     call fp_check_apng("anim_sine_apng", "tests/out/anim_sine.png")
     print *, "wrote tests/out/anim_sine.png"
 
+    ! A document: Markdown set by TeX's rules over three pages, written in
+    ! every format.
+    call document_case()
+
     print *, "All test plots written."
 
     ! The math layout against XeTeX's; see test_mathref.f90.
@@ -1611,6 +1617,8 @@ program test_plots
     call frames_check(nframe)
     ! English hyphenation patterns; see test_hyph.f90.
     call hyph_check(nhyph)
+    ! Markdown documents, read back from their pages; see test_markdown.f90.
+    call markdown_check(nmd)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1625,8 +1633,101 @@ program test_plots
     if (nbackend > 0) error stop "frame backends failed"
     if (nframe > 0) error stop "owned frames failed"
     if (nhyph > 0) error stop "hyphenation failed"
+    if (nmd > 0) error stop "markdown documents failed"
 
 contains
+
+    subroutine document_case()
+        character(len=90), parameter :: doc(*) = [character(len=90) :: &
+            "---", &
+            "title: A Small Document", &
+            "author: fplotlib", &
+            "paper: a6", &
+            "margin: 1.2cm", &
+            "fontsize: 9pt", &
+            "numbersections: true", &
+            "---", &
+            "", &
+            "# Text", &
+            "", &
+            "A paragraph of *emphasis*, **strong** text, `code`, a [link](https://example.org),", &
+            "an en--dash, an em---dash, ""quotes"" and a formula $e^{i\pi} + 1 = 0$, broken into", &
+            "lines and hyphenated as TeX does it.", &
+            "", &
+            "- a list item", &
+            "- another, with a nested list:", &
+            "    1. first", &
+            "    2. second", &
+            "", &
+            "> A quotation, set with margins on both sides.", &
+            "", &
+            "(sec:math)=", &
+            "# Mathematics", &
+            "", &
+            "A numbered display, {eq}`eq:m`, referred to by name:", &
+            "$$ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix}, \quad", &
+            "   |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases} $$ (eq:m)", &
+            "and an aligned one:", &
+            "$$ \begin{aligned} (a+b)^2 &= a^2 + 2ab + b^2 \\ &\ge 4ab \end{aligned} $$", &
+            "", &
+            ":::{div}", &
+            ":align: center", &
+            ":color: darkred", &
+            ":size: large", &
+            "Centred, coloured and larger.", &
+            ":::", &
+            "", &
+            ":::{pagebreak}", &
+            ":::", &
+            "", &
+            "{numref}`sec:math` ends on the page before this one."]
+        integer :: k
+        call typeset(doc, "tests/out/document.png", dpi=100.0_dp, on_directive=doc_directive)
+        do k = 1, 3
+            call fp_check_png("document_p"//achar(48 + k), &
+                              "tests/out/document-"//achar(48 + k)//".png")
+        end do
+        call typeset(doc, "tests/out/document.svg", on_directive=doc_directive)
+        call typeset(doc, "tests/out/document.pdf", on_directive=doc_directive)
+        call typeset(doc, "tests/out/document.eps", on_directive=doc_directive)
+        print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
+    end subroutine document_case
+
+    recursive subroutine doc_directive(d, ctx, handled)
+        use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, &
+                                     md_color, md_align, md_noindent, md_base_size
+        use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
+                                    ts_glue_t, ALIGN_JUSTIFY
+        type(md_directive_t), intent(in) :: d
+        type(md_ctx_t), intent(in) :: ctx
+        logical, intent(inout) :: handled
+        type(md_ctx_t) :: sub
+        type(ts_glue_t) :: around
+        real(dp) :: f
+        integer :: al
+
+        handled = d%name == "div" .or. d%name == "pagebreak"
+        if (.not. handled) return
+        if (d%name == "pagebreak") then
+            call ts_page_break()
+            call md_noindent(.false.)
+            return
+        end if
+        sub = ctx
+        f = md_base_size()/10.0_dp
+        around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
+        al = md_align(md_option(d%opts, "align"), -1)
+        if (al >= 0) then
+            sub%align = al
+            if (al /= ALIGN_JUSTIFY) sub%indent = .false.
+        end if
+        if (md_option(d%opts, "size") == "large") sub%size = 1.2_dp*md_base_size()
+        sub%color = md_color(md_option(d%opts, "color"), sub%color)
+        if (al >= 0) call ts_addvspace(around)
+        call md_blocks(d%body, sub)
+        call ts_end_par()
+        if (al >= 0) call ts_addvspace(around)
+    end subroutine doc_directive
 
     ! A repeatable stand-in for random numbers: the fractional part of a
     ! large sine, summed twice so the result piles up in the middle.

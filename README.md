@@ -235,6 +235,90 @@ call suptitle("figure title")
   single letters, `C0`-`C9`, or a greyscale fraction such as `"0.5"`
 - SVG defaults aligned with matplotlib (6.4×4.8 in, tab10 colors, subplot margins)
 
+## Documents
+
+`typeset` sets a whole document, written in Markdown with TeX mathematics
+(`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
+PNG or EPS file per page:
+
+```fortran
+call typeset([character(len=80) :: &
+    "---", &
+    "title: Notes", &
+    "numbersections: true", &
+    "---", &
+    "# Energy", &
+    "", &
+    "The energy of a mass at rest is", &
+    "$$ E = mc^2 $$ (eq:einstein)", &
+    "and {eq}`eq:einstein` is the best known formula of physics."], "notes.pdf")
+```
+
+The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
+spacing of its article and book classes:
+
+- paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
+  `line_break` with its two passes, badness, demerits and fitness
+  classes, and hyphenated with Liang's algorithm and the patterns LaTeX
+  and Typst use for English (`hyph-en-us`); interword glue is XeTeX's
+  for an OpenType font, and the space factor is `\nonfrenchspacing`'s;
+- lines go onto a vertical list with `\baselineskip`, `\lineskip` and
+  TeX's club, widow and broken penalties, and TeX's page builder cuts it
+  into pages at the breaks of least cost;
+- displays get `\abovedisplayskip` or the short skips, equation numbers
+  at the right margin, and the paragraph goes on after them unindented.
+
+A document goes through two layers: `fplotlib_markdown` parses a MyST subset
+of Markdown and lays it out with LaTeX article or book spacing, setting it
+twice, as LaTeX is run twice, so that the first pass numbers the sections and
+equations every reference needs; and `fplotlib_typeset` implements
+TeX's primitives (words, glue, kerns, penalties, paragraphs, formulas, marks,
+and the page builder).
+
+The text is a strict MyST subset. TeX is confined to mathematics between `$...$`
+and `$$...$$`. A display followed by `(eq:name)` is numbered, and
+`` {eq}`eq:name` `` refers to it. A target `(sec:name)=` labels the block after
+it; for a heading, `` {numref}`sec:name` `` writes "Section" and its number,
+and `` {ref}`sec:name` `` writes its title; as in Sphinx, a role may give its own
+text, `` {ref}`the introduction <sec:name>` `` or `` {numref}`Part %s <sec:name>` ``.
+A reference that cannot be resolved is set as ?? with a warning, as LaTeX does.
+A line break within a paragraph is a backslash at the end of the line (or,
+in a single string, two spaces; `typeset` given an array of lines drops
+their trailing blanks).
+
+Front matter, between two lines of `---`, holds the document options: `title`,
+`subtitle`, `author` (or `authors`, one to a line, as a YAML list or repeated),
+`date`, `abstract`, `paper` (`a4`, `a5`, `a6`, `b5`, `letter`, `legal` or
+`W x H`), `fontsize`, `linestretch`, `margin` (and `margin-left`, `-right`,
+`-top`, `-bottom`), `indent`, `parskip`, `align`, `numbersections`,
+`numberequations`, `chapters`, `pagenumbers`, `runningheads`, `flushbottom`,
+`color` and `pagecolor`. Lengths are PostScript points (1/72 in, `pt` and `bp`
+alike), as in Typst, or `pc`, `in`, `cm`, `mm`, `em` or `ex`. A value that
+cannot be read is warned of and leaves the default. Other keys are kept for
+templates, which read them with `md_meta`.
+
+The core sets the article and book layouts and nothing else. A template is
+given to `typeset` as callbacks: `on_directive` is given each MyST directive,
+`:::{name} argument` with `:key: value` options and a body, as an
+`md_directive_t`, and sets those it knows; `on_heading` is given each heading,
+its level, text and number, as an `md_heading_t`, and sets those it wants set its
+own way; and `on_body` adds what comes before and after the body. A callback that
+sets a block says so in `handled` (`.false.` on entry); whatever it leaves is set
+as the core sets it. A callback that sets blocks with `md_blocks` is called again
+for a directive or heading among them, before it returns, so it is declared
+`recursive`; it may not call `typeset` itself, one document being set at a time. The gallery's letter sets
+its sender, recipient and closing so, with the room for the signature from its
+`signature-skip`, and its invitation centres the card when the front matter says
+`valign: center`.
+
+`tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
+lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
+requires the same lines, hyphenated at the same places, with every glyph
+within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
+to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
+fplotlib, with LaTeX (Pandoc and Tectonic) and with Typst, with the same
+fonts, and puts the pages side by side.
+
 ## Using fplotlib in your project
 
 fplotlib is an [fpm](https://fpm.fortran-lang.org) package with no dependencies
@@ -400,6 +484,8 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
+               fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
+               fplotlib_markdown.f90 MyST Markdown set as LaTeX's article and book classes
                fplotlib.f90         the plotting API
                fplotlib_render.f90  the renderer contract the backends implement
                fplotlib_status.f90  contract_error, and the status_t of calls that can fail
