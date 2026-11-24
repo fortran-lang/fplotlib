@@ -82,7 +82,7 @@ contains
     subroutine invitation_directive(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
-        logical, intent(out) :: handled
+        logical, intent(inout) :: handled
         type(md_ctx_t) :: sub
         character(len=:), allocatable :: v
         real(dp) :: b

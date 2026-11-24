@@ -304,14 +304,26 @@ contains
                      ncase, nfail)
         call face("directive title", t, f, "My Title", FACE_BOLD, ncase, nfail)
         call reject("unhandled argument", t, "Dropped", ncase, nfail)
+        ! A callback that does not set handled leaves the directive to the
+        ! core.
+        call set_doc(":::{aside} Title"//NL//"Body kept."//NL//":::", t, f, &
+                     on_directive=look_only)
+        call expect("handled left alone", t, "Body kept.", ncase, nfail)
     end subroutine directive_cases
+
+    ! A template that sets no directive, and leaves handled as it is.
+    subroutine look_only(d, ctx, handled)
+        type(md_directive_t), intent(in) :: d
+        type(md_ctx_t), intent(in) :: ctx
+        logical, intent(inout) :: handled
+    end subroutine look_only
 
     ! A template's admonition: its argument in bold, with its class, and
     ! then its body.
     subroutine admonition(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
-        logical, intent(out) :: handled
+        logical, intent(inout) :: handled
         handled = d%name == "admonition"
         if (.not. handled) return
         call md_blocks("**"//d%arg//"** ["//md_option(d%opts, "class")//"]"//NL//NL//d%body, ctx)

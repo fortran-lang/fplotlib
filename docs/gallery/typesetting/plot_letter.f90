@@ -73,7 +73,7 @@ contains
     subroutine letter_directive(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
-        logical, intent(out) :: handled
+        logical, intent(inout) :: handled
         type(md_ctx_t) :: sub
         type(ts_glue_t) :: around, big
         real(dp) :: f, sig

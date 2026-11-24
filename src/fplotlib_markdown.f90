@@ -76,16 +76,17 @@ module fplotlib_markdown
 
     ! The callbacks a template gives md_typeset. on_directive sets a MyST
     ! directive, and on_heading a heading, given its level, text and
-    ! number; either says whether it did (handled), and what it leaves is
-    ! set as the core sets it: a directive's body as blocks, a heading as
-    ! LaTeX's \section. on_body is called before the body (after false) and
-    ! after it (true).
+    ! number; either sets handled to .true. when it did (it is .false. on
+    ! entry, and a callback that leaves it so leaves the block to the core),
+    ! and what it leaves is set as the core sets it: a directive's body as
+    ! blocks, a heading as LaTeX's \section. on_body is called before the
+    ! body (after false) and after it (true).
     abstract interface
         subroutine md_directive_cb(directive, ctx, handled)
             import :: md_directive_t, md_ctx_t
             type(md_directive_t), intent(in) :: directive
             type(md_ctx_t), intent(in) :: ctx
-            logical, intent(out) :: handled
+            logical, intent(inout) :: handled
         end subroutine md_directive_cb
 
         subroutine md_body_cb(after, ctx)
@@ -99,7 +100,7 @@ module fplotlib_markdown
             integer, intent(in) :: level
             character(len=*), intent(in) :: text, num
             type(md_ctx_t), intent(in) :: ctx
-            logical, intent(out) :: handled
+            logical, intent(inout) :: handled
         end subroutine md_heading_cb
     end interface
 

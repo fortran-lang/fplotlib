@@ -1700,7 +1700,7 @@ contains
                                     ts_glue_t, ALIGN_JUSTIFY
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
-        logical, intent(out) :: handled
+        logical, intent(inout) :: handled
         type(md_ctx_t) :: sub
         type(ts_glue_t) :: around
         real(dp) :: f

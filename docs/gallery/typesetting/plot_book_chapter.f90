@@ -111,7 +111,7 @@ contains
         integer, intent(in) :: level
         character(len=*), intent(in) :: text, num
         type(md_ctx_t), intent(in) :: ctx
-        logical, intent(out) :: handled
+        logical, intent(inout) :: handled
         type(md_ctx_t) :: sub
         real(dp) :: b
 
