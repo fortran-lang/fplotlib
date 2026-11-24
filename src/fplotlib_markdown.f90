@@ -120,11 +120,17 @@ module fplotlib_markdown
     ! The MyST targets, (name)=, waiting for the block they label.
     character(len=:), allocatable :: TARGETS
 
-    ! Next paragraph is not indented (after a heading or display), and any
-    ! pending list item label.
+    ! Next paragraph is not indented (after a heading or display), and the
+    ! labels of items waiting for their first line: an item's own and, when
+    ! an item begins with a list, those of the items it is in, each with
+    ! the left edge of its item's text.
     logical :: NOINDENT = .false.
-    character(len=:), allocatable :: PENDING_LABEL
-    real(dp) :: LABEL_SEP = 5.0_dp
+    type :: pending_t
+        character(len=:), allocatable :: s
+        real(dp) :: left = 0.0_dp
+    end type pending_t
+    integer :: NPEND = 0
+    type(pending_t), allocatable :: PENDING(:)
 
 contains
 
@@ -202,7 +208,7 @@ contains
         PAGE_COL = 16777215
         NMETA = 0
         NOINDENT = .false.
-        PENDING_LABEL = ""
+        NPEND = 0
         call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
@@ -751,13 +757,39 @@ contains
         NOINDENT = .false.
         call ts_begin_par(ctx%align, ind, left=ctx%left, right=ctx%right, size=ctx%size, &
                           leading=LEAD*ctx%size)
-        if (len(PENDING_LABEL) > 0) then
-            call ts_label(PENDING_LABEL, label_face(ctx), ctx%size, LABEL_SEP, ctx%color)
-            PENDING_LABEL = ""
-        end if
+        call put_labels(ctx, ctx%left)
         call inline(s, base_style(ctx))
         call ts_end_par()
     end subroutine paragraph
+
+    ! An item's label, waiting for the item's first line.
+    subroutine push_label(s, left)
+        character(len=*), intent(in) :: s
+        real(dp), intent(in) :: left
+        type(pending_t), allocatable :: grown(:)
+        if (.not. allocated(PENDING)) allocate (PENDING(4))
+        if (NPEND == size(PENDING)) then
+            allocate (grown(2*size(PENDING)))
+            grown(1:NPEND) = PENDING(1:NPEND)
+            call move_alloc(grown, PENDING)
+        end if
+        NPEND = NPEND + 1
+        PENDING(NPEND)%s = s
+        PENDING(NPEND)%left = left
+    end subroutine push_label
+
+    ! The labels waiting for the line just begun, whose text starts at
+    ! left: each half an em before its own item's text.
+    subroutine put_labels(ctx, left)
+        type(md_ctx_t), intent(in) :: ctx
+        real(dp), intent(in) :: left
+        integer :: k
+        do k = 1, NPEND
+            call ts_label(PENDING(k)%s, label_face(ctx), ctx%size, &
+                          0.5_dp*BASE + left - PENDING(k)%left, ctx%color)
+        end do
+        NPEND = 0
+    end subroutine put_labels
 
     integer function label_face(ctx)
         type(md_ctx_t), intent(in) :: ctx
@@ -945,7 +977,11 @@ contains
         else
             sub%elev = ctx%elev + 1
         end if
-        if (blank_before .and. .not. ts_in_par()) then
+        if (NPEND > 0) then
+            ! A list that begins an item starts on the item's first line,
+            ! its labels after the item's, as LaTeX's \@donoparitem has it.
+            call ts_end_par()
+        else if (blank_before .and. .not. ts_in_par()) then
             call ts_addpenalty(-51)
             call ts_addvspace(add_glue(topsep, partopsep))
         else
@@ -987,18 +1023,16 @@ contains
                 call ts_addpenalty(-51)
                 call ts_addvspace(itemsep)
             end if
-            PENDING_LABEL = list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num)
-            LABEL_SEP = 0.5_dp*BASE
+            call push_label(list_label(kind, merge(sub%ilev, sub%elev, kind == 0), num), sub%left)
             call ts_set_parskip(parsep)
             call blocks(item, ni, sub)
-            if (len(PENDING_LABEL) > 0) then
+            if (NPEND > 0) then
                 ! An item with no paragraph of its own still has its label.
                 call ts_begin_par(sub%align, 0.0_dp, left=sub%left, right=sub%right, &
                                   size=sub%size)
-                call ts_label(PENDING_LABEL, FACE_REGULAR, sub%size, LABEL_SEP, sub%color)
+                call put_labels(sub, sub%left)
                 call ts_strut(0.7_dp*sub%size, 0.3_dp*sub%size)
                 call ts_end_par()
-                PENDING_LABEL = ""
             end if
             deallocate (item)
             num = num + 1
@@ -1118,6 +1152,7 @@ contains
             call ts_begin_par(ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*BASE, &
                               right=ctx%right, size=0.9_dp*ctx%size, leading=LEAD*ctx%size)
             call ts_strut(0.7_dp*ctx%size, 0.3_dp*ctx%size)
+            if (k == 1) call put_labels(ctx, ctx%left + 1.5_dp*BASE)
             i = 1
             do while (i <= len(s))
                 if (s(i:i) == " ") then

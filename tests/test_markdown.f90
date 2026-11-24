@@ -54,6 +54,7 @@ contains
         call target_cases(ncase, nfail)
         call tab_cases(ncase, nfail)
         call abstract_cases(ncase, nfail)
+        call label_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -239,6 +240,20 @@ contains
         call expect("abstract alone", t, "Abstract"//NL//"What this is about."//NL//"Body.", &
                      ncase, nfail)
     end subroutine abstract_cases
+
+    ! An item that begins with a list, or with code, keeps its label, on
+    ! its first line.
+    subroutine label_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("- - inner"//NL//"- second"//NL//NL//"1. - x"//NL//NL// &
+                     "- ```"//NL//"  code"//NL//"  ```", t, f)
+        call expect("item of a list", t, BULLET//" "//DASH//" inner"//NL//BULLET//" second", &
+                     ncase, nfail)
+        call expect("numbered item", t, "1. "//BULLET//" x", ncase, nfail)
+        call expect("item of code", t, BULLET//" code", ncase, nfail)
+    end subroutine label_cases
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
