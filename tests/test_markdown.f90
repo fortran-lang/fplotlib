@@ -7,7 +7,7 @@
 ! a form feed. The face of every byte of that text is kept beside it, so
 ! that a case can ask whether a word came out italic.
 module test_markdown
-    use fplotlib_style, only: dp, utf8_char
+    use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv
     use fplotlib_markdown, only: md_typeset
@@ -18,6 +18,7 @@ module test_markdown
     public :: markdown_check
 
     character, parameter :: NL = achar(10), FF = achar(12)
+    character(len=*), parameter :: BULLET = achar(226)//achar(128)//achar(162)
 
     type, extends(renderer_t) :: text_renderer_t
         integer :: n = 0
@@ -44,6 +45,7 @@ contains
         ncase = 0
         call numbering_cases(ncase, nfail)
         call role_cases(ncase, nfail)
+        call display_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -105,6 +107,22 @@ contains
         call expect("unresolved", t, "??; ??; ??; kept.", ncase, nfail)
     end subroutine role_cases
 
+    ! A display goes on over its lines whatever they start with, and a $$
+    ! that is not closed is text.
+    subroutine display_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("Energy"//NL//"$$ E = mc^2"//NL//"+ \frac{p^2}{2m}"//NL//"- V"//NL// &
+                     "> 0 $$"//NL//"follows.", t, f)
+        call reject("display source", t, "frac", ncase, nfail)
+        call reject("display item", t, BULLET, ncase, nfail)
+        call reject("display dollars", t, "$", ncase, nfail)
+        call expect("display text", t, NL//"follows.", ncase, nfail)
+        call set_doc("Costs $$ 5 here.", t, f)
+        call expect("unclosed display", t, "Costs $$ 5 here.", ncase, nfail)
+    end subroutine display_cases
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
@@ -165,7 +183,7 @@ contains
                     faces = faces//" "
                 end if
             end if
-            c = utf8_char(r%cp(k))
+            c = utf8(r%cp(k))
             text = text//c
             faces = faces//repeat(achar(48 + r%face(k)), len(c))
         end do
@@ -180,6 +198,32 @@ contains
             before = r%x(a) < r%x(b)
         end if
     end function before
+
+    ! A code point as UTF-8, the math alphabets' four bytes included.
+    function utf8(code) result(s)
+        integer, intent(in) :: code
+        character(len=:), allocatable :: s
+        if (code < 128) then
+            s = achar(code)
+        else if (code < 2048) then
+            s = achar(192 + code/64)//achar(128 + iand(code, 63))
+        else if (code < 65536) then
+            s = achar(224 + code/4096)//achar(128 + iand(code/64, 63))//achar(128 + iand(code, 63))
+        else
+            s = achar(240 + code/262144)//achar(128 + iand(code/4096, 63)) &
+                //achar(128 + iand(code/64, 63))//achar(128 + iand(code, 63))
+        end if
+    end function utf8
+
+    subroutine reject(what, text, unwanted, ncase, nfail)
+        character(len=*), intent(in) :: what, text, unwanted
+        integer, intent(inout) :: ncase, nfail
+        ncase = ncase + 1
+        if (index(text, unwanted) == 0) return
+        nfail = nfail + 1
+        print "(a)", "  FAIL markdown "//what//": '"//unwanted//"' in:"
+        print "(a)", text
+    end subroutine reject
 
     subroutine expect(what, text, want, ncase, nfail)
         character(len=*), intent(in) :: what, text, want

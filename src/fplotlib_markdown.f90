@@ -499,7 +499,9 @@ contains
                 do while (j <= n)
                     t = trim(adjustl(L(j)%s))
                     if (len(t) == 0) exit
-                    if (j > i) then
+                    ! Inside a display, a line is mathematics, whatever it
+                    ! starts with.
+                    if (j > i .and. .not. open_display(para)) then
                         if (interrupts(L(j)%s)) exit
                         if (j == i + 1 .and. (is_underline(t, "=") .or. &
                                               is_underline(t, "-"))) exit
@@ -543,6 +545,38 @@ contains
             interrupts = lev == 0 .or. k == 1
         end if
     end function interrupts
+
+    ! Whether text leaves a $$ display open: whether it has an odd number
+    ! of $$, outside code spans and escapes.
+    logical function open_display(text)
+        character(len=*), intent(in) :: text
+        integer :: i, j, r
+        open_display = .false.
+        i = 1
+        do while (i <= len(text))
+            if (text(i:i) == BS) then
+                i = i + 2
+            else if (text(i:i) == "`" .and. .not. open_display) then
+                r = 1
+                do while (i + r <= len(text))
+                    if (text(i + r:i + r) /= "`") exit
+                    r = r + 1
+                end do
+                j = index(text(i + r:), repeat("`", r))
+                i = i + r
+                if (j > 0) i = i + j - 1 + r
+            else if (i < len(text) .and. text(i:i) == "$") then
+                if (text(i + 1:i + 1) == "$") then
+                    open_display = .not. open_display
+                    i = i + 2
+                else
+                    i = i + 1
+                end if
+            else
+                i = i + 1
+            end if
+        end do
+    end function open_display
 
     ! A paragraph of inline text in the context's settings.
     subroutine paragraph(text, ctx)
@@ -1231,6 +1265,10 @@ contains
                             end do
                             cycle
                         end if
+                        ! A $$ that is not closed is text.
+                        w = w//"$$"
+                        i = i + 2
+                        cycle
                     end if
                 end if
                 j = closing_dollar(s, i)
