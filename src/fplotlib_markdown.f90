@@ -15,7 +15,8 @@
 ! {numref}`Part %s <sec:name>` "Part n"), and {ref}`sec:name` writes the
 ! section title (and {ref}`text <sec:name>` the text).
 !
-! Lengths are in points (1/72 in), or in bp, in, cm, mm, em or ex.
+! Lengths are in points (1/72 in; pt and bp alike), or in pc, in, cm, mm,
+! em or ex.
 module fplotlib_markdown
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_colors, only: color_from_name
@@ -93,10 +94,12 @@ module fplotlib_markdown
     integer :: TEXT_COL = 0, PAGE_COL = 16777215
     integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
 
-    ! Raw front-matter key/value pairs for templates via md_meta().
+    ! The front matter's keys and values, for templates (md_meta).
+    type :: meta_t
+        character(len=:), allocatable :: key, val
+    end type meta_t
     integer :: NMETA = 0
-    character(len=64) :: META_KEY(64)
-    character(len=256) :: META_VAL(64)
+    type(meta_t), allocatable :: META(:)
 
     ! Counters and cross references. A label is a heading's or a display's
     ! name, its number ("" when it has none) and, for a heading, its title.
@@ -198,15 +201,19 @@ contains
         call ts_set_page(595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
-    ! The front matter: "key: value" lines between two lines of ---.
+    ! The front matter: "key: value" lines between a first line of --- and
+    ! the next line of --- (or ...). Without that closing line there is no
+    ! front matter, and the --- is a rule. The type size is read first, as
+    ! the em and ex of the other values are its. A value that cannot be
+    ! read is warned of, and the setting keeps its default.
     subroutine front_matter(lines, n, first)
         type(line_t), intent(in) :: lines(:)
         integer, intent(in) :: n
         integer, intent(inout) :: first
-        integer :: i, j, c
+        integer :: i, last, c
         character(len=:), allocatable :: key, val
-        real(dp) :: pw, ph, ml, mr, mt, mb, m
-        logical :: numbers, heads, flushb
+        real(dp) :: pw, ph, ml, mr, mt, mb, m, x
+        logical :: numbers, heads, flushb, ok
 
         pw = 595.2756_dp
         ph = 841.8898_dp
@@ -218,96 +225,94 @@ contains
         numbers = .true.
         heads = .false.
         flushb = .false.
+        last = 0
         if (n >= 1) then
             if (trim(lines(1)%s) == "---") then
                 do i = 2, n
-                    if (trim(lines(i)%s) == "---" .or. trim(lines(i)%s) == "...") exit
-                    ! An indented line goes on the value before it.
-                    if (len(lines(i)%s) > 0) then
-                        if (lines(i)%s(1:1) == " ") cycle
+                    if (trim(lines(i)%s) == "---" .or. trim(lines(i)%s) == "...") then
+                        last = i
+                        exit
                     end if
-                    c = index(lines(i)%s, ":")
-                    if (c == 0) cycle
-                    key = lower(adjustl(trim(lines(i)%s(1:c - 1))))
-                    val = unquote(adjustl(trim(lines(i)%s(c + 1:))))
-                    ! A value goes on over the indented lines after it, as
-                    ! does a block value (| or >).
-                    if (val == "|" .or. val == ">") val = ""
-                    do j = i + 1, n
-                        if (len(lines(j)%s) == 0) exit
-                        if (lines(j)%s(1:1) /= " ") exit
-                        if (len(val) > 0) val = val//" "
-                        val = val//trim(adjustl(lines(j)%s))
-                    end do
-                    if (NMETA < size(META_KEY)) then
-                        NMETA = NMETA + 1
-                        META_KEY(NMETA) = key
-                        META_VAL(NMETA) = val
-                    end if
-                    select case (key)
-                    case ("title")
-                        TITLE = val
-                    case ("subtitle")
-                        SUBTITLE = val
-                    case ("author")
-                        if (len(AUTHOR) > 0) then
-                            AUTHOR = AUTHOR//NL//val
-                        else
-                            AUTHOR = val
-                        end if
-                    case ("date")
-                        DATE = val
-                    case ("abstract")
-                        ABSTRACT = val
-                    case ("fontsize")
-                        BASE = length(val, 10.0_dp)
-                    case ("linestretch", "leading")
-                        LEAD = 1.2_dp*number(val, 1.0_dp)
-                    case ("paper", "papersize")
-                        call paper_size(lower(val), pw, ph)
-                    case ("margin")
-                        m = length(val, BASE)
-                    case ("margin-left")
-                        ml = length(val, BASE)
-                    case ("margin-right")
-                        mr = length(val, BASE)
-                    case ("margin-top")
-                        mt = length(val, BASE)
-                    case ("margin-bottom")
-                        mb = length(val, BASE)
-                    case ("indent", "parindent")
-                        if (lower(val) == "false" .or. lower(val) == "no") then
-                            PARINDENT = 0.0_dp
-                        else if (lower(val) /= "true" .and. lower(val) /= "yes") then
-                            PARINDENT = length(val, BASE)
-                        end if
-                    case ("parskip")
-                        PARSKIP_G = ts_glue_t(length(val, BASE), 0.2_dp*length(val, BASE), &
-                                              0.0_dp, 0, 0)
-                        if (PARINDENT < 0.0_dp) PARINDENT = 0.0_dp
-                    case ("align")
-                        DOC_ALIGN = align_of(lower(val), ALIGN_JUSTIFY)
-                    case ("numbersections", "number-sections")
-                        NUMBER_SECTIONS = truth(val)
-                    case ("numberequations", "number-equations")
-                        NUMBER_EQS = truth(val)
-                    case ("pagenumbers", "page-numbers")
-                        numbers = truth(val)
-                    case ("runningheads", "running-heads")
-                        heads = truth(val)
-                    case ("flushbottom", "flush-bottom")
-                        flushb = truth(val)
-                    case ("chapters")
-                        CHAPTERS = truth(val)
-                    case ("color", "fontcolor")
-                        TEXT_COL = color_of(val, 0)
-                    case ("pagecolor", "background")
-                        PAGE_COL = color_of(val, 16777215)
-                    end select
                 end do
-                first = i + 1
             end if
         end if
+        do i = 2, last - 1
+            if (.not. entry(lines, i, last, key, val)) cycle
+            if (key /= "fontsize") cycle
+            x = length(val, BASE, ok)
+            if (ok) BASE = x
+        end do
+        do i = 2, last - 1
+            if (.not. entry(lines, i, last, key, val)) cycle
+            call add_meta(key, val)
+            select case (key)
+            case ("title")
+                TITLE = val
+            case ("subtitle")
+                SUBTITLE = val
+            case ("author", "authors")
+                if (len(AUTHOR) > 0) then
+                    AUTHOR = AUTHOR//NL//val
+                else
+                    AUTHOR = val
+                end if
+            case ("date")
+                DATE = val
+            case ("abstract")
+                ABSTRACT = val
+            case ("linestretch", "leading")
+                x = number(val, ok)
+                if (ok) LEAD = 1.2_dp*x
+            case ("paper", "papersize")
+                call paper_size(lower(val), pw, ph)
+            case ("margin")
+                call set_length(val, m)
+            case ("margin-left")
+                call set_length(val, ml)
+            case ("margin-right")
+                call set_length(val, mr)
+            case ("margin-top")
+                call set_length(val, mt)
+            case ("margin-bottom")
+                call set_length(val, mb)
+            case ("indent", "parindent")
+                if (lower(val) == "false" .or. lower(val) == "no") then
+                    PARINDENT = 0.0_dp
+                else if (lower(val) /= "true" .and. lower(val) /= "yes") then
+                    call set_length(val, PARINDENT)
+                end if
+            case ("parskip")
+                x = length(val, BASE, ok)
+                if (ok) then
+                    PARSKIP_G = ts_glue_t(x, 0.2_dp*x, 0.0_dp, 0, 0)
+                    if (PARINDENT < 0.0_dp) PARINDENT = 0.0_dp
+                end if
+            case ("align")
+                c = align_of(lower(val), -1)
+                if (c < 0) then
+                    call warn("cannot read the alignment '"//val//"'")
+                else
+                    DOC_ALIGN = c
+                end if
+            case ("numbersections", "number-sections")
+                NUMBER_SECTIONS = flag(val)
+            case ("numberequations", "number-equations")
+                NUMBER_EQS = flag(val)
+            case ("pagenumbers", "page-numbers")
+                numbers = flag(val)
+            case ("runningheads", "running-heads")
+                heads = flag(val)
+            case ("flushbottom", "flush-bottom")
+                flushb = flag(val)
+            case ("chapters")
+                CHAPTERS = flag(val)
+            case ("color", "fontcolor")
+                call set_color(val, TEXT_COL)
+            case ("pagecolor", "background")
+                call set_color(val, PAGE_COL)
+            end select
+        end do
+        if (last > 0) first = last + 1
         if (PARINDENT < 0.0_dp) PARINDENT = 1.5_dp*BASE
         ! LaTeX's geometry is set here by margins; without them, one inch.
         if (m < 0.0_dp) m = 72.0_dp
@@ -318,9 +323,123 @@ contains
         call ts_set_page(pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
     end subroutine front_matter
 
+    ! The key and value of front matter line i, when it is a line that is
+    ! not indented and has a colon. The value goes on over the indented
+    ! lines after it, up to line last; "- item" lines, or [a, b], are a
+    ! list, its items one to a line.
+    logical function entry(lines, i, last, key, val)
+        type(line_t), intent(in) :: lines(:)
+        integer, intent(in) :: i, last
+        character(len=:), allocatable, intent(out) :: key, val
+        character(len=:), allocatable :: t
+        integer :: c, j
+        entry = .false.
+        key = ""
+        val = ""
+        if (len(lines(i)%s) == 0) return
+        if (lines(i)%s(1:1) == " ") return
+        c = index(lines(i)%s, ":")
+        if (c == 0) return
+        entry = .true.
+        key = trim(lower(adjustl(lines(i)%s(1:c - 1))))
+        val = unquote(trim(adjustl(lines(i)%s(c + 1:))))
+        if (val == "|" .or. val == ">") val = ""
+        if (len(val) >= 2) then
+            if (val(1:1) == "[" .and. val(len(val):) == "]") val = flow_list(val(2:len(val) - 1))
+        end if
+        do j = i + 1, last - 1
+            if (len(lines(j)%s) == 0) exit
+            if (lines(j)%s(1:1) /= " ") exit
+            t = trim(adjustl(lines(j)%s))
+            if (starts(t, "- ")) then
+                if (len(val) > 0) val = val//NL
+                val = val//unquote(trim(adjustl(t(3:))))
+            else
+                if (len(val) > 0) val = val//" "
+                val = val//t
+            end if
+        end do
+    end function entry
+
+    ! The items of a YAML flow list, a, "b, c", one to a line.
+    function flow_list(s) result(t)
+        character(len=*), intent(in) :: s
+        character(len=:), allocatable :: t
+        character :: q
+        integer :: i, j
+        t = ""
+        q = " "
+        j = 1
+        do i = 1, len(s) + 1
+            if (i <= len(s)) then
+                if (q /= " ") then
+                    if (s(i:i) == q) q = " "
+                    cycle
+                end if
+                if (s(i:i) == '"' .or. s(i:i) == "'") then
+                    q = s(i:i)
+                    cycle
+                end if
+                if (s(i:i) /= ",") cycle
+            end if
+            if (len(t) > 0) t = t//NL
+            t = t//unquote(trim(adjustl(s(j:i - 1))))
+            j = i + 1
+        end do
+    end function flow_list
+
+    ! A front matter value, kept for the templates (md_meta).
+    subroutine add_meta(key, val)
+        character(len=*), intent(in) :: key, val
+        type(meta_t), allocatable :: grown(:)
+        if (.not. allocated(META)) allocate (META(16))
+        if (NMETA == size(META)) then
+            allocate (grown(2*size(META)))
+            grown(1:NMETA) = META(1:NMETA)
+            call move_alloc(grown, META)
+        end if
+        NMETA = NMETA + 1
+        META(NMETA)%key = key
+        META(NMETA)%val = val
+    end subroutine add_meta
+
+    subroutine set_length(val, var)
+        character(len=*), intent(in) :: val
+        real(dp), intent(inout) :: var
+        real(dp) :: x
+        logical :: ok
+        x = length(val, BASE, ok)
+        if (ok) var = x
+    end subroutine set_length
+
+    subroutine set_color(val, var)
+        character(len=*), intent(in) :: val
+        integer, intent(inout) :: var
+        integer :: c
+        c = color_of(val, -1)
+        if (c < 0) then
+            call warn("cannot read the colour '"//val//"'")
+        else
+            var = c
+        end if
+    end subroutine set_color
+
+    ! A yes or no: true, yes or 1, or false, no or 0.
+    logical function flag(val)
+        character(len=*), intent(in) :: val
+        flag = truth(val)
+        select case (lower(trim(val)))
+        case ("true", "yes", "1", "false", "no", "0")
+        case default
+            call warn("cannot read '"//val//"' as true or false")
+        end select
+    end function flag
+
     subroutine paper_size(v, w, h)
         character(len=*), intent(in) :: v
         real(dp), intent(inout) :: w, h
+        real(dp) :: a, b
+        logical :: oka, okb
         integer :: x
         select case (v)
         case ("a4")
@@ -344,9 +463,17 @@ contains
         case default
             ! "W x H", lengths.
             x = index(v, "x")
+            oka = .false.
+            okb = .false.
             if (x > 0) then
-                w = length(trim(v(1:x - 1)), BASE)
-                h = length(trim(v(x + 1:)), BASE)
+                a = length(trim(v(1:x - 1)), BASE, oka)
+                b = length(trim(v(x + 1:)), BASE, okb)
+            end if
+            if (oka .and. okb) then
+                w = a
+                h = b
+            else
+                call warn("cannot read the paper '"//v//"'")
             end if
         end select
     end subroutine paper_size
@@ -1079,8 +1206,8 @@ contains
         val = ""
         want = lower(trim(key))
         do k = 1, NMETA
-            if (trim(META_KEY(k)) == want) then
-                val = trim(META_VAL(k))
+            if (META(k)%key == want) then
+                val = META(k)%val
                 return
             end if
         end do
@@ -1949,48 +2076,69 @@ contains
         if (ios == 0) color_of = c
     end function color_of
 
-    ! A number, for keys that take one.
-    real(dp) function number(v, dflt)
+    ! A number, for keys that take one; ok false, and a warning, when v
+    ! is not one.
+    real(dp) function number(v, ok)
         character(len=*), intent(in) :: v
-        real(dp), intent(in) :: dflt
+        logical, intent(out) :: ok
         integer :: ios
+        number = 0.0_dp
         read (v, *, iostat=ios) number
-        if (ios /= 0) number = dflt
+        ok = ios == 0
+        if (.not. ok) call warn("cannot read the number '"//trim(v)//"'")
     end function number
 
-    ! A length in points: a number with pt, bp, in, cm, mm, em or ex (an
-    ! em being size), a bare number in points.
-    real(dp) function length(v, size)
+    ! A length in points (1/72 in): a number with pt or bp, pc, in, cm,
+    ! mm, em or ex (an em being size), a bare number in points. Nothing is
+    ! 0; anything else is 0 too, with ok false and a warning.
+    real(dp) function length(v, size, ok)
         character(len=*), intent(in) :: v
         real(dp), intent(in) :: size
+        logical, intent(out), optional :: ok
         character(len=:), allocatable :: t, u
         integer :: k, ios
         real(dp) :: x
+        logical :: good
         t = trim(adjustl(v))
         length = 0.0_dp
+        good = .false.
+        if (present(ok)) ok = .false.
+        if (len(t) == 0) return
         k = len(t)
         do while (k > 0)
             if (index("0123456789.-+", t(k:k)) > 0) exit
             k = k - 1
         end do
-        if (k == 0) return
-        read (t(1:k), *, iostat=ios) x
-        if (ios /= 0) return
-        u = trim(adjustl(t(k + 1:)))
-        select case (u)
-        case ("in")
-            length = 72.0_dp*x
-        case ("cm")
-            length = 72.0_dp/2.54_dp*x
-        case ("mm")
-            length = 72.0_dp/25.4_dp*x
-        case ("em")
-            length = size*x
-        case ("ex")
-            length = face_xheight(FACE_REGULAR)*size*x
-        case default
-            length = x
-        end select
+        if (k > 0) then
+            read (t(1:k), *, iostat=ios) x
+            if (ios == 0) then
+                u = trim(lower(adjustl(t(k + 1:))))
+                good = .true.
+                select case (u)
+                case ("", "pt", "bp")
+                    length = x
+                case ("pc")
+                    length = 12.0_dp*x
+                case ("in")
+                    length = 72.0_dp*x
+                case ("cm")
+                    length = 72.0_dp/2.54_dp*x
+                case ("mm")
+                    length = 72.0_dp/25.4_dp*x
+                case ("em")
+                    length = size*x
+                case ("ex")
+                    length = face_xheight(FACE_REGULAR)*size*x
+                case default
+                    good = .false.
+                end select
+            end if
+        end if
+        if (.not. good) then
+            length = 0.0_dp
+            call warn("cannot read the length '"//t//"'")
+        end if
+        if (present(ok)) ok = good
     end function length
 
     ! LaTeX's glue scaled from its 10pt values to the body size.

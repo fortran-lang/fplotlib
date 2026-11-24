@@ -10,7 +10,7 @@ module test_markdown
     use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv
-    use fplotlib_markdown, only: md_typeset
+    use fplotlib_markdown, only: md_typeset, md_meta
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
@@ -47,6 +47,7 @@ contains
         call role_cases(ncase, nfail)
         call display_cases(ncase, nfail)
         call page_cases(ncase, nfail)
+        call front_matter_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -146,17 +147,52 @@ contains
         call expect("last page", t, FF//"Last"//NL//"Final words.", ncase, nfail)
     end subroutine page_cases
 
+    ! Front matter is front matter only when it is closed; its em is the
+    ! type size wherever that is given; its lists are lists.
+    subroutine front_matter_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+        real(dp) :: left
+        character(len=300) :: long
+
+        call set_doc("---"//NL//"title: x"//NL//NL//"Hello world.", t, f)
+        call expect("unclosed front matter", t, "title: x"//NL//"Hello world.", ncase, nfail)
+        call set_doc("---"//NL//"margin: 2em"//NL//"fontsize: 20pt"//NL//"align: left"//NL// &
+                     "---"//NL//"Text.", t, f, leftmost=left)
+        call near("em before fontsize", left, 40.0_dp, ncase, nfail)
+        call set_doc("---"//NL//"margin: 3pc"//NL//"align: left"//NL//"---"//NL//"Text.", &
+                     t, f, leftmost=left)
+        call near("picas", left, 36.0_dp, ncase, nfail)
+        call set_doc("---"//NL//"margin: 3qq"//NL//"align: left"//NL//"---"//NL//"Text.", &
+                     t, f, leftmost=left)
+        call near("unknown unit", left, 72.0_dp, ncase, nfail)
+        call set_doc("---"//NL//"title: T"//NL//"author:"//NL//"  - Ada"//NL//"  - Charles"//NL// &
+                     "---"//NL//"Text.", t, f)
+        call expect("author list", t, "T"//NL//"Ada"//NL//"Charles"//NL, ncase, nfail)
+        call set_doc("---"//NL//"title: T"//NL//"authors: [Ada, ""King, Charles""]"//NL// &
+                     "---"//NL//"Text.", t, f)
+        call expect("flow list", t, "T"//NL//"Ada"//NL//"King, Charles"//NL, ncase, nfail)
+        long = repeat("w", 300)
+        call set_doc("---"//NL//"note: "//long//NL//"---"//NL//"Text.", t, f)
+        ncase = ncase + 1
+        if (md_meta("note") /= long) then
+            nfail = nfail + 1
+            print "(a,i0,a)", "  FAIL markdown long value: md_meta gave ", len(md_meta("note")), &
+                " characters of 300"
+        end if
+    end subroutine front_matter_cases
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
 
     ! The text of document md's pages, the face of each of its bytes
-    ! ("0" + face, " " for a space or line end), and the lowest baseline
-    ! on any page.
-    subroutine set_doc(md, text, faces, lowest)
+    ! ("0" + face, " " for a space or line end), the lowest baseline on
+    ! any page and the leftmost glyph.
+    subroutine set_doc(md, text, faces, lowest, leftmost)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
-        real(dp), intent(out), optional :: lowest
+        real(dp), intent(out), optional :: lowest, leftmost
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
@@ -166,11 +202,13 @@ contains
         text = ""
         faces = ""
         if (present(lowest)) lowest = 0.0_dp
+        if (present(leftmost)) leftmost = huge(1.0_dp)
         do p = 1, ts_page_count()
             call r%open_canvas(w, h)
             call ts_page_draw(r, p)
             call r%close_canvas()
             if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
+            if (present(leftmost) .and. r%n > 0) leftmost = min(leftmost, minval(r%x(1:r%n)))
             if (p > 1) then
                 text = text//FF
                 faces = faces//" "
@@ -251,6 +289,16 @@ contains
         print "(a)", "  FAIL markdown "//what//": '"//unwanted//"' in:"
         print "(a)", text
     end subroutine reject
+
+    subroutine near(what, got, want, ncase, nfail)
+        character(len=*), intent(in) :: what
+        real(dp), intent(in) :: got, want
+        integer, intent(inout) :: ncase, nfail
+        ncase = ncase + 1
+        if (abs(got - want) < 0.5_dp) return
+        nfail = nfail + 1
+        print "(a,f0.2,a,f0.2)", "  FAIL markdown "//what//": ", got, " instead of ", want
+    end subroutine near
 
     subroutine expect(what, text, want, ncase, nfail)
         character(len=*), intent(in) :: what, text, want
