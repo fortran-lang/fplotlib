@@ -813,7 +813,7 @@ contains
         type(md_ctx_t), intent(in) :: ctx
         character(len=:), allocatable :: text, num
         type(style_t) :: st
-        real(dp) :: ex, size, lead, hang
+        real(dp) :: ex, size, baseline, hang
         type(ts_glue_t) :: before, after
         integer :: lv, k
         logical :: handled
@@ -851,17 +851,17 @@ contains
         select case (lv)
         case (1)
             size = 1.44_dp*BASE
-            lead = 18.0_dp*BASE/10.0_dp
+            baseline = 18.0_dp*BASE/10.0_dp
             before = ts_glue_t(3.5_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(2.3_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case (2)
             size = 1.2_dp*BASE
-            lead = 14.0_dp*BASE/10.0_dp
+            baseline = 14.0_dp*BASE/10.0_dp
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         case default
             size = BASE
-            lead = LEAD*BASE
+            baseline = LEAD*BASE
             before = ts_glue_t(3.25_dp*ex, 1.0_dp*ex, 0.2_dp*ex, 0, 0)
             after = ts_glue_t(1.5_dp*ex, 0.2_dp*ex, 0.0_dp, 0, 0)
         end select
@@ -873,7 +873,7 @@ contains
         hang = 0.0_dp
         if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
         call ts_begin_par(ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, size=size, &
-                          leading=lead, hang=hang, nobreak=.true.)
+                          leading=baseline, hang=hang, nobreak=.true.)
         if (len(num) > 0) then
             call ts_word(num, FACE_BOLD, size, ctx%color)
             call ts_kern(size)

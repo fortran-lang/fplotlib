@@ -9,8 +9,8 @@
 module test_markdown
     use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
-    use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC
+    use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
+                               FACE_BOLD, FACE_ITALIC
     use fplotlib_markdown, only: md_typeset, md_meta
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
@@ -55,6 +55,7 @@ contains
         call tab_cases(ncase, nfail)
         call abstract_cases(ncase, nfail)
         call label_cases(ncase, nfail)
+        call heading_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -255,17 +256,37 @@ contains
         call expect("item of code", t, BULLET//" code", ncase, nfail)
     end subroutine label_cases
 
+    ! A \subsubsection's lines are \baselineskip apart.
+    subroutine heading_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+        real(dp), allocatable :: ys(:)
+
+        call set_doc("---"//NL//"paper: 200 x 300"//NL//"margin: 20pt"//NL//"pagenumbers: false"// &
+                     NL//"---"//NL//"### A subsubsection long enough for two lines", t, f, &
+                     baselines=ys)
+        ncase = ncase + 1
+        if (size(ys) /= 2) then
+            nfail = nfail + 1
+            print "(a,i0,a)", "  FAIL markdown subsubsection: ", size(ys), " lines in:"
+            print "(a)", t
+        else
+            call near("subsubsection leading", ys(2) - ys(1), 12.0_dp, ncase, nfail)
+        end if
+    end subroutine heading_cases
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
 
     ! The text of document md's pages, the face of each of its bytes
     ! ("0" + face, " " for a space or line end), the lowest baseline on
-    ! any page and the leftmost glyph.
-    subroutine set_doc(md, text, faces, lowest, leftmost)
+    ! any page, the leftmost glyph, and the baselines of the first page.
+    subroutine set_doc(md, text, faces, lowest, leftmost, baselines)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
         real(dp), intent(out), optional :: lowest, leftmost
+        real(dp), allocatable, intent(out), optional :: baselines(:)
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
@@ -282,6 +303,7 @@ contains
             call r%close_canvas()
             if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
             if (present(leftmost) .and. r%n > 0) leftmost = min(leftmost, minval(r%x(1:r%n)))
+            if (present(baselines) .and. p == 1) call page_baselines(r, baselines)
             if (p > 1) then
                 text = text//FF
                 faces = faces//" "
@@ -329,6 +351,26 @@ contains
             faces = faces//repeat(achar(48 + r%face(k)), len(c))
         end do
     end subroutine page_lines
+
+    ! The baselines of a page, from the top.
+    subroutine page_baselines(r, ys)
+        type(text_renderer_t), intent(in) :: r
+        real(dp), allocatable, intent(out) :: ys(:)
+        real(dp) :: lo
+        integer :: k, n
+        n = 0
+        lo = -huge(1.0_dp)
+        do while (any(r%y(1:r%n) > lo + 0.01_dp))
+            n = n + 1
+            lo = minval(r%y(1:r%n), mask=r%y(1:r%n) > lo + 0.01_dp)
+        end do
+        allocate (ys(n))
+        lo = -huge(1.0_dp)
+        do k = 1, n
+            ys(k) = minval(r%y(1:r%n), mask=r%y(1:r%n) > lo + 0.01_dp)
+            lo = ys(k)
+        end do
+    end subroutine page_baselines
 
     logical function before(r, a, b)
         type(text_renderer_t), intent(in) :: r
