@@ -298,8 +298,9 @@ cannot be read is warned of and leaves the default. Other keys are kept for
 templates, which read them with `md_meta`.
 
 The core sets the article and book layouts and nothing else. A template is
-given to `typeset` as callbacks: `on_directive` sets the MyST directives
-(`:::{name}` with `:key: value` options) it knows, `on_heading` the headings it
+given to `typeset` as callbacks: `on_directive` is given each MyST directive,
+`:::{name} argument` with `:key: value` options and a body, as an
+`md_directive_t`, and sets those it knows; `on_heading` sets the headings it
 wants set its own way, and `on_body` adds what comes before and after the body;
 whatever a callback leaves is set as the core sets it. The gallery's letter sets
 its sender, recipient and closing so, with the room for the signature from its

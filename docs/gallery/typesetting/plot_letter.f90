@@ -11,7 +11,8 @@
 
 program plot_letter
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_ctx_t, md_blocks, md_meta, md_length, md_base_size
+    use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_meta, md_length, &
+                                 md_base_size
     use fplotlib_typeset, only: ts_addvspace, ts_vskip, ts_end_par, ts_glue_t, ALIGN_RIGHT
     implicit none
 
@@ -69,8 +70,8 @@ program plot_letter
 
 contains
 
-    subroutine letter_directive(name, opts, body, ctx, handled)
-        character(len=*), intent(in) :: name, opts, body
+    subroutine letter_directive(d, ctx, handled)
+        type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(out) :: handled
         type(md_ctx_t) :: sub
@@ -84,28 +85,28 @@ contains
         around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
         big = ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0)
         sub = ctx
-        select case (name)
+        select case (d%name)
         case ("sender")
             sub%align = ALIGN_RIGHT
             sub%indent = .false.
             call ts_addvspace(around)
-            call md_blocks(body, sub)
+            call md_blocks(d%body, sub)
             call ts_end_par()
             call ts_addvspace(around)
         case ("recipient")
-            call md_blocks(body, sub)
+            call md_blocks(d%body, sub)
             call ts_end_par()
             call ts_vskip(big)
         case ("closing")
             call ts_vskip(big)
             sig = md_length(md_meta("signature-skip"), md_base_size())
-            p = index(body, NL//NL)
+            p = index(d%body, NL//NL)
             if (p > 0) then
-                call md_blocks(body(1:p - 1), sub)
+                call md_blocks(d%body(1:p - 1), sub)
                 call ts_vskip(ts_glue_t(sig, 0.0_dp, 0.0_dp, 0, 0))
-                call md_blocks(body(p + 2:), sub)
+                call md_blocks(d%body(p + 2:), sub)
             else
-                call md_blocks(body, sub)
+                call md_blocks(d%body, sub)
             end if
             call ts_end_par()
         case default

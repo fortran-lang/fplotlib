@@ -6,7 +6,8 @@
 ! Blocks: YAML front matter (--- ... ---); ATX and setext headings with
 ! MyST targets (name)=; paragraphs; nested bullet and ordered lists; block
 ! quotes; fenced code; thematic breaks; and MyST colon-fenced directives
-! (:::{name} with :key: value options, dispatched to an optional callback).
+! (:::{name} argument, with :key: value options, dispatched to an optional
+! callback).
 !
 ! Inline: *emphasis*, **strong**, `code`, [links](url), hard line breaks
 ! (a backslash at the end of a line, or two spaces before it), smart
@@ -27,7 +28,7 @@ module fplotlib_markdown
     implicit none
     private
 
-    public :: md_typeset, md_ctx_t
+    public :: md_typeset, md_ctx_t, md_directive_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
@@ -58,16 +59,31 @@ module fplotlib_markdown
         logical :: indent = .true.
     end type md_ctx_t
 
+    ! A MyST directive, as on_directive is given it:
+    !
+    !     :::{name} argument
+    !     :key: value
+    !     body
+    !     :::
+    !
+    ! name in lower case; the argument, the rest of the opening line; opts,
+    ! the :key: value lines, one to a line (md_option reads them); and the
+    ! body, the lines after them. A directive is one argument, so that what
+    ! it is given may grow without changing the callbacks.
+    type :: md_directive_t
+        character(len=:), allocatable :: name, arg, opts, body
+    end type md_directive_t
+
     ! The callbacks a template gives md_typeset. on_directive sets a MyST
-    ! directive :::{name}, given its :key: value lines (opts) and its body,
-    ! and on_heading a heading, given its level, text and number; either
-    ! says whether it did (handled), and what it leaves is set as the core
-    ! sets it: a directive's body as blocks, a heading as LaTeX's \section.
-    ! on_body is called before the body (after false) and after it (true).
+    ! directive, and on_heading a heading, given its level, text and
+    ! number; either says whether it did (handled), and what it leaves is
+    ! set as the core sets it: a directive's body as blocks, a heading as
+    ! LaTeX's \section. on_body is called before the body (after false) and
+    ! after it (true).
     abstract interface
-        subroutine md_directive_cb(name, opts, body, ctx, handled)
-            import :: md_ctx_t
-            character(len=*), intent(in) :: name, opts, body
+        subroutine md_directive_cb(directive, ctx, handled)
+            import :: md_directive_t, md_ctx_t
+            type(md_directive_t), intent(in) :: directive
             type(md_ctx_t), intent(in) :: ctx
             logical, intent(out) :: handled
         end subroutine md_directive_cb
@@ -1199,25 +1215,31 @@ contains
         call ts_addvspace(scale(ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
-    ! A MyST directive :::{name} followed by :key: value options and content,
-    ! dispatched to the caller's on_directive callback when supplied.
+    ! A MyST directive :::{name} argument, followed by :key: value options
+    ! and content, dispatched to the caller's on_directive callback when
+    ! supplied.
     recursive subroutine set_div(open_line, L, i, j, ctx)
         character(len=*), intent(in) :: open_line
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: i, j
         type(md_ctx_t), intent(in) :: ctx
-        character(len=:), allocatable :: rest, name, opts, body, line
+        character(len=:), allocatable :: rest, name, arg, opts, body, line
+        type(md_directive_t) :: directive
         integer :: a, c, k, content_at
         logical :: handled
 
         name = ""
+        arg = ""
         rest = ""
         a = verify(open_line, ":")
         if (a > 0) rest = trim(adjustl(open_line(a:)))
         if (len(rest) >= 2) then
             if (rest(1:1) == "{") then
                 a = index(rest, "}")
-                if (a >= 2) name = trim(lower(trim(adjustl(rest(2:a - 1)))))
+                if (a >= 2) then
+                    name = trim(lower(trim(adjustl(rest(2:a - 1)))))
+                    arg = trim(adjustl(rest(a + 1:)))
+                end if
             end if
         end if
 
@@ -1240,8 +1262,12 @@ contains
             body = body//L(k)%s
         end do
 
+        directive%name = name
+        directive%arg = arg
+        directive%opts = opts
+        directive%body = body
         handled = .false.
-        if (associated(CB_DIR)) call CB_DIR(name, opts, body, ctx, handled)
+        if (associated(CB_DIR)) call CB_DIR(directive, ctx, handled)
         if (.not. handled .and. j - 1 >= content_at) &
             call blocks(L(content_at:j - 1), j - content_at, ctx)
     end subroutine set_div

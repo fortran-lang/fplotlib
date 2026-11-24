@@ -11,7 +11,8 @@ module test_markdown
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
-    use fplotlib_markdown, only: md_typeset, md_meta
+    use fplotlib_markdown, only: md_typeset, md_meta, md_directive_cb, md_directive_t, md_ctx_t, &
+                                 md_blocks, md_option
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
@@ -56,6 +57,7 @@ contains
         call abstract_cases(ncase, nfail)
         call label_cases(ncase, nfail)
         call heading_cases(ncase, nfail)
+        call directive_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -289,23 +291,51 @@ contains
         end if
     end subroutine heading_cases
 
+    ! A directive's callback is given its name, argument, options and
+    ! body; a directive it leaves has its body set, and nothing else.
+    subroutine directive_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc(":::{Admonition} My Title"//NL//":class: tip"//NL//"Body."//NL//":::"//NL// &
+                     NL//":::{note} Dropped"//NL//"Kept body."//NL//":::", t, f, &
+                     on_directive=admonition)
+        call expect("directive argument", t, "My Title [tip]"//NL//"Body."//NL//"Kept body.", &
+                     ncase, nfail)
+        call face("directive title", t, f, "My Title", FACE_BOLD, ncase, nfail)
+        call reject("unhandled argument", t, "Dropped", ncase, nfail)
+    end subroutine directive_cases
+
+    ! A template's admonition: its argument in bold, with its class, and
+    ! then its body.
+    subroutine admonition(d, ctx, handled)
+        type(md_directive_t), intent(in) :: d
+        type(md_ctx_t), intent(in) :: ctx
+        logical, intent(out) :: handled
+        handled = d%name == "admonition"
+        if (.not. handled) return
+        call md_blocks("**"//d%arg//"** ["//md_option(d%opts, "class")//"]"//NL//NL//d%body, ctx)
+    end subroutine admonition
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
 
     ! The text of document md's pages, the face of each of its bytes
     ! ("0" + face, " " for a space or line end), the lowest baseline on
-    ! any page, the leftmost glyph, and the baselines of the first page.
-    subroutine set_doc(md, text, faces, lowest, leftmost, baselines)
+    ! any page, the leftmost glyph, and the baselines of the first page;
+    ! on_directive is the template's, if any.
+    subroutine set_doc(md, text, faces, lowest, leftmost, baselines, on_directive)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
         real(dp), intent(out), optional :: lowest, leftmost
         real(dp), allocatable, intent(out), optional :: baselines(:)
+        procedure(md_directive_cb), optional :: on_directive
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
 
-        call md_typeset(md)
+        call md_typeset(md, on_directive=on_directive)
         call ts_page_size(w, h, col)
         text = ""
         faces = ""

@@ -12,7 +12,8 @@
 
 program plot_invitation
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_ctx_t, md_blocks, md_option, md_color, md_base_size, md_meta
+    use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, md_color, &
+                                 md_base_size, md_meta
     use fplotlib_typeset, only: ts_vkeep, ts_end_par, ts_glue_t
     implicit none
 
@@ -78,29 +79,29 @@ contains
         if (md_meta("valign") == "center") call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine invitation_body
 
-    subroutine invitation_directive(name, opts, body, ctx, handled)
-        character(len=*), intent(in) :: name, opts, body
+    subroutine invitation_directive(d, ctx, handled)
+        type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(out) :: handled
         type(md_ctx_t) :: sub
         character(len=:), allocatable :: v
         real(dp) :: b
 
-        handled = name == "div"
+        handled = d%name == "div"
         if (.not. handled) return
         sub = ctx
         b = md_base_size()
-        v = md_option(opts, "size")
+        v = md_option(d%opts, "size")
         select case (v)
         case ("small"); sub%size = 0.9_dp*b
         case ("large"); sub%size = 1.2_dp*b
         case ("Huge"); sub%size = 2.488_dp*b
         end select
-        if (md_option(opts, "weight") == "bold") sub%bold = .true.
-        if (md_option(opts, "italic") == "true") sub%italic = .true.
-        v = md_option(opts, "color")
+        if (md_option(d%opts, "weight") == "bold") sub%bold = .true.
+        if (md_option(d%opts, "italic") == "true") sub%italic = .true.
+        v = md_option(d%opts, "color")
         if (len(v) > 0) sub%color = md_color(v, sub%color)
-        call md_blocks(body, sub)
+        call md_blocks(d%body, sub)
         call ts_end_par()
     end subroutine invitation_directive
 

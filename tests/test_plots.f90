@@ -1693,12 +1693,12 @@ contains
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
 
-    subroutine doc_directive(name, opts, body, ctx, handled)
-        use fplotlib_markdown, only: md_ctx_t, md_blocks, md_option, md_color, &
-                                     md_align, md_noindent, md_base_size
+    subroutine doc_directive(d, ctx, handled)
+        use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, &
+                                     md_color, md_align, md_noindent, md_base_size
         use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
                                     ts_glue_t, ALIGN_JUSTIFY
-        character(len=*), intent(in) :: name, opts, body
+        type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(out) :: handled
         type(md_ctx_t) :: sub
@@ -1706,9 +1706,9 @@ contains
         real(dp) :: f
         integer :: al
 
-        handled = name == "div" .or. name == "pagebreak"
+        handled = d%name == "div" .or. d%name == "pagebreak"
         if (.not. handled) return
-        if (name == "pagebreak") then
+        if (d%name == "pagebreak") then
             call ts_page_break()
             call md_noindent(.false.)
             return
@@ -1716,15 +1716,15 @@ contains
         sub = ctx
         f = md_base_size()/10.0_dp
         around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
-        al = md_align(md_option(opts, "align"), -1)
+        al = md_align(md_option(d%opts, "align"), -1)
         if (al >= 0) then
             sub%align = al
             if (al /= ALIGN_JUSTIFY) sub%indent = .false.
         end if
-        if (md_option(opts, "size") == "large") sub%size = 1.2_dp*md_base_size()
-        sub%color = md_color(md_option(opts, "color"), sub%color)
+        if (md_option(d%opts, "size") == "large") sub%size = 1.2_dp*md_base_size()
+        sub%color = md_color(md_option(d%opts, "color"), sub%color)
         if (al >= 0) call ts_addvspace(around)
-        call md_blocks(body, sub)
+        call md_blocks(d%body, sub)
         call ts_end_par()
         if (al >= 0) call ts_addvspace(around)
     end subroutine doc_directive
