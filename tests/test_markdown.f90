@@ -11,8 +11,9 @@ module test_markdown
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
-    use fplotlib_markdown, only: md_engine, md_typeset, md_meta, md_directive_cb, md_directive_t, md_ctx_t, &
-                                 md_heading_cb, md_heading_t, md_blocks, md_option
+    use fplotlib_markdown, only: md_document_t, md_typeset, md_meta, md_directive_cb, &
+                                 md_directive_t, md_ctx_t, md_body_cb, md_heading_cb, &
+                                 md_heading_t, md_blocks, md_option
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
@@ -59,6 +60,8 @@ contains
         call heading_cases(ncase, nfail)
         call directive_cases(ncase, nfail)
         call heading_template_cases(ncase, nfail)
+        call nesting_cases(ncase, nfail)
+        call two_docs_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -165,6 +168,7 @@ contains
         character(len=:), allocatable :: t, f
         real(dp) :: left
         character(len=300) :: long
+        type(md_document_t) :: d
 
         call set_doc("---"//NL//"title: x"//NL//NL//"Hello world.", t, f)
         call expect("unclosed front matter", t, "title: x"//NL//"Hello world.", ncase, nfail)
@@ -184,12 +188,12 @@ contains
                      "---"//NL//"Text.", t, f)
         call expect("flow list", t, "T"//NL//"Ada"//NL//"King, Charles"//NL, ncase, nfail)
         long = repeat("w", 300)
-        call set_doc("---"//NL//"note: "//long//NL//"---"//NL//"Text.", t, f)
+        call md_typeset(d, "---"//NL//"note: "//long//NL//"---"//NL//"Text.")
         ncase = ncase + 1
-        if (md_meta("note") /= long) then
+        if (md_meta(d, "note") /= long) then
             nfail = nfail + 1
-            print "(a,i0,a)", "  FAIL markdown long value: md_meta gave ", len(md_meta("note")), &
-                " characters of 300"
+            print "(a,i0,a)", "  FAIL markdown long value: md_meta gave ", &
+                len(md_meta(d, "note")), " characters of 300"
         end if
     end subroutine front_matter_cases
 
@@ -332,28 +336,95 @@ contains
         call face("demoted heading face", t, f, "Alpha", FACE_BOLD, ncase, nfail)
     end subroutine heading_template_cases
 
+    ! A callback may set a nested document without affecting the outer one.
+    subroutine nesting_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: md, t0, f0, t1, f1
+        type(md_document_t) :: d0, d1
+
+        md = "---"//NL//"numbersections: true"//NL//"---"//NL//"# Alpha"//NL//NL// &
+             "Text."//NL//NL//"## Beta"
+        call md_typeset(d0, md, on_heading=part_heading)
+        call render_doc(d0, t0, f0)
+        call md_typeset(d1, md, on_body=nested_body, on_heading=part_heading)
+        call render_doc(d1, t1, f1)
+        ncase = ncase + 1
+        if (t1 /= t0 .or. f1 /= f0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown nested document changed outer pages"
+        end if
+    end subroutine nesting_cases
+
+    ! Two documents alive at once, set in either order, match each set alone.
+    subroutine two_docs_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=*), parameter :: md1 = &
+            "---"//NL//"title: First"//NL//"numbersections: true"//NL//"---"//NL// &
+            "# One"//NL//NL//"Body $$ x^2 $$ (eq:a) and {eq}`eq:a`."
+        character(len=*), parameter :: md2 = &
+            "---"//NL//"title: Second"//NL//"---"//NL// &
+            "# Other"//NL//NL//"Different text."
+        type(md_document_t) :: a0, b0, a1, b1, a2, b2
+        character(len=:), allocatable :: ta0, fa0, tb0, fb0, ta1, fa1, tb1, fb1
+        character(len=:), allocatable :: ta2, fa2, tb2, fb2
+
+        call md_typeset(a0, md1)
+        call render_doc(a0, ta0, fa0)
+        call md_typeset(b0, md2)
+        call render_doc(b0, tb0, fb0)
+
+        call md_typeset(a1, md1)
+        call md_typeset(b1, md2)
+        call render_doc(a1, ta1, fa1)
+        call render_doc(b1, tb1, fb1)
+
+        call md_typeset(b2, md2)
+        call md_typeset(a2, md1)
+        call render_doc(a2, ta2, fa2)
+        call render_doc(b2, tb2, fb2)
+
+        ncase = ncase + 1
+        if (ta1 /= ta0 .or. fa1 /= fa0 .or. tb1 /= tb0 .or. fb1 /= fb0 .or. &
+            ta2 /= ta0 .or. fa2 /= fa0 .or. tb2 /= tb0 .or. fb2 /= fb0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown two simultaneous documents differ from solo"
+        end if
+    end subroutine two_docs_cases
+
+    ! An on_body callback that sets a nested document of its own.
+    recursive subroutine nested_body(doc, after, ctx)
+        type(md_document_t), intent(inout) :: doc
+        logical, intent(in) :: after
+        type(md_ctx_t), intent(in) :: ctx
+        type(md_document_t) :: inner
+        if (.not. after) call md_typeset(inner, "# Inner"//NL//NL//"Nested.")
+    end subroutine nested_body
+
     ! A template that sets a level-one heading as a level-two one.
-    recursive subroutine demote(h, ctx, handled)
+    recursive subroutine demote(doc, h, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_heading_t), intent(in) :: h
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
         if (h%level /= 1) return
         handled = .true.
-        call md_blocks("## "//h%text, ctx)
+        call md_blocks(doc, "## "//h%text, ctx)
     end subroutine demote
 
     ! A template that sets a level-one heading as a part.
-    recursive subroutine part_heading(h, ctx, handled)
+    recursive subroutine part_heading(doc, h, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_heading_t), intent(in) :: h
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
         if (h%level /= 1) return
         handled = .true.
-        call md_blocks("**Part "//h%num//":** "//h%text, ctx)
+        call md_blocks(doc, "**Part "//h%num//":** "//h%text, ctx)
     end subroutine part_heading
 
     ! A template that sets no directive, and leaves handled as it is.
-    subroutine look_only(d, ctx, handled)
+    recursive subroutine look_only(doc, d, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -361,13 +432,15 @@ contains
 
     ! A template's admonition: its argument in bold, with its class, and
     ! then its body.
-    recursive subroutine admonition(d, ctx, handled)
+    recursive subroutine admonition(doc, d, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
         handled = d%name == "admonition"
         if (.not. handled) return
-        call md_blocks("**"//d%arg//"** ["//md_option(d%opts, "class")//"]"//NL//NL//d%body, ctx)
+        call md_blocks(doc, "**"//d%arg//"** ["//md_option(d%opts, "class")//"]"//NL//NL// &
+                       d%body, ctx)
     end subroutine admonition
 
     ! ------------------------------------------------------------------
@@ -385,19 +458,29 @@ contains
         real(dp), allocatable, intent(out), optional :: baselines(:)
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_heading_cb), optional :: on_heading
+        type(md_document_t) :: doc
+
+        call md_typeset(doc, md, on_directive=on_directive, on_heading=on_heading)
+        call render_doc(doc, text, faces, lowest, leftmost, baselines)
+    end subroutine set_doc
+
+    subroutine render_doc(doc, text, faces, lowest, leftmost, baselines)
+        type(md_document_t), intent(in) :: doc
+        character(len=:), allocatable, intent(out) :: text, faces
+        real(dp), intent(out), optional :: lowest, leftmost
+        real(dp), allocatable, intent(out), optional :: baselines(:)
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
 
-        call md_typeset(md, on_directive=on_directive, on_heading=on_heading)
-        call ts_page_size(md_engine, w, h, col)
+        call ts_page_size(doc%engine, w, h, col)
         text = ""
         faces = ""
         if (present(lowest)) lowest = 0.0_dp
         if (present(leftmost)) leftmost = huge(1.0_dp)
-        do p = 1, ts_page_count(md_engine)
+        do p = 1, ts_page_count(doc%engine)
             call r%open_canvas(w, h)
-            call ts_page_draw(md_engine, r, p)
+            call ts_page_draw(doc%engine, r, p)
             call r%close_canvas()
             if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
             if (present(leftmost) .and. r%n > 0) leftmost = min(leftmost, minval(r%x(1:r%n)))
@@ -408,7 +491,7 @@ contains
             end if
             call page_lines(r, text, faces)
         end do
-    end subroutine set_doc
+    end subroutine render_doc
 
     ! The glyphs of a page, sorted into lines, appended to text and faces.
     subroutine page_lines(r, text, faces)

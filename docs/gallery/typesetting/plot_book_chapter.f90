@@ -14,7 +14,8 @@
 
 program plot_book_chapter
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_engine, md_ctx_t, md_heading_t, md_inline, md_noindent, md_base_size
+    use fplotlib_markdown, only: md_document_t, md_ctx_t, md_heading_t, md_inline, md_noindent, &
+                                 md_base_size
     use fplotlib_typeset, only: ts_page_break, ts_mark, ts_vkeep, ts_begin_par, &
                                 ts_end_par, ts_penalty, ts_vskip, ts_nobreak_next, &
                                 ts_glue_t, ALIGN_LEFT
@@ -107,7 +108,8 @@ program plot_book_chapter
 
 contains
 
-    subroutine book_heading(h, ctx, handled)
+    recursive subroutine book_heading(doc, h, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_heading_t), intent(in) :: h
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -116,43 +118,42 @@ contains
 
         if (h%level == 2) then
             if (len(h%num) > 0) then
-                call ts_mark(md_engine, upcase(h%num//".  "//h%text), .false., section=.true.)
+                call ts_mark(doc%engine, upcase(h%num//".  "//h%text), .false., section=.true.)
             else
-                call ts_mark(md_engine, upcase(h%text), .false., section=.true.)
+                call ts_mark(doc%engine, upcase(h%text), .false., section=.true.)
             end if
             return
         end if
         if (h%level /= 1) return
         handled = .true.
-        b = md_base_size()
-        call ts_page_break(md_engine)
+        b = md_base_size(doc)
+        call ts_page_break(doc%engine)
         if (len(h%num) > 0) then
-            call ts_mark(md_engine, upcase("Chapter "//h%num//".  "//h%text), .true.)
+            call ts_mark(doc%engine, upcase("Chapter "//h%num//".  "//h%text), .true.)
         else
-            call ts_mark(md_engine, upcase(h%text), .true.)
+            call ts_mark(doc%engine, upcase(h%text), .true.)
         end if
-        call ts_vkeep(md_engine, ts_glue_t(50.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_vkeep(doc%engine, ts_glue_t(50.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
         sub = ctx
         sub%bold = .true.
         if (len(h%num) > 0) then
             sub%size = 2.074_dp*b
-            call ts_begin_par(md_engine, ALIGN_LEFT, 0.0_dp, size=sub%size, &
-                    leading=25.0_dp*b/10.0_dp, &
-                              skip=.false., nobreak=.true.)
-            call md_inline("Chapter "//h%num, sub)
-            call ts_end_par(md_engine)
-            call ts_penalty(md_engine, 10000)
-            call ts_vskip(md_engine, ts_glue_t(20.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+            call ts_begin_par(doc%engine, ALIGN_LEFT, 0.0_dp, size=sub%size, &
+                              leading=25.0_dp*b/10.0_dp, skip=.false., nobreak=.true.)
+            call md_inline(doc, "Chapter "//h%num, sub)
+            call ts_end_par(doc%engine)
+            call ts_penalty(doc%engine, 10000)
+            call ts_vskip(doc%engine, ts_glue_t(20.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
         end if
         sub%size = 2.488_dp*b
-        call ts_begin_par(md_engine, ALIGN_LEFT, 0.0_dp, size=sub%size, leading=30.0_dp*b/10.0_dp, &
-                          skip=.false., nobreak=.true.)
-        call md_inline(h%text, sub)
-        call ts_end_par(md_engine)
-        call ts_penalty(md_engine, 10000)
-        call ts_vskip(md_engine, ts_glue_t(40.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
-        call ts_nobreak_next(md_engine)
-        call md_noindent(.true.)
+        call ts_begin_par(doc%engine, ALIGN_LEFT, 0.0_dp, size=sub%size, &
+                          leading=30.0_dp*b/10.0_dp, skip=.false., nobreak=.true.)
+        call md_inline(doc, h%text, sub)
+        call ts_end_par(doc%engine)
+        call ts_penalty(doc%engine, 10000)
+        call ts_vskip(doc%engine, ts_glue_t(40.0_dp*b/10.0_dp, 0.0_dp, 0.0_dp, 0, 0))
+        call ts_nobreak_next(doc%engine)
+        call md_noindent(doc, .true.)
     end subroutine book_heading
 
     function upcase(s) result(t)

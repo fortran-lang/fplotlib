@@ -11,8 +11,8 @@
 
 program plot_letter
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_engine, md_ctx_t, md_directive_t, md_blocks, md_meta, md_length, &
-                                 md_base_size
+    use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, md_meta, &
+                                 md_length, md_base_size
     use fplotlib_typeset, only: ts_addvspace, ts_vskip, ts_end_par, ts_glue_t, ALIGN_RIGHT
     implicit none
 
@@ -70,7 +70,8 @@ program plot_letter
 
 contains
 
-    recursive subroutine letter_directive(d, ctx, handled)
+    recursive subroutine letter_directive(doc, d, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -81,7 +82,7 @@ contains
         character, parameter :: NL = achar(10)
 
         handled = .true.
-        f = md_base_size()/10.0_dp
+        f = md_base_size(doc)/10.0_dp
         around = ts_glue_t(10.0_dp*f, 3.0_dp*f, 5.0_dp*f, 0, 0)
         big = ts_glue_t(12.0_dp*f, 4.0_dp*f, 4.0_dp*f, 0, 0)
         sub = ctx
@@ -89,26 +90,26 @@ contains
         case ("sender")
             sub%align = ALIGN_RIGHT
             sub%indent = .false.
-            call ts_addvspace(md_engine, around)
-            call md_blocks(d%body, sub)
-            call ts_end_par(md_engine)
-            call ts_addvspace(md_engine, around)
+            call ts_addvspace(doc%engine, around)
+            call md_blocks(doc, d%body, sub)
+            call ts_end_par(doc%engine)
+            call ts_addvspace(doc%engine, around)
         case ("recipient")
-            call md_blocks(d%body, sub)
-            call ts_end_par(md_engine)
-            call ts_vskip(md_engine, big)
+            call md_blocks(doc, d%body, sub)
+            call ts_end_par(doc%engine)
+            call ts_vskip(doc%engine, big)
         case ("closing")
-            call ts_vskip(md_engine, big)
-            sig = md_length(md_meta("signature-skip"), md_base_size())
+            call ts_vskip(doc%engine, big)
+            sig = md_length(doc, md_meta(doc, "signature-skip"), md_base_size(doc))
             p = index(d%body, NL//NL)
             if (p > 0) then
-                call md_blocks(d%body(1:p - 1), sub)
-                call ts_vskip(md_engine, ts_glue_t(sig, 0.0_dp, 0.0_dp, 0, 0))
-                call md_blocks(d%body(p + 2:), sub)
+                call md_blocks(doc, d%body(1:p - 1), sub)
+                call ts_vskip(doc%engine, ts_glue_t(sig, 0.0_dp, 0.0_dp, 0, 0))
+                call md_blocks(doc, d%body(p + 2:), sub)
             else
-                call md_blocks(d%body, sub)
+                call md_blocks(doc, d%body, sub)
             end if
-            call ts_end_par(md_engine)
+            call ts_end_par(doc%engine)
         case default
             handled = .false.
         end select

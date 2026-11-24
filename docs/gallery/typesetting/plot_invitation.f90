@@ -12,8 +12,8 @@
 
 program plot_invitation
     use fplotlib, only: dp, typeset
-    use fplotlib_markdown, only: md_engine, md_ctx_t, md_directive_t, md_blocks, md_option, md_color, &
-                                 md_base_size, md_meta
+    use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, md_option, &
+                                 md_color, md_base_size, md_meta
     use fplotlib_typeset, only: ts_vkeep, ts_end_par, ts_glue_t
     implicit none
 
@@ -73,14 +73,16 @@ contains
 
     ! valign: center in the front matter puts as much space, \vfill,
     ! before the body as after it.
-    subroutine invitation_body(after, ctx)
+    recursive subroutine invitation_body(doc, after, ctx)
+        type(md_document_t), intent(inout) :: doc
         logical, intent(in) :: after
         type(md_ctx_t), intent(in) :: ctx
-        if (md_meta("valign") == "center") call ts_vkeep(md_engine, ts_glue_t(0.0_dp, 1.0_dp, &
-                0.0_dp, 1, 0))
+        if (md_meta(doc, "valign") == "center") &
+            call ts_vkeep(doc%engine, ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine invitation_body
 
-    recursive subroutine invitation_directive(d, ctx, handled)
+    recursive subroutine invitation_directive(doc, d, ctx, handled)
+        type(md_document_t), intent(inout) :: doc
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -91,7 +93,7 @@ contains
         handled = d%name == "div"
         if (.not. handled) return
         sub = ctx
-        b = md_base_size()
+        b = md_base_size(doc)
         v = md_option(d%opts, "size")
         select case (v)
         case ("small"); sub%size = 0.9_dp*b
@@ -102,8 +104,8 @@ contains
         if (md_option(d%opts, "italic") == "true") sub%italic = .true.
         v = md_option(d%opts, "color")
         if (len(v) > 0) sub%color = md_color(v, sub%color)
-        call md_blocks(d%body, sub)
-        call ts_end_par(md_engine)
+        call md_blocks(doc, d%body, sub)
+        call ts_end_par(doc%engine)
     end subroutine invitation_directive
 
 end program plot_invitation
