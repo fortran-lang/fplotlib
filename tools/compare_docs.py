@@ -67,19 +67,31 @@ def fortran_document(path):
 
 
 def front_matter(md):
-    """Our front matter as a dict, and the body after it."""
+    """Our front matter as a dict, and the body after it, as fplotlib reads
+    them: authors one to a line, from a YAML list or a repeated key."""
     meta, body = {}, md
-    if md.startswith("---\n"):
-        end = md.index("\n---\n", 4)
+    if md.startswith("---\n") and "\n---\n" in md[3:]:
+        end = md.index("\n---\n", 3)
         key = None
         for line in md[4:end].split("\n"):
             if line.startswith(" ") and key:
-                meta[key] += " " + line.strip()
+                item = line.strip()
+                if item.startswith("- "):
+                    item = item[2:].strip().strip("'\"")
+                    meta[key] = meta[key] + "\n" + item if meta[key] else item
+                else:
+                    meta[key] = (meta[key] + " " + item).strip()
                 continue
             if ":" in line:
                 key, val = line.split(":", 1)
                 key = key.strip().lower()
-                val = val.strip().strip("'\"")
+                if key == "authors":
+                    key = "author"
+                val = val.strip()
+                if val.startswith("[") and val.endswith("]"):
+                    val = "\n".join(v.strip().strip("'\"") for v in
+                                    re.findall(r'"[^"]*"|\'[^\']*\'|[^,]+', val[1:-1]))
+                val = val.strip("'\"")
                 meta[key] = meta[key] + "\n" + val if key == "author" and key in meta else val
         body = md[end + 5:]
     return meta, body
@@ -235,11 +247,52 @@ def _emit(name, opts, inline, content, sig):
     return ["::: " + spec] + content + [":::"]
 
 
+def _label_displays(line, inside):
+    """Each $$ (label) of line that closes a display, as \\label{label}$$;
+    inside tells whether a display is open where the line starts. Returns
+    the line and whether a display is open where it ends."""
+    out, pos = [], 0
+    for m in re.finditer(r"\$\$", line):
+        out.append(line[pos:m.start()] + "$$")
+        pos = m.end()
+        if inside:
+            lab = re.match(r"\s*\(([^)\s]+)\)", line[pos:])
+            if lab:
+                out[-1] = out[-1][:-2] + "\\label{%s}$$" % lab.group(1)
+                pos += lab.end()
+        inside = not inside
+    out.append(line[pos:])
+    return "".join(out), inside
+
+
+def _role(m):
+    """A MyST role as Pandoc citations and TeX: {numref} with "Section",
+    {ref} the heading's title, and a role's own text, "text <target>"."""
+    role, arg = m.group(1), m.group(2).strip()
+    own = re.fullmatch(r"(.+?)\s*<([^>]+)>", arg)
+    if own:
+        text, target = own.group(1), own.group(2).strip()
+        if role == "numref":
+            return text.replace("%s", "@" + target).replace("{number}", "@" + target)
+        return text
+    if role == "ref":
+        return "\\nameref{%s}" % arg
+    if role == "numref" and not arg.startswith("eq:"):
+        return "Section @" + arg
+    return "@" + arg
+
+
 def _transform(lines, sig):
     """MyST directives and heading targets, as the Pandoc filter reads them."""
-    out, i = [], 0
+    out, i, inside, code = [], 0, False, False
     while i < len(lines):
         stripped = lines[i].strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            code = not code
+        if code or stripped.startswith("```") or stripped.startswith("~~~"):
+            out.append(lines[i])
+            i += 1
+            continue
         label = re.fullmatch(r"\(([^)\s]+)\)=", stripped)
         if label and i + 1 < len(lines) and re.match(r"#{1,6} ", lines[i + 1].strip()):
             out.append(lines[i + 1].rstrip() + " {#" + label.group(1) + "}")
@@ -249,8 +302,8 @@ def _transform(lines, sig):
             name, opts, inline, content, i = _take(lines, i)
             out.extend(_emit(name, opts, inline, content, sig))
             continue
-        line = re.sub(r"\$\$\s*\(([^)\s]+)\)", r"\\label{\1}$$", lines[i])
-        out.append(re.sub(r"\{(?:eq|ref|numref)\}`([^`]+)`", r"@\1", line))
+        line, inside = _label_displays(lines[i], inside)
+        out.append(re.sub(r"\{(eq|ref|numref)\}`([^`]+)`", _role, line))
         i += 1
     return out
 

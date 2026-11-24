@@ -7,7 +7,7 @@
 --     attributes size= and color=;
 --   * a displayed formula followed by {#eq:name}, or with \label{name} in
 --     it, is numbered, and @eq:name, @sec:name, \eqref and \ref refer to
---     it;
+--     it; \nameref{sec:name} is the heading's title;
 --   * the TeX commands the rewriter emits on a line of their own (\newpage,
 --     \vspace, \vfill, \bigskip, ...) and in text (\hfill, \quad, \TeX,
 --     \LaTeX), for Typst, which has none of them;
@@ -192,6 +192,8 @@ function Inlines(inlines)
       elseif name == "quad" then out:insert(raw_inline("#h(1em)"))
       elseif name == "qquad" then out:insert(raw_inline("#h(2em)"))
       elseif name == "eqref" or name == "ref" then out:insert(raw_inline("@" .. arg))
+      elseif name == "nameref" then
+        out:insert(raw_inline("#context query(<" .. arg .. ">).first().body"))
       end
     else
       out:insert(el)
