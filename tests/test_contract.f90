@@ -22,7 +22,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 54
+    integer, parameter :: NCASE = 55
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -91,13 +91,14 @@ module test_contract
         "fplotlib: add_path: a path must begin with M", &
         "fplotlib: typeset: supported formats are .svg, .pdf, .eps and .png, not .docx", &
         "fplotlib: typeset: dpi must be finite and positive", &
-        "fplotlib: typeset: "]
+        "fplotlib: typeset: ", &
+        "fplotlib: typeset: a document cannot be set from inside a callback of the one being set"]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1]
 
 contains
 
@@ -301,6 +302,9 @@ contains
             call typeset("Text.", "tests/out/contract.png", dpi=0.0_dp)
         case (54)
             call typeset("Text.", "tests/out/no-such-dir/contract.pdf")
+        ! A callback may not set a document of its own.
+        case (55)
+            call typeset("Text.", "tests/out/contract_outer.pdf", on_body=set_another)
         end select
     end subroutine contract_case
 
@@ -339,6 +343,14 @@ contains
         end do
         print "(a, i0, a, i0)", "contract checks: ", NCASE, " broken calls, failures = ", nfail
     end subroutine contract_check
+
+    ! A template's on_body that sets a document of its own.
+    subroutine set_another(after, ctx)
+        use fplotlib_markdown, only: md_ctx_t
+        logical, intent(in) :: after
+        type(md_ctx_t), intent(in) :: ctx
+        call typeset("Inner.", "tests/out/contract_inner.pdf")
+    end subroutine set_another
 
     subroutine flat_open(self, width, height, bg_rgb, bg_alpha, x0, y0)
         class(flat_renderer_t), intent(inout) :: self

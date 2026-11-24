@@ -7526,7 +7526,7 @@ contains
     ! with exit code 2. The figures are not touched. on_directive,
     ! on_body and on_heading are a template's callbacks (fplotlib_markdown);
     ! the document is set twice, as LaTeX is run twice, and they are
-    ! called in both passes.
+    ! called in both passes. A callback may not call typeset itself.
     ! ------------------------------------------------------------------
 
     subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, on_heading)

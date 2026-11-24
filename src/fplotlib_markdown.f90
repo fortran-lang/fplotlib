@@ -24,6 +24,7 @@ module fplotlib_markdown
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
     use fplotlib_typeset
+    use fplotlib_status, only: contract_error
     use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
@@ -118,6 +119,10 @@ module fplotlib_markdown
         end subroutine md_heading_cb
     end interface
 
+    ! Whether a document is being set: md_typeset's state is the module's,
+    ! one document at a time, so a callback may not set another.
+    logical :: SETTING = .false.
+
     ! Active template callbacks for the current md_typeset call.
     procedure(md_directive_cb), pointer, save :: CB_DIR => null()
     procedure(md_body_cb), pointer, save :: CB_BODY => null()
@@ -182,7 +187,8 @@ contains
 
     ! Set text, a MyST Markdown document, into fplotlib_typeset's pages.
     ! The document is set twice (see FIRST_PASS), so the callbacks are
-    ! called twice, and only the second pass's pages are kept.
+    ! called twice, and only the second pass's pages are kept. A callback
+    ! may not set a document of its own: that is a broken precondition.
     subroutine md_typeset(text, on_directive, on_body, on_heading)
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
@@ -192,6 +198,9 @@ contains
         type(md_ctx_t) :: ctx
         integer :: n, first, pass
 
+        if (SETTING) call contract_error("typeset: a document cannot be set from inside a "// &
+                                         "callback of the one being set")
+        SETTING = .true.
         CB_DIR => null()
         CB_BODY => null()
         CB_HEAD => null()
@@ -231,6 +240,7 @@ contains
         CB_DIR => null()
         CB_BODY => null()
         CB_HEAD => null()
+        SETTING = .false.
     end subroutine md_typeset
 
     subroutine defaults()
