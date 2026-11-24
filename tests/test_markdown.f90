@@ -297,7 +297,10 @@ contains
         integer, allocatable :: order(:)
         character(len=:), allocatable :: c
         integer :: i, j, k, t
-        order = [(i, i=1, r%n)]
+        allocate (order(r%n))
+        do i = 1, r%n
+            order(i) = i
+        end do
         ! By baseline, then from left to right.
         do i = 2, r%n
             t = order(i)
@@ -452,16 +455,43 @@ contains
         type(glyphrun_t), intent(in) :: run
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
-        integer :: k
+        integer :: k, m
+        if (self%n + run%n > size(self%x)) call grow(self, self%n + run%n)
         do k = 1, run%n
-            self%x = [self%x(1:self%n), x + run%x(k)]
-            self%y = [self%y(1:self%n), y]
-            self%adv = [self%adv(1:self%n), glyph_adv(run%gid(k))*run%size(k)]
-            self%cp = [self%cp(1:self%n), glyph_char(run%gid(k))]
-            self%face = [self%face(1:self%n), glyph_face(run%gid(k))]
-            self%n = self%n + 1
+            m = self%n + k
+            self%x(m) = x + run%x(k)
+            self%y(m) = y
+            self%adv(m) = glyph_adv(run%gid(k))*run%size(k)
+            self%cp(m) = glyph_char(run%gid(k))
+            self%face(m) = glyph_face(run%gid(k))
         end do
+        self%n = self%n + run%n
     end subroutine tr_glyphs
+
+    ! Room for at least need glyphs.
+    subroutine grow(self, need)
+        class(text_renderer_t), intent(inout) :: self
+        integer, intent(in) :: need
+        real(dp), allocatable :: r(:)
+        integer, allocatable :: i(:)
+        integer :: m
+        m = max(256, 2*size(self%x), need)
+        allocate (r(m))
+        r(1:self%n) = self%x(1:self%n)
+        call move_alloc(r, self%x)
+        allocate (r(m))
+        r(1:self%n) = self%y(1:self%n)
+        call move_alloc(r, self%y)
+        allocate (r(m))
+        r(1:self%n) = self%adv(1:self%n)
+        call move_alloc(r, self%adv)
+        allocate (i(m))
+        i(1:self%n) = self%cp(1:self%n)
+        call move_alloc(i, self%cp)
+        allocate (i(m))
+        i(1:self%n) = self%face(1:self%n)
+        call move_alloc(i, self%face)
+    end subroutine grow
 
     subroutine tr_image(self, x, y, w, h, rgba, nx, ny, paint)
         class(text_renderer_t), intent(inout) :: self
