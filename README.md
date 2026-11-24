@@ -235,6 +235,69 @@ call suptitle("figure title")
   single letters, `C0`-`C9`, or a greyscale fraction such as `"0.5"`
 - SVG defaults aligned with matplotlib (6.4×4.8 in, tab10 colors, subplot margins)
 
+## Documents
+
+`typeset` sets a whole document, written in Markdown with TeX mathematics
+(`$...$` inline, `$$...$$` displayed), and writes it as PDF, or as one SVG,
+PNG or EPS file per page:
+
+```fortran
+call typeset([character(len=80) :: &
+    "---", &
+    "title: Notes", &
+    "numbersections: true", &
+    "---", &
+    "# Energy", &
+    "", &
+    "The energy of a mass at rest is", &
+    "$$ E = mc^2 $$ (eq:einstein)", &
+    "and {eq}`eq:einstein` is the best known formula of physics."], "notes.pdf")
+```
+
+The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
+spacing of its article and book classes:
+
+- paragraphs are broken into lines by Knuth and Plass's algorithm, TeX's
+  `line_break` with its two passes, badness, demerits and fitness
+  classes, and hyphenated with Liang's algorithm and the patterns LaTeX
+  and Typst use for English (`hyph-en-us`); interword glue is XeTeX's
+  for an OpenType font, and the space factor is `\nonfrenchspacing`'s;
+- lines go onto a vertical list with `\baselineskip`, `\lineskip` and
+  TeX's club, widow and broken penalties, and TeX's page builder cuts it
+  into pages at the breaks of least cost;
+- displays get `\abovedisplayskip` or the short skips, equation numbers
+  at the right margin, and the paragraph goes on after them unindented.
+
+A document goes through two layers: `fplotlib_markdown` parses a MyST subset
+of Markdown and lays it out with LaTeX article or book spacing, numbering
+sections and equations in a first pass; and `fplotlib_typeset` implements
+TeX's primitives (words, glue, kerns, penalties, paragraphs, formulas, marks,
+and the page builder).
+
+The text is a strict MyST subset. TeX is confined to mathematics between `$...$`
+and `$$...$$`. A display followed by `(eq:name)` is numbered, and
+`` {eq}`eq:name` `` refers to it. A heading is labelled by a target `(sec:name)=`
+on the line before it, `` {numref}`sec:name` `` writes its number, and
+`` {ref}`sec:name` `` writes its title. Front matter holds the document options
+(`title`, `author`, `date`, `abstract`, `paper`, `fontsize`, `margin`, `parskip`,
+`align`, `numbersections`, `chapters`, `runningheads`, `flushbottom`, `color`,
+`pagecolor`). Custom MyST directives (`:::{name}` with `:key: value` options)
+and heading/body templates are provided by the caller via optional `on_directive`,
+`on_heading`, and `on_body` callbacks to `typeset`. Lengths are PostScript points
+(1/72 in), as in Typst.
+
+The class owns the vertical rhythm. The gap after a letter's recipient,
+the gap before its closing, and the room left for a signature come from
+the letter. An invitation centred on its card says `valign: center`.
+
+`tests/para_refs.txt` holds how XeTeX breaks seven paragraphs of Lato into
+lines, read from its XDV output (`tools/gen_para_refs.py`), and `fpm test`
+requires the same lines, hyphenated at the same places, with every glyph
+within 0.07 bp (0.02 bp with Lato's exact kerning, which fplotlib stores
+to 5 font units). `tools/compare_docs.py` sets the gallery's documents with
+fplotlib, with LaTeX (Pandoc and Tectonic) and with Typst, with the same
+fonts, and puts the pages side by side.
+
 ## Using fplotlib in your project
 
 fplotlib is an [fpm](https://fpm.fortran-lang.org) package with no dependencies
@@ -400,6 +463,10 @@ src/           library modules
                fplotlib_state.f90   shared types and the figure state
                fplotlib_artist.f90  drawing primitives (strokes, fills, markers)
                fplotlib_draw.f90    layout, axes decoration, one renderer per plot type
+               fplotlib_typeset.f90 TeX's paragraph and page layout, for documents
+               fplotlib_doctree.f90 a document as a tree of blocks and inlines
+               fplotlib_markdown.f90 Markdown into that tree
+               fplotlib_docclass.f90 the tree set as LaTeX's article and book classes
                fplotlib.f90         the plotting API
                fplotlib_render.f90  the renderer contract the backends implement
                fplotlib_status.f90  contract_error, and the status_t of calls that can fail
