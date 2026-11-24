@@ -46,17 +46,23 @@ module fplotlib_markdown
         integer :: color = 0
     end type style_t
 
-    ! Block layout context passed to templates and directives.
+    ! Where blocks are set, as the callbacks are given it: a template
+    ! copies it, changes what it wants, and sets blocks with the copy
+    ! (md_blocks, md_inline). left and right are how far the text is moved
+    ! in from the margins, in points; align is one of fplotlib_typeset's
+    ! ALIGN_*; size is the type size in points, and color is 0xRRGGBB; bold
+    ! and italic are the face; indent is whether a justified paragraph's
+    ! first line is indented. The nesting of lists and quotations is the
+    ! core's own, and private.
     type :: md_ctx_t
         real(dp) :: left = 0.0_dp, right = 0.0_dp
         integer :: align = ALIGN_JUSTIFY
         real(dp) :: size = 10.0_dp
         integer :: color = 0
         logical :: bold = .false., italic = .false.
-        integer :: depth = 0
-        integer :: ilev = 0, elev = 0
-        logical :: inlist = .false.
         logical :: indent = .true.
+        integer, private :: depth = 0
+        integer, private :: ilev = 0, elev = 0
     end type md_ctx_t
 
     ! A MyST directive, as on_directive is given it:
@@ -1022,7 +1028,6 @@ contains
         sub%depth = ctx%depth + 1
         sub%left = ctx%left + lm
         sub%indent = .false.
-        sub%inlist = .true.
         sub%align = ctx%align
         if (kind == 0) then
             sub%ilev = ctx%ilev + 1
