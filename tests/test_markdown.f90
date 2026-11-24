@@ -9,7 +9,8 @@
 module test_markdown
     use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
-    use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv
+    use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, FACE_REGULAR, FACE_BOLD, &
+                               FACE_ITALIC
     use fplotlib_markdown, only: md_typeset, md_meta
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
@@ -48,6 +49,7 @@ contains
         call display_cases(ncase, nfail)
         call page_cases(ncase, nfail)
         call front_matter_cases(ncase, nfail)
+        call emphasis_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -182,6 +184,21 @@ contains
         end if
     end subroutine front_matter_cases
 
+    ! A * or _ with nothing to close it is text; emphasis that is closed
+    ! is italic or bold.
+    subroutine emphasis_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("Twice 2*3 is six, upright; _private stays; *it* and **bold *both* bold**;"// &
+                     " $a*b$ *x `y*` z*.", t, f)
+        call expect("lone star", t, "Twice 2*3 is six, upright; _private stays;", ncase, nfail)
+        call face("upright", t, f, "upright", FACE_REGULAR, ncase, nfail)
+        call face("closed emphasis", t, f, "it and", FACE_ITALIC, ncase, nfail)
+        call face("strong", t, f, "bold both", FACE_BOLD, ncase, nfail)
+        call face("past code and math", t, f, "x y* z", FACE_ITALIC, ncase, nfail)
+    end subroutine emphasis_cases
+
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.
     ! ------------------------------------------------------------------
@@ -289,6 +306,23 @@ contains
         print "(a)", "  FAIL markdown "//what//": '"//unwanted//"' in:"
         print "(a)", text
     end subroutine reject
+
+    ! Whether the first letter of word, found in text, is in face.
+    subroutine face(what, text, faces, word, want, ncase, nfail)
+        character(len=*), intent(in) :: what, text, faces, word
+        integer, intent(in) :: want
+        integer, intent(inout) :: ncase, nfail
+        integer :: k
+        ncase = ncase + 1
+        k = index(text, word)
+        if (k > 0) then
+            if (faces(k:k) == achar(48 + want)) return
+        end if
+        nfail = nfail + 1
+        print "(a,i0,a)", "  FAIL markdown "//what//": '"//word//"' not in face ", want, " in:"
+        print "(a)", text
+        print "(a)", faces
+    end subroutine face
 
     subroutine near(what, got, want, ncase, nfail)
         character(len=*), intent(in) :: what

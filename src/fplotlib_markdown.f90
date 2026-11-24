@@ -1308,22 +1308,7 @@ contains
                 space = .true.
                 i = i + 1
             case ("*", "_")
-                r = 1
-                do while (i + r <= len(s))
-                    if (s(i + r:i + r) /= c) exit
-                    r = r + 1
-                end do
-                next = " "
-                if (i + r <= len(s)) next = s(i + r:i + r)
-                lf = .not. white(next) .and. (.not. punct(next) .or. white(prev) .or. punct(prev))
-                rf = .not. white(prev) .and. (.not. punct(prev) .or. white(next) .or. punct(next))
-                if (c == "_") then
-                    ! Inside a word, an underscore is just that.
-                    if (lf .and. rf) then
-                        lf = .false.
-                        rf = .false.
-                    end if
-                end if
+                call delimiter_run(s, i, r, lf, rf)
                 if (rf .and. ((r == 1 .and. em_open .and. em_c == c) .or. &
                               (r == 2 .and. strong_open .and. strong_c == c) .or. &
                               (r >= 3 .and. em_open .and. strong_open))) then
@@ -1336,7 +1321,7 @@ contains
                         strong_open = .false.
                         st%bold = st0%bold
                     end if
-                else if (lf .and. r <= 3) then
+                else if (lf .and. r <= 3 .and. has_closer(s, i + r, c, r)) then
                     call flush()
                     if (r == 1 .or. r == 3) then
                         em_open = .true.
@@ -1539,6 +1524,93 @@ contains
         end subroutine flush_space
 
     end subroutine inline
+
+    ! The run of * or _ at s(i:i): its length r, and whether it can open
+    ! (lf, left-flanking) and close (rf, right-flanking) emphasis, by
+    ! CommonMark's rules. Inside a word, an underscore is just that.
+    subroutine delimiter_run(s, i, r, lf, rf)
+        character(len=*), intent(in) :: s
+        integer, intent(in) :: i
+        integer, intent(out) :: r
+        logical, intent(out) :: lf, rf
+        character :: c, prev, next
+        c = s(i:i)
+        r = 1
+        do while (i + r <= len(s))
+            if (s(i + r:i + r) /= c) exit
+            r = r + 1
+        end do
+        prev = " "
+        if (i > 1) prev = s(i - 1:i - 1)
+        next = " "
+        if (i + r <= len(s)) next = s(i + r:i + r)
+        lf = .not. white(next) .and. (.not. punct(next) .or. white(prev) .or. punct(prev))
+        rf = .not. white(prev) .and. (.not. punct(prev) .or. white(next) .or. punct(next))
+        if (c == "_" .and. lf .and. rf) then
+            lf = .false.
+            rf = .false.
+        end if
+    end subroutine delimiter_run
+
+    ! Whether a run of r c's that opens emphasis is closed after s(from:):
+    ! by a run of c that can close it (one or three for *, two or three
+    ! for **, any for ***), outside code spans, mathematics and escapes,
+    ! and not taken by an opener nearer to it. A run with nothing to close
+    ! it is text, as in CommonMark.
+    logical function has_closer(s, from, c, r) result(found)
+        character(len=*), intent(in) :: s
+        integer, intent(in) :: from, r
+        character, intent(in) :: c
+        integer :: j, q, k, nearer
+        logical :: lf, rf
+        found = .false.
+        nearer = 0
+        j = from
+        do while (j <= len(s))
+            if (s(j:j) == BS) then
+                j = j + 2
+            else if (s(j:j) == "`") then
+                q = 1
+                do while (j + q <= len(s))
+                    if (s(j + q:j + q) /= "`") exit
+                    q = q + 1
+                end do
+                k = index(s(j + q:), repeat("`", q))
+                j = j + q
+                if (k > 0) j = j + k - 1 + q
+            else if (s(j:j) == "$") then
+                k = 0
+                if (j < len(s)) then
+                    if (s(j + 1:j + 1) == "$") then
+                        k = index(s(j + 2:), "$$")
+                        if (k > 0) k = j + k + 2
+                    end if
+                end if
+                if (k == 0) k = closing_dollar(s, j)
+                j = max(j, k) + 1
+            else if (s(j:j) == c) then
+                call delimiter_run(s, j, q, lf, rf)
+                if (rf .and. nearer > 0) then
+                    nearer = nearer - 1
+                else if (rf) then
+                    select case (r)
+                    case (1)
+                        found = q == 1 .or. q >= 3
+                    case (2)
+                        found = q >= 2
+                    case default
+                        found = .true.
+                    end select
+                    if (found) return
+                else if (lf) then
+                    nearer = nearer + 1
+                end if
+                j = j + q
+            else
+                j = j + 1
+            end if
+        end do
+    end function has_closer
 
     ! Text set as it is, without markup (code spans).
     subroutine plain(t, st, verbatim)
