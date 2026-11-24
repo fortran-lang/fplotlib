@@ -12,7 +12,7 @@ module test_markdown
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
     use fplotlib_markdown, only: md_typeset, md_meta, md_directive_cb, md_directive_t, md_ctx_t, &
-                                 md_blocks, md_option
+                                 md_heading_cb, md_heading_t, md_blocks, md_option
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     implicit none
     private
@@ -58,6 +58,7 @@ contains
         call label_cases(ncase, nfail)
         call heading_cases(ncase, nfail)
         call directive_cases(ncase, nfail)
+        call heading_template_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -311,6 +312,28 @@ contains
         call expect("handled left alone", t, "Body kept.", ncase, nfail)
     end subroutine directive_cases
 
+    ! A heading's callback is given its level, text and number, and what
+    ! it leaves is set by the core.
+    subroutine heading_template_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("---"//NL//"numbersections: true"//NL//"---"//NL//"# Alpha"//NL//NL// &
+                     "Text."//NL//NL//"## Beta", t, f, on_heading=part_heading)
+        call expect("heading template", t, "Part 1: Alpha"//NL//"Text."//NL//"1.1 Beta", &
+                     ncase, nfail)
+    end subroutine heading_template_cases
+
+    ! A template that sets a level-one heading as a part.
+    subroutine part_heading(h, ctx, handled)
+        type(md_heading_t), intent(in) :: h
+        type(md_ctx_t), intent(in) :: ctx
+        logical, intent(inout) :: handled
+        if (h%level /= 1) return
+        handled = .true.
+        call md_blocks("**Part "//h%num//":** "//h%text, ctx)
+    end subroutine part_heading
+
     ! A template that sets no directive, and leaves handled as it is.
     subroutine look_only(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
@@ -336,18 +359,19 @@ contains
     ! The text of document md's pages, the face of each of its bytes
     ! ("0" + face, " " for a space or line end), the lowest baseline on
     ! any page, the leftmost glyph, and the baselines of the first page;
-    ! on_directive is the template's, if any.
-    subroutine set_doc(md, text, faces, lowest, leftmost, baselines, on_directive)
+    ! on_directive and on_heading are the template's, if any.
+    subroutine set_doc(md, text, faces, lowest, leftmost, baselines, on_directive, on_heading)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
         real(dp), intent(out), optional :: lowest, leftmost
         real(dp), allocatable, intent(out), optional :: baselines(:)
         procedure(md_directive_cb), optional :: on_directive
+        procedure(md_heading_cb), optional :: on_heading
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
 
-        call md_typeset(md, on_directive=on_directive)
+        call md_typeset(md, on_directive=on_directive, on_heading=on_heading)
         call ts_page_size(w, h, col)
         text = ""
         faces = ""

@@ -28,7 +28,7 @@ module fplotlib_markdown
     implicit none
     private
 
-    public :: md_typeset, md_ctx_t, md_directive_t
+    public :: md_typeset, md_ctx_t, md_directive_t, md_heading_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
@@ -74,13 +74,20 @@ module fplotlib_markdown
         character(len=:), allocatable :: name, arg, opts, body
     end type md_directive_t
 
+    ! A heading, as on_heading is given it: its level (1 for #), its text,
+    ! and its number ("" when it has none), such as "2.1". One argument,
+    ! as a directive is.
+    type :: md_heading_t
+        integer :: level = 0
+        character(len=:), allocatable :: text, num
+    end type md_heading_t
+
     ! The callbacks a template gives md_typeset. on_directive sets a MyST
-    ! directive, and on_heading a heading, given its level, text and
-    ! number; either sets handled to .true. when it did (it is .false. on
-    ! entry, and a callback that leaves it so leaves the block to the core),
-    ! and what it leaves is set as the core sets it: a directive's body as
-    ! blocks, a heading as LaTeX's \section. on_body is called before the
-    ! body (after false) and after it (true).
+    ! directive, and on_heading a heading; either sets handled to .true.
+    ! when it did (it is .false. on entry, and a callback that leaves it so
+    ! leaves the block to the core), and what it leaves is set as the core
+    ! sets it: a directive's body as blocks, a heading as LaTeX's \section.
+    ! on_body is called before the body (after false) and after it (true).
     abstract interface
         subroutine md_directive_cb(directive, ctx, handled)
             import :: md_directive_t, md_ctx_t
@@ -95,10 +102,9 @@ module fplotlib_markdown
             type(md_ctx_t), intent(in) :: ctx
         end subroutine md_body_cb
 
-        subroutine md_heading_cb(level, text, num, ctx, handled)
-            import :: md_ctx_t
-            integer, intent(in) :: level
-            character(len=*), intent(in) :: text, num
+        subroutine md_heading_cb(heading, ctx, handled)
+            import :: md_heading_t, md_ctx_t
+            type(md_heading_t), intent(in) :: heading
             type(md_ctx_t), intent(in) :: ctx
             logical, intent(inout) :: handled
         end subroutine md_heading_cb
@@ -845,6 +851,7 @@ contains
         type(ts_glue_t) :: before, after
         integer :: lv, k
         logical :: handled
+        type(md_heading_t) :: this
 
         text = trim(text0)
         ex = face_xheight(FACE_REGULAR)*BASE
@@ -872,8 +879,11 @@ contains
         end if
         call place_targets(num, strip_markup(text))
         if (associated(CB_HEAD)) then
+            this%level = level
+            this%text = text
+            this%num = num
             handled = .false.
-            call CB_HEAD(level, text, num, ctx, handled)
+            call CB_HEAD(this, ctx, handled)
             if (handled) then
                 AFTER_HEADING = .true.
                 return

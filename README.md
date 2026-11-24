@@ -300,9 +300,11 @@ templates, which read them with `md_meta`.
 The core sets the article and book layouts and nothing else. A template is
 given to `typeset` as callbacks: `on_directive` is given each MyST directive,
 `:::{name} argument` with `:key: value` options and a body, as an
-`md_directive_t`, and sets those it knows; `on_heading` sets the headings it
-wants set its own way, and `on_body` adds what comes before and after the body;
-whatever a callback leaves is set as the core sets it. The gallery's letter sets
+`md_directive_t`, and sets those it knows; `on_heading` is given each heading,
+its level, text and number, as an `md_heading_t`, and sets those it wants set its
+own way; and `on_body` adds what comes before and after the body. A callback that
+sets a block says so in `handled` (`.false.` on entry); whatever it leaves is set
+as the core sets it. The gallery's letter sets
 its sender, recipient and closing so, with the room for the signature from its
 `signature-skip`, and its invitation centres the card when the front matter says
 `valign: center`.
