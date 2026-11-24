@@ -8,8 +8,9 @@ program test_plots
     use test_frame_backends, only: frame_backend_check
     use test_frames, only: frames_check
     use test_hyph, only: hyph_check
+    use test_typeset, only: para_ref_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, nmissing, ncontract
+    integer :: fig1, nmath, ndelim, nface, nmissing, ncontract, npara
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
@@ -1593,6 +1594,8 @@ program test_plots
 
     ! The math layout against XeTeX's; see test_mathref.f90.
     call math_ref_check("tests/math_refs.txt", nmath)
+    ! The line breaking against XeTeX's; see test_typeset.f90.
+    call para_ref_check("tests/para_refs.txt", npara)
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
@@ -1613,6 +1616,7 @@ program test_plots
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
     if (nmath > 0) error stop "math layout differs from XeTeX"
+    if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
     if (nmissing > 0) error stop "missing data reached the output"
