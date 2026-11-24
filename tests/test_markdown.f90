@@ -310,6 +310,10 @@ contains
         call set_doc(":::{aside} Title"//NL//"Body kept."//NL//":::", t, f, &
                      on_directive=look_only)
         call expect("handled left alone", t, "Body kept.", ncase, nfail)
+        ! A directive in a directive the callback sets calls it again.
+        call set_doc("::::{admonition} Outer"//NL//":::{admonition} Inner"//NL//"Deep."//NL// &
+                     ":::"//NL//"::::", t, f, on_directive=admonition)
+        call expect("nested directive", t, "Outer []"//NL//"Inner []"//NL//"Deep.", ncase, nfail)
     end subroutine directive_cases
 
     ! A heading's callback is given its level, text and number, and what
@@ -322,10 +326,24 @@ contains
                      "Text."//NL//NL//"## Beta", t, f, on_heading=part_heading)
         call expect("heading template", t, "Part 1: Alpha"//NL//"Text."//NL//"1.1 Beta", &
                      ncase, nfail)
+        ! A heading the callback sets as another heading calls it again.
+        call set_doc("# Alpha"//NL//NL//"Text.", t, f, on_heading=demote)
+        call expect("demoted heading", t, "Alpha"//NL//"Text.", ncase, nfail)
+        call face("demoted heading face", t, f, "Alpha", FACE_BOLD, ncase, nfail)
     end subroutine heading_template_cases
 
+    ! A template that sets a level-one heading as a level-two one.
+    recursive subroutine demote(h, ctx, handled)
+        type(md_heading_t), intent(in) :: h
+        type(md_ctx_t), intent(in) :: ctx
+        logical, intent(inout) :: handled
+        if (h%level /= 1) return
+        handled = .true.
+        call md_blocks("## "//h%text, ctx)
+    end subroutine demote
+
     ! A template that sets a level-one heading as a part.
-    subroutine part_heading(h, ctx, handled)
+    recursive subroutine part_heading(h, ctx, handled)
         type(md_heading_t), intent(in) :: h
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled
@@ -343,7 +361,7 @@ contains
 
     ! A template's admonition: its argument in bold, with its class, and
     ! then its body.
-    subroutine admonition(d, ctx, handled)
+    recursive subroutine admonition(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled

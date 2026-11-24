@@ -304,7 +304,9 @@ given to `typeset` as callbacks: `on_directive` is given each MyST directive,
 its level, text and number, as an `md_heading_t`, and sets those it wants set its
 own way; and `on_body` adds what comes before and after the body. A callback that
 sets a block says so in `handled` (`.false.` on entry); whatever it leaves is set
-as the core sets it. The gallery's letter sets
+as the core sets it. A callback that sets blocks with `md_blocks` is called again
+for a directive or heading among them, before it returns, so it is declared
+`recursive`. The gallery's letter sets
 its sender, recipient and closing so, with the room for the signature from its
 `signature-skip`, and its invitation centres the card when the front matter says
 `valign: center`.

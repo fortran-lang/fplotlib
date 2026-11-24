@@ -79,7 +79,7 @@ contains
         if (md_meta("valign") == "center") call ts_vkeep(ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 1, 0))
     end subroutine invitation_body
 
-    subroutine invitation_directive(d, ctx, handled)
+    recursive subroutine invitation_directive(d, ctx, handled)
         type(md_directive_t), intent(in) :: d
         type(md_ctx_t), intent(in) :: ctx
         logical, intent(inout) :: handled

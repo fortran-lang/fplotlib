@@ -94,6 +94,8 @@ module fplotlib_markdown
     ! leaves the block to the core), and what it leaves is set as the core
     ! sets it: a directive's body as blocks, a heading as LaTeX's \section.
     ! on_body is called before the body (after false) and after it (true).
+    ! A callback that sets blocks with md_blocks is called again, before it
+    ! returns, for a directive or heading among them: declare it recursive.
     abstract interface
         subroutine md_directive_cb(directive, ctx, handled)
             import :: md_directive_t, md_ctx_t
@@ -847,7 +849,7 @@ contains
 
     ! Headings: LaTeX's \section, \subsection and \subsubsection, numbered
     ! within the chapter in a book, unless on_heading sets them.
-    subroutine heading(text0, level, ctx)
+    recursive subroutine heading(text0, level, ctx)
         character(len=*), intent(in) :: text0
         integer, intent(in) :: level
         type(md_ctx_t), intent(in) :: ctx

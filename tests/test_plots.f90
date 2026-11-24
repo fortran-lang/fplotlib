@@ -1693,7 +1693,7 @@ contains
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
 
-    subroutine doc_directive(d, ctx, handled)
+    recursive subroutine doc_directive(d, ctx, handled)
         use fplotlib_markdown, only: md_ctx_t, md_directive_t, md_blocks, md_option, &
                                      md_color, md_align, md_noindent, md_base_size
         use fplotlib_typeset, only: ts_page_break, ts_addvspace, ts_end_par, &
