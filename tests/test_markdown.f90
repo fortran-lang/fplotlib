@@ -20,6 +20,7 @@ module test_markdown
 
     character, parameter :: NL = achar(10), FF = achar(12)
     character(len=*), parameter :: BULLET = achar(226)//achar(128)//achar(162)
+    character(len=*), parameter :: DASH = achar(226)//achar(128)//achar(147)
 
     type, extends(renderer_t) :: text_renderer_t
         integer :: n = 0
@@ -51,6 +52,7 @@ contains
         call front_matter_cases(ncase, nfail)
         call emphasis_cases(ncase, nfail)
         call target_cases(ncase, nfail)
+        call tab_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
     end subroutine markdown_check
 
@@ -214,6 +216,17 @@ contains
         call reject("target text", t, ")=", ncase, nfail)
         call expect("targets", t, "See this one, ??, Alpha, Section 1.1, Setext.", ncase, nfail)
     end subroutine target_cases
+
+    ! A tab goes to the next stop of four columns, so a tab before an item
+    ! nests it.
+    subroutine tab_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f
+
+        call set_doc("- a"//NL//achar(9)//"- nested b"//NL//"- c", t, f)
+        call expect("tab nesting", t, BULLET//" a"//NL//DASH//" nested b"//NL//BULLET//" c", &
+                     ncase, nfail)
+    end subroutine tab_cases
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.

@@ -2012,12 +2012,26 @@ contains
         end do
     end subroutine split_lines
 
+    ! Tabs, to the next tab stop of four columns, as CommonMark has them.
     subroutine detab(s)
         character(len=:), allocatable, intent(inout) :: s
-        integer :: k
+        character(len=:), allocatable :: t
+        integer :: k, col, c
+        if (index(s, achar(9)) == 0) return
+        t = ""
+        col = 0
         do k = 1, len(s)
-            if (s(k:k) == achar(9)) s(k:k) = " "
+            if (s(k:k) == achar(9)) then
+                t = t//repeat(" ", 4 - mod(col, 4))
+                col = col + 4 - mod(col, 4)
+            else
+                t = t//s(k:k)
+                ! A column is a character, not a UTF-8 continuation byte.
+                c = iachar(s(k:k))
+                if (c < 128 .or. c >= 192) col = col + 1
+            end if
         end do
+        s = t
     end subroutine detab
 
     ! The closing $ of an inline formula opened at i, as Pandoc finds it:
