@@ -1,9 +1,12 @@
 # fplotlib
 
-[![CI](https://github.com/certik/fplotlib/actions/workflows/ci.yml/badge.svg)](https://github.com/certik/fplotlib/actions/workflows/ci.yml)
+[![CI](https://github.com/fortran-lang/fplotlib/actions/workflows/ci.yml/badge.svg)](https://github.com/fortran-lang/fplotlib/actions/workflows/ci.yml)
+[![Docs](https://github.com/fortran-lang/fplotlib/actions/workflows/docs.yml/badge.svg)](https://fplotlib.fortran-lang.org/)
 
 Pure Fortran plotting library with a pylab-style API, writing SVG, PNG, PDF and EPS.
 No external graphics library: the PNG rasterizer and its fonts are part of fplotlib.
+
+**Documentation and gallery:** https://fplotlib.fortran-lang.org/
 
 ```fortran
 use fplotlib
@@ -394,7 +397,7 @@ in its `fpm.toml`:
 
 ```toml
 [dependencies]
-fplotlib = { git = "https://github.com/certik/fplotlib" }
+fplotlib = { git = "https://github.com/fortran-lang/fplotlib" }
 ```
 
 and then `use fplotlib` and call `plot`, `title`, `savefig` as the examples below
