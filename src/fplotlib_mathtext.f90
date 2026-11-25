@@ -598,8 +598,8 @@ contains
                     .and. state%noads(head)%sub < 0
     end function plain_ord
 
-    ! An atom whose nucleus is text: an operator name in the math font's
-    ! upright letters, or \text in the text font.
+    ! An atom whose nucleus is text (an operator name or \text), set in
+    ! the text font (Lato) with its kerning.
     integer function text_noad(state, text, cls, face) result(k)
         type(math_context_t), intent(inout) :: state
         character(len=*), intent(in) :: text
@@ -2266,58 +2266,43 @@ contains
         end if
     end subroutine make_atom
 
-    ! Text as a box: the letters of an operator name in the math font, or
-    ! \text in the text font with its kerning.
+    ! Text as a box: operator names and \text, set in the text font with
+    ! its kerning.
     subroutine text_box(state, q, style, size, box)
         type(math_context_t), intent(inout) :: state
         integer, intent(in) :: q, style
         real(dp), intent(in) :: size
         type(mbox_t), intent(out) :: box
-        type(mbox_t) :: g
         type(glyphrun_t) :: run
-        integer :: k, code, nb, i0
+        integer :: k, nb, i0
         real(dp) :: sz, pen, x0, y0, x1, y1
 
         sz = style_size(style, size)
         box = empty_box(state)
         i0 = state%ni + 1
-        if (state%noads(q)%face == FACE_MATH) then
-            pen = 0.0_dp
-            k = state%noads(q)%t0
-            do while (k <= state%noads(q)%t1)
-                call utf8_next(state%tpool, k, code, nb)
-                k = k + nb
-                call glyph_box(state, script_glyph(math_gid(code, FACE_MATH), style), sz, g)
-                call move_box(state, g, pen, 0.0_dp)
-                pen = pen + g%w
-                box%h = max(box%h, g%h)
-                box%d = max(box%d, g%d)
-            end do
-        else
-            ! Word by word: a space is glue, as in TeX, kerned against
-            ! nothing.
-            pen = 0.0_dp
-            k = state%noads(q)%t0
-            do while (k <= state%noads(q)%t1)
-                if (state%tpool(k:k) == " ") then
-                    pen = pen + glyph_adv(glyph_cmap(state%noads(q)%face, 32))*sz
-                    k = k + 1
-                    cycle
-                end if
-                nb = index(state%tpool(k:state%noads(q)%t1), " ") - 1
-                if (nb < 0) nb = state%noads(q)%t1 - k + 1
-                call text_layout(state%tpool(k:k + nb - 1), sz, state%noads(q)%face, &
-                                 pen, 0.0_dp, run, x1)
-                pen = x1
-                k = k + nb
-            end do
-            do k = 1, run%n
-                call add_glyph(state, run%gid(k), run%x(k), 0.0_dp, sz)
-                call glyph_bbox(run%gid(k), x0, y0, x1, y1)
-                box%h = max(box%h, y1*sz)
-                box%d = max(box%d, -y0*sz)
-            end do
-        end if
+        ! Word by word: a space is glue, as in TeX, kerned against
+        ! nothing.
+        pen = 0.0_dp
+        k = state%noads(q)%t0
+        do while (k <= state%noads(q)%t1)
+            if (state%tpool(k:k) == " ") then
+                pen = pen + glyph_adv(glyph_cmap(state%noads(q)%face, 32))*sz
+                k = k + 1
+                cycle
+            end if
+            nb = index(state%tpool(k:state%noads(q)%t1), " ") - 1
+            if (nb < 0) nb = state%noads(q)%t1 - k + 1
+            call text_layout(state%tpool(k:k + nb - 1), sz, state%noads(q)%face, &
+                             pen, 0.0_dp, run, x1)
+            pen = x1
+            k = k + nb
+        end do
+        do k = 1, run%n
+            call add_glyph(state, run%gid(k), run%x(k), 0.0_dp, sz)
+            call glyph_bbox(run%gid(k), x0, y0, x1, y1)
+            box%h = max(box%h, y1*sz)
+            box%d = max(box%d, -y0*sz)
+        end do
         box%i0 = i0
         box%i1 = state%ni
         box%w = pen
