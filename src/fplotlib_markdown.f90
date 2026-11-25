@@ -23,6 +23,7 @@ module fplotlib_markdown
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
+    use fplotlib_render, only: paint_t, clip_t
     use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_typeset
     use fplotlib_io, only: read_bytes, join_path
@@ -31,8 +32,8 @@ module fplotlib_markdown
     implicit none
     private
 
-    public :: md_typeset, md_typeset_files, md_document_t, md_ctx_t, md_directive_t, md_heading_t
-    public :: md_figure_t
+    public :: md_typeset, md_typeset_files, md_typeset_box, md_document_t, md_ctx_t, &
+              md_directive_t, md_heading_t, md_figure_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
@@ -295,6 +296,143 @@ contains
         doc%CB_BODY => null()
         doc%CB_HEAD => null()
     end subroutine md_typeset_files
+
+    ! Typeset a MyST Markdown snippet into a self-contained frame_t of exact
+    ! width `width` (in points) and auto-measured height, with optional rounded
+    ! background and border.
+    recursive subroutine md_typeset_box(text, width, frame, fontsize, align, color, &
+                                        bg_color, border_color, border_width, alpha, &
+                                        pad, radius)
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width
+        type(frame_t), intent(out) :: frame
+        real(dp), intent(in), optional :: fontsize, border_width, alpha, pad, radius
+        character(len=*), intent(in), optional :: align, color, bg_color, border_color
+        type(md_document_t) :: doc
+        type(line_t), allocatable :: lines(:)
+        type(md_ctx_t) :: ctx
+        type(recording_renderer_t) :: rec
+        type(paint_t) :: bg_paint
+        type(clip_t) :: no_clip
+        real(dp) :: fsz, bw, a, pd, rad, inner_w, content_h, top_gap, box_h, w_use
+        integer :: n, pass, al, tcol, bgcol, bdcol
+        logical :: has_bg, has_bd
+
+        w_use = max(1.0_dp, width)
+        fsz = 10.0_dp
+        if (present(fontsize)) then
+            if (fontsize > 0.0_dp) fsz = fontsize
+        end if
+        al = ALIGN_JUSTIFY
+        if (present(align)) al = align_of(lower(trim(align)), ALIGN_JUSTIFY)
+        tcol = 0
+        if (present(color)) then
+            if (len_trim(color) > 0) tcol = md_color(color, 0)
+        end if
+        has_bg = .false.
+        bgcol = 16777215
+        if (present(bg_color)) then
+            if (len_trim(bg_color) > 0 .and. lower(trim(bg_color)) /= "none") then
+                bgcol = md_color(bg_color, -1)
+                if (bgcol >= 0) then
+                    has_bg = .true.
+                else
+                    bgcol = 16777215
+                end if
+            end if
+        end if
+        has_bd = .false.
+        bdcol = 0
+        if (present(border_color)) then
+            if (len_trim(border_color) > 0 .and. lower(trim(border_color)) /= "none") then
+                bdcol = md_color(border_color, -1)
+                if (bdcol >= 0) then
+                    has_bd = .true.
+                else
+                    bdcol = 0
+                end if
+            end if
+        end if
+        bw = 0.8_dp
+        if (present(border_width)) bw = max(0.0_dp, border_width)
+        if (bw <= 0.0_dp) has_bd = .false.
+        a = 1.0_dp
+        if (present(alpha)) a = min(1.0_dp, max(0.0_dp, alpha))
+        if (present(pad)) then
+            pd = max(0.0_dp, pad)
+        else if (has_bg .or. has_bd) then
+            pd = 6.0_dp
+        else
+            pd = 0.0_dp
+        end if
+        pd = min(pd, max(0.0_dp, 0.5_dp*(w_use - 1.0_dp)))
+        rad = 0.0_dp
+        if (present(radius)) rad = max(0.0_dp, radius)
+
+        inner_w = max(1.0_dp, w_use - 2.0_dp*pd)
+        call split_lines(text, lines, n)
+        doc%NLAB = 0
+        do pass = 1, 2
+            doc%FIRST_PASS = pass == 1
+            call ts_reset(doc%engine)
+            call defaults(doc)
+            doc%BASE = fsz
+            doc%LEAD = 1.2_dp
+            doc%PARINDENT = 0.0_dp
+            doc%PARSKIP_G = ts_glue_t(0.45_dp*fsz, 0.1_dp*fsz, 0.0_dp, 0, 0)
+            doc%DOC_ALIGN = al
+            doc%TEXT_COL = tcol
+            doc%PAGE_COL = bgcol
+            call ts_set_page(doc%engine, inner_w + 2.0_dp*pd, 100000.0_dp, &
+                             pd, pd, 0.0_dp, 0.0_dp, &
+                             numbers=.false., headings_=.false., flush=.false.)
+            call ts_set_font(doc%engine, doc%BASE, doc%LEAD*doc%BASE)
+            call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+            call ts_set_colors(doc%engine, doc%TEXT_COL, doc%PAGE_COL)
+            doc%SEC = 0
+            doc%CHAPTER = 0
+            doc%EQNO = 0
+            doc%TARGETS = ""
+            doc%AFTER_HEADING = .false.
+            ctx = md_ctx_t()
+            ctx%size = doc%BASE
+            ctx%color = doc%TEXT_COL
+            ctx%align = doc%DOC_ALIGN
+            ctx%parskip = doc%PARSKIP_G
+            ctx%indent = .false.
+            doc%REF_DEPTH = 0
+            if (n > 0) call blocks(doc, lines(1:n), n, ctx)
+            call place_targets(doc)
+        end do
+        doc%FIRST_PASS = .false.
+        call ts_paginate(doc%engine)
+
+        content_h = ts_box_height(doc%engine, 1, top_gap)
+        box_h = max(1.0_dp, content_h + 2.0_dp*pd)
+
+        call rec%open_canvas(w_use, box_h)
+        if (has_bg .or. has_bd) then
+            if (has_bg) then
+                bg_paint%filled = .true.
+                bg_paint%fill_rgb = [bgcol/65536, mod(bgcol/256, 256), mod(bgcol, 256)]
+                bg_paint%fill_alpha = a
+            end if
+            if (has_bd) then
+                bg_paint%stroked = .true.
+                bg_paint%stroke_rgb = [bdcol/65536, mod(bdcol/256, 256), mod(bdcol, 256)]
+                bg_paint%stroke_alpha = a
+                bg_paint%line_width = bw
+            end if
+            call rec%draw_rect(0.0_dp, 0.0_dp, w_use, box_h, bg_paint, radius=rad)
+        end if
+        if (ts_page_count(doc%engine) >= 1) then
+            call rec%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, pd - top_gap], no_clip)
+            call ts_page_draw(doc%engine, rec, 1)
+            call rec%end_frame()
+        end if
+        call rec%close_canvas()
+        call rec%take(frame)
+    end subroutine md_typeset_box
 
     recursive subroutine defaults(doc)
         type(md_document_t), intent(inout) :: doc

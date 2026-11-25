@@ -299,11 +299,33 @@ module fplotlib_state
         character(len=256) :: s = ""
     end type text_t
 
+    ! A rich typeset Markdown box placed in axes, figure, or data coordinates.
+    type :: textbox_t
+        real(dp) :: x = 0.0_dp, y = 0.0_dp
+        real(dp) :: width = 0.0_dp
+        real(dp) :: fontsize = 10.0_dp
+        real(dp) :: lw = 0.8_dp
+        real(dp) :: alpha = 1.0_dp
+        real(dp) :: pad = -1.0_dp
+        real(dp) :: radius = 0.0_dp
+        real(dp) :: zorder = 5.0_dp
+        character(len=8) :: coords = "axes"
+        character(len=8) :: ha = "left"
+        character(len=8) :: va = "top"
+        character(len=10) :: align = "justify"
+        character(len=16) :: color = ""
+        character(len=16) :: facecolor = ""
+        character(len=16) :: edgecolor = ""
+        character(len=:), allocatable :: text
+    end type textbox_t
+
     type :: axes_t
         integer :: n_series = 0
         type(series_t), allocatable :: series(:)
         integer :: n_texts = 0
         type(text_t), allocatable :: texts(:)
+        integer :: n_textboxes = 0
+        type(textbox_t), allocatable :: textboxes(:)
         character(len=256) :: title = ""
         character(len=256) :: xlabel = ""
         character(len=256) :: ylabel = ""

@@ -92,6 +92,9 @@ BY_PROC = {
     ('add_ellipse', 'width'): 'finite', ('add_ellipse', 'height'): 'finite',
     ('secondary_xaxis', 'scale'): 'finite', ('secondary_yaxis', 'scale'): 'finite',
     ('quiver3d', 'length'): 'finite',
+    ('textbox', 'width'): 'size',
+    ('textbox', 'pad'): 'size',
+    ('textbox', 'zorder'): 'size',
 }
 ARRAYS = {
     'bounds': 'finite', 'width_ratios': 'positive', 'height_ratios': 'positive', 'bbox_to_anchor': 'finite',

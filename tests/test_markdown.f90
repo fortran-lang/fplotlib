@@ -12,10 +12,10 @@ module test_markdown
     use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
-    use fplotlib_markdown, only: md_document_t, md_typeset, md_typeset_files, md_meta, &
-                                 md_directive_cb, md_directive_t, md_ctx_t, md_body_cb, &
+    use fplotlib_markdown, only: md_document_t, md_typeset, md_typeset_files, md_typeset_box, &
+                                 md_meta, md_directive_cb, md_directive_t, md_ctx_t, md_body_cb, &
                                  md_heading_cb, md_heading_t, md_blocks, md_option, md_figure_t
-    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size, ts_box_height
     use fplotlib_io, only: write_bytes, read_bytes, dir_name, join_path
     use fplotlib_status, only: status_t, ERROR_IO
     use fplotlib, only: figure, plot, title, close, typeset, typeset_file, &
@@ -74,6 +74,7 @@ contains
         call bugfix_cases(ncase, nfail)
         call file_cases(ncase, nfail)
         call figure_cases(ncase, nfail)
+        call box_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " checks, failures = ", nfail
     end subroutine markdown_check
 
@@ -1205,5 +1206,70 @@ contains
         open (newunit=u, file="/tmp/fplotlib_test_fig.svg", status="old", iostat=ios)
         if (ios == 0) close (u, status="delete")
     end subroutine figure_cases
+
+    ! md_typeset_box: exact width, measured height, background/border, empty text.
+    subroutine box_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        type(frame_t) :: f1, f2, f_empty
+        real(dp) :: w1, h1, w2, h2, we, he, b(4)
+        logical :: ink
+
+        call md_typeset_box("**Heading**"//NL//NL//"A justified paragraph with "// &
+                            "$E = mc^2$ and a display:"//NL//NL//"$$x^2 + y^2 = 1$$"// &
+                            NL//NL//"- first"//NL//"- second", &
+                            200.0_dp, f1, fontsize=9.0_dp, align="justify", &
+                            color="#111111", bg_color="#f8fafc", border_color="#94a3b8", &
+                            border_width=1.0_dp, alpha=0.95_dp, pad=8.0_dp, radius=4.0_dp)
+        call f1%metrics(w1, h1)
+        call f1%ink_bounds(b, ink)
+        ncase = ncase + 1
+        if (abs(w1 - 200.0_dp) > 1.0e-6_dp .or. h1 <= 40.0_dp .or. .not. ink) then
+            print *, "FAIL md_typeset_box metrics:", w1, h1, ink
+            nfail = nfail + 1
+        end if
+
+        ! Narrower box wraps to more lines and therefore has larger height.
+        call md_typeset_box("A moderately long paragraph of prose that wraps across "// &
+                            "multiple lines when constrained to a narrower box width.", &
+                            220.0_dp, f1, fontsize=10.0_dp, pad=4.0_dp)
+        call md_typeset_box("A moderately long paragraph of prose that wraps across "// &
+                            "multiple lines when constrained to a narrower box width.", &
+                            110.0_dp, f2, fontsize=10.0_dp, pad=4.0_dp)
+        call f1%metrics(w1, h1)
+        call f2%metrics(w2, h2)
+        ncase = ncase + 1
+        if (h2 <= h1) then
+            print *, "FAIL md_typeset_box wrapping height:", h1, h2
+            nfail = nfail + 1
+        end if
+
+        ! Empty input produces a valid, non-degenerate frame.
+        call md_typeset_box("", 120.0_dp, f_empty, pad=5.0_dp)
+        call f_empty%metrics(we, he)
+        ncase = ncase + 1
+        if (abs(we - 120.0_dp) > 1.0e-6_dp .or. he < 1.0_dp) then
+            print *, "FAIL md_typeset_box empty:", we, he
+            nfail = nfail + 1
+        end if
+
+        ! ts_box_height: valid page and out-of-range page bounds.
+        block
+            type(md_document_t) :: d
+            real(dp) :: th, tg
+            call md_typeset(d, "One line of text.")
+            th = ts_box_height(d%engine, 1, tg)
+            ncase = ncase + 1
+            if (th <= 0.0_dp .or. tg < 0.0_dp) then
+                print *, "FAIL ts_box_height valid:", th, tg
+                nfail = nfail + 1
+            end if
+            ncase = ncase + 1
+            if (ts_box_height(d%engine, 0) /= 0.0_dp .or. &
+                ts_box_height(d%engine, 99) /= 0.0_dp) then
+                print *, "FAIL ts_box_height out-of-range"
+                nfail = nfail + 1
+            end if
+        end block
+    end subroutine box_cases
 
 end module test_markdown
