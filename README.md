@@ -298,12 +298,31 @@ The text is a strict MyST subset. TeX is confined to mathematics between `$...$`
 and `$$...$$`. A display followed by `(eq:name)` is numbered, and
 `` {eq}`eq:name` `` refers to it. A target `(sec:name)=` labels the block after
 it; for a heading, `` {numref}`sec:name` `` writes "Section" and its number,
-and `` {ref}`sec:name` `` writes its title; as in Sphinx, a role may give its own
-text, `` {ref}`the introduction <sec:name>` `` or `` {numref}`Part %s <sec:name>` ``.
+and `` {ref}`sec:name` `` writes its title; for a figure, `` {numref}`fig:name` ``
+writes "Fig." and its number, and `` {ref}`fig:name` `` writes its caption. As in
+Sphinx, a role may give its own text, `` {ref}`the introduction <sec:name>` `` or
+`` {numref}`Part %s <sec:name>` ``.
 A reference that cannot be resolved is set as ?? with a warning, as LaTeX does.
 A line break within a paragraph is a backslash at the end of the line (or,
 in a single string, two spaces; `typeset` given an array of lines drops
 their trailing blanks).
+
+Vector plots can be embedded directly into a document without rasterization:
+capture the current figure with `call named_figure(figs(1), "name")` (or
+`capture_figure(frame)`), pass the array as `figures=figs` to `typeset`, and
+place it in Markdown with ``:::{figure} name`` (supporting `:width:` in `%` or
+any length unit, `:align:`, `:name:`, and the body as caption) or standalone
+`![caption](name)`:
+
+```fortran
+type(md_figure_t) :: figs(1)
+call plot(x, y)
+call named_figure(figs(1), "sine")
+call typeset([character(len=80) :: &
+    "See {numref}`fig:sine`.", "", &
+    ":::{figure} sine", ":width: 80%", ":name: fig:sine", &
+    "A sine wave.", ":::"], "report.pdf", figures=figs)
+```
 
 Front matter, between two lines of `---`, holds the document options: `title`,
 `subtitle`, `author` (or `authors`, one to a line, as a YAML list or repeated),

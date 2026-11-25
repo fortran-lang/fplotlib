@@ -30,7 +30,8 @@
 ! ts_page_draw draws one page on any renderer.
 module fplotlib_typeset
     use fplotlib_style, only: dp
-    use fplotlib_render, only: renderer_t, paint_t, glyphrun_t
+    use fplotlib_render, only: renderer_t, paint_t, glyphrun_t, clip_t
+    use fplotlib_scene, only: frame_t
     use fplotlib_text, only: code_points, run_add
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, glyph_bbox, &
                                face_xheight, FACE_REGULAR, FACE_BOLD, FACE_ITALIC, &
@@ -44,7 +45,7 @@ module fplotlib_typeset
     public :: typeset_context_t
     public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break
     public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_in_par
-    public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule
+    public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule, ts_frame
     public :: ts_page_break, ts_mark, ts_nobreak_next, ts_set_clubpenalty
     public :: ts_vkeep, ts_set_colors, ts_hsize, ts_font_size, ts_strut, ts_set_parskip
     public :: ts_paginate, ts_page_count, ts_page_draw, ts_page_size
@@ -113,8 +114,10 @@ module fplotlib_typeset
         real(dp), allocatable :: ITX(:), ITY(:), ITS(:), ITW(:), ITH(:)
         ! Main vertical list.
         integer :: NV = 0
-        integer, allocatable :: VK(:), VSO(:), VHO(:), VP(:), VI0(:), VI1(:)
+        integer, allocatable :: VK(:), VSO(:), VHO(:), VP(:), VI0(:), VI1(:), VFRAME(:)
         real(dp), allocatable :: VW(:), VH(:), VD(:), VST(:), VSH(:), VX(:)
+        type(frame_t) :: FSCENE
+        logical :: FSCENE_INIT = .false.
         character(len=:), allocatable :: MARKS
         real(dp) :: PREV_DEPTH = -1000.0_dp
         logical :: NOBREAK_NEXT = .false.
@@ -157,6 +160,7 @@ contains
         ts%NBX = 0
         ts%NIT = 0
         ts%NV = 0
+        ts%FSCENE_INIT = .false.
         ts%NPAGE = 0
         ts%LAST_PAR0 = 0
         ts%LAST_PAR1 = -1
@@ -1938,6 +1942,50 @@ contains
         call append_box(ts, i0, ts%NIT, ts%HSIZE, thick, 0.0_dp, 0.0_dp)
     end subroutine ts_rule
 
+    ! A vector graphic frame placed as a vertical box, scaled uniformly to
+    ! width (or its natural width if omitted), clamped to the available
+    ! text width ts%HSIZE - left - right, and aligned within it.
+    subroutine ts_frame(ts, frame, width, align, left, right)
+        type(typeset_context_t), intent(inout) :: ts
+        type(frame_t), intent(in) :: frame
+        real(dp), intent(in), optional :: width, left, right
+        integer, intent(in), optional :: align
+        real(dp) :: fw, fh, lm, rm, avail, w, h, shift
+        integer :: al, handle
+        if (ts%IN_PAR) call ts_end_par(ts)
+        call frame%metrics(fw, fh)
+        if (fw <= 0.0_dp .or. fh <= 0.0_dp) return
+        lm = 0.0_dp
+        rm = 0.0_dp
+        if (present(left)) lm = left
+        if (present(right)) rm = right
+        avail = max(0.0_dp, ts%HSIZE - lm - rm)
+        if (avail <= 0.0_dp) return
+        w = fw
+        if (present(width)) then
+            if (width > 0.0_dp) w = width
+        end if
+        w = min(w, avail)
+        h = fh*(w/fw)
+        al = ALIGN_CENTER
+        if (present(align)) al = align
+        select case (al)
+        case (ALIGN_LEFT)
+            shift = lm
+        case (ALIGN_RIGHT)
+            shift = lm + avail - w
+        case default
+            shift = lm + 0.5_dp*(avail - w)
+        end select
+        if (.not. ts%FSCENE_INIT) then
+            call ts%FSCENE%init(0.0_dp, 0.0_dp)
+            ts%FSCENE_INIT = .true.
+        end if
+        call ts%FSCENE%import_frame(frame, handle)
+        call append_box(ts, 1, 0, w, h, 0.0_dp, shift)
+        ts%VFRAME(ts%NV) = handle
+    end subroutine ts_frame
+
     ! A running head from here on: a chapter's (section false), which
     ! even pages carry, or a section's, which odd pages carry; plain is
     ! true for a page that is to have none (where a chapter starts).
@@ -2283,8 +2331,20 @@ contains
         integer, intent(in) :: k
         real(dp), intent(in) :: x, y
         type(glyphrun_t) :: run
+        type(clip_t) :: clip
+        real(dp) :: fw, fh, sc
         integer :: j, c, ncol
         integer, allocatable :: cols(:)
+        if (ts%VFRAME(k) > 0) then
+            call ts%FSCENE%metrics(fw, fh, handle=ts%VFRAME(k))
+            if (fw > 0.0_dp) then
+                sc = ts%VW(k)/fw
+                call r%begin_frame([sc, 0.0_dp, 0.0_dp, sc, x, y - ts%VH(k)], clip)
+                call ts%FSCENE%draw(r, handle=ts%VFRAME(k))
+                call r%end_frame()
+            end if
+            return
+        end if
         allocate (cols(max(1, ts%VI1(k) - ts%VI0(k) + 1)))
         ncol = 0
         do j = ts%VI0(k), ts%VI1(k)
@@ -2602,6 +2662,7 @@ contains
             call grow_i(ts%VP, cap)
             call grow_i(ts%VI0, cap)
             call grow_i(ts%VI1, cap)
+            call grow_i(ts%VFRAME, cap)
             call grow_r(ts%VW, cap)
             call grow_r(ts%VH, cap)
             call grow_r(ts%VD, cap)
@@ -2616,6 +2677,7 @@ contains
         ts%VP(ts%NV) = 0
         ts%VI0(ts%NV) = 1
         ts%VI1(ts%NV) = 0
+        ts%VFRAME(ts%NV) = 0
         ts%VW(ts%NV) = 0.0_dp
         ts%VH(ts%NV) = 0.0_dp
         ts%VD(ts%NV) = 0.0_dp

@@ -8,16 +8,18 @@
 ! that a case can ask whether a word came out italic.
 module test_markdown
     use fplotlib_style, only: dp
-    use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
+    use fplotlib_render, only: renderer_t, glyphrun_t, paint_t, clip_t
+    use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
     use fplotlib_markdown, only: md_document_t, md_typeset, md_typeset_files, md_meta, &
                                  md_directive_cb, md_directive_t, md_ctx_t, md_body_cb, &
-                                 md_heading_cb, md_heading_t, md_blocks, md_option
+                                 md_heading_cb, md_heading_t, md_blocks, md_option, md_figure_t
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_io, only: write_bytes, read_bytes, dir_name, join_path
     use fplotlib_status, only: status_t, ERROR_IO
-    use fplotlib, only: typeset_file
+    use fplotlib, only: figure, plot, title, close, typeset, typeset_file, &
+                        named_figure, capture_figure
     implicit none
     private
 
@@ -29,6 +31,8 @@ module test_markdown
 
     type, extends(renderer_t) :: text_renderer_t
         integer :: n = 0
+        integer :: n_frames = 0, frame_depth = 0
+        real(dp) :: last_mat(6) = 0.0_dp
         real(dp), allocatable :: x(:), y(:), adv(:)
         integer, allocatable :: cp(:), face(:)
     contains
@@ -40,6 +44,8 @@ module test_markdown
         procedure :: draw_markers_impl => tr_markers
         procedure :: draw_glyphs_impl => tr_glyphs
         procedure :: draw_image_impl => tr_image
+        procedure :: begin_frame_impl => tr_begin_frame
+        procedure :: end_frame_impl => tr_end_frame
     end type text_renderer_t
 
 contains
@@ -67,6 +73,7 @@ contains
         call two_docs_cases(ncase, nfail)
         call bugfix_cases(ncase, nfail)
         call file_cases(ncase, nfail)
+        call figure_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " checks, failures = ", nfail
     end subroutine markdown_check
 
@@ -749,24 +756,31 @@ contains
     ! ("0" + face, " " for a space or line end), the lowest baseline on
     ! any page, the leftmost glyph, and the baselines of the first page;
     ! on_directive and on_heading are the template's, if any.
-    subroutine set_doc(md, text, faces, lowest, leftmost, baselines, on_directive, on_heading)
+    subroutine set_doc(md, text, faces, lowest, leftmost, baselines, on_directive, on_heading, &
+                       figures, nframes, last_mat)
         character(len=*), intent(in) :: md
         character(len=:), allocatable, intent(out) :: text, faces
         real(dp), intent(out), optional :: lowest, leftmost
         real(dp), allocatable, intent(out), optional :: baselines(:)
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
+        integer, intent(out), optional :: nframes
+        real(dp), intent(out), optional :: last_mat(6)
         type(md_document_t) :: doc
 
-        call md_typeset(doc, md, on_directive=on_directive, on_heading=on_heading)
-        call render_doc(doc, text, faces, lowest, leftmost, baselines)
+        call md_typeset(doc, md, on_directive=on_directive, on_heading=on_heading, &
+                        figures=figures)
+        call render_doc(doc, text, faces, lowest, leftmost, baselines, nframes, last_mat)
     end subroutine set_doc
 
-    subroutine render_doc(doc, text, faces, lowest, leftmost, baselines)
+    subroutine render_doc(doc, text, faces, lowest, leftmost, baselines, nframes, last_mat)
         type(md_document_t), intent(in) :: doc
         character(len=:), allocatable, intent(out) :: text, faces
         real(dp), intent(out), optional :: lowest, leftmost
         real(dp), allocatable, intent(out), optional :: baselines(:)
+        integer, intent(out), optional :: nframes
+        real(dp), intent(out), optional :: last_mat(6)
         type(text_renderer_t) :: r
         real(dp) :: w, h
         integer :: p, col
@@ -776,12 +790,16 @@ contains
         faces = ""
         if (present(lowest)) lowest = 0.0_dp
         if (present(leftmost)) leftmost = huge(1.0_dp)
+        if (present(nframes)) nframes = 0
+        if (present(last_mat)) last_mat = 0.0_dp
         do p = 1, ts_page_count(doc%engine)
             call r%open_canvas(w, h)
             call ts_page_draw(doc%engine, r, p)
             call r%close_canvas()
             if (present(lowest) .and. r%n > 0) lowest = max(lowest, maxval(r%y(1:r%n)))
             if (present(leftmost) .and. r%n > 0) leftmost = min(leftmost, minval(r%x(1:r%n)))
+            if (present(nframes)) nframes = nframes + r%n_frames
+            if (present(last_mat) .and. r%n_frames > 0) last_mat = r%last_mat
             if (present(baselines) .and. p == 1) call page_baselines(r, baselines)
             if (p > 1) then
                 text = text//FF
@@ -934,6 +952,9 @@ contains
         integer, intent(in), optional :: bg_rgb(3)
         real(dp), intent(in), optional :: bg_alpha, x0, y0
         self%n = 0
+        self%n_frames = 0
+        self%frame_depth = 0
+        self%last_mat = 0.0_dp
         if (.not. allocated(self%x)) allocate (self%x(0), self%y(0), self%adv(0), self%cp(0), &
                                                self%face(0))
     end subroutine tr_open
@@ -977,6 +998,7 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
         integer :: k, m
+        if (self%frame_depth > 0) return
         if (self%n + run%n > size(self%x)) call grow(self, self%n + run%n)
         do k = 1, run%n
             m = self%n + k
@@ -1021,5 +1043,167 @@ contains
         integer, intent(in) :: rgba(:, :, :)
         type(paint_t), intent(in) :: paint
     end subroutine tr_image
+
+    subroutine tr_begin_frame(self, matrix, clip)
+        class(text_renderer_t), intent(inout) :: self
+        real(dp), intent(in) :: matrix(6)
+        type(clip_t), intent(in) :: clip
+        if (self%frame_depth == 0) then
+            self%n_frames = self%n_frames + 1
+            self%last_mat = matrix
+        end if
+        self%frame_depth = self%frame_depth + 1
+    end subroutine tr_begin_frame
+
+    subroutine tr_end_frame(self)
+        class(text_renderer_t), intent(inout) :: self
+        self%frame_depth = self%frame_depth - 1
+    end subroutine tr_end_frame
+
+    ! Build a simple vector frame of size (w, h) for testing figure layout.
+    subroutine make_test_frame(w, h, frame)
+        real(dp), intent(in) :: w, h
+        type(frame_t), intent(out) :: frame
+        type(recording_renderer_t) :: rec
+        type(paint_t) :: p
+        p%filled = .true.
+        p%fill_rgb = [31, 119, 180]
+        call rec%open_canvas(w, h)
+        call rec%draw_rect(0.0_dp, 0.0_dp, w, h, p)
+        call rec%close_canvas()
+        call rec%take(frame)
+    end subroutine make_test_frame
+
+    subroutine figure_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        type(md_figure_t) :: figs(2), pfigs(1)
+        type(frame_t) :: fr
+        type(status_t) :: st
+        character(len=:), allocatable :: t, f, svg_data
+        real(dp) :: mat(6), avail, fw, fh
+        integer :: nf, u, ios, sz
+        logical :: ex
+
+        figs(1)%name = "box"
+        call make_test_frame(200.0_dp, 100.0_dp, figs(1)%frame)
+        figs(2)%name = "wide"
+        call make_test_frame(600.0_dp, 300.0_dp, figs(2)%frame)
+
+        ! :::{figure} with :width: percentage, :name:, caption, and forward {numref}/{ref}.
+        avail = 595.2756_dp - 144.0_dp
+        call set_doc("See {numref}`fig:box` ({ref}`fig:box`)."//NL//NL// &
+                     ":::{figure} box"//NL// &
+                     ":width: 80%"//NL// &
+                     ":name: fig:box"//NL// &
+                     "A *simple* box."//NL// &
+                     ":::", t, f, figures=figs, nframes=nf, last_mat=mat)
+        call expect("figure numref", t, "See Fig. 1 (A simple box.).", ncase, nfail)
+        call expect("figure caption", t, "Figure 1: A simple box.", ncase, nfail)
+        call face("figure caption bold", t, f, "Figure", FACE_BOLD, ncase, nfail)
+        call face("figure caption italic", t, f, "simple", FACE_ITALIC, ncase, nfail)
+        call near("figure frame count", real(nf, dp), 1.0_dp, ncase, nfail)
+        call near("figure 80% scale", mat(1)*200.0_dp, 0.8_dp*avail, ncase, nfail)
+        call near("figure centered x", mat(5), 72.0_dp + 0.1_dp*avail, ncase, nfail)
+
+        ! :width: in inches with :align: right.
+        call set_doc(":::{figure} box"//NL// &
+                     ":width: 3in"//NL// &
+                     ":align: right"//NL// &
+                     "Right aligned."//NL// &
+                     ":::", t, f, figures=figs, nframes=nf, last_mat=mat)
+        call near("figure 3in width", mat(1)*200.0_dp, 216.0_dp, ncase, nfail)
+        call near("figure right x", mat(5), 72.0_dp + avail - 216.0_dp, ncase, nfail)
+
+        ! :align: left with natural width clamped to avail (600pt > avail).
+        call set_doc(":::{figure} wide"//NL// &
+                     ":align: left"//NL// &
+                     ":::", t, f, figures=figs, nframes=nf, last_mat=mat)
+        call near("figure clamped width", mat(1)*600.0_dp, avail, ncase, nfail)
+        call near("figure left x", mat(5), 72.0_dp, ncase, nfail)
+
+        ! Standalone ![caption](name) with preceding (fig:s)= target.
+        call set_doc("(fig:s)="//NL// &
+                     "![Standalone plot.](box)"//NL//NL// &
+                     "As in {numref}`fig:s` and {numref}`Figure %s <fig:s>`.", &
+                     t, f, figures=figs, nframes=nf, last_mat=mat)
+        call expect("standalone caption", t, "Figure 1: Standalone plot.", ncase, nfail)
+        call expect("standalone numref", t, "As in Fig. 1 and Figure 1.", ncase, nfail)
+        call near("standalone frame count", real(nf, dp), 1.0_dp, ncase, nfail)
+
+        ! Chapter-based figure numbering.
+        call set_doc("---"//NL//"chapters: true"//NL//"---"//NL// &
+                     "# One"//NL//NL//"(fig:a)="//NL//"![First.](box)"//NL//NL// &
+                     "# Two"//NL//NL//"(fig:b)="//NL//"![Second.](box)"//NL//NL// &
+                     "Refs {numref}`fig:a` and {numref}`fig:b`.", &
+                     t, f, figures=figs, nframes=nf)
+        call expect("chapter fig refs", t, "Refs Fig. 1.1 and Fig. 2.1.", ncase, nfail)
+        call near("chapter frame count", real(nf, dp), 2.0_dp, ncase, nfail)
+
+        ! Unknown figure warns gracefully without crashing.
+        call set_doc("![Missing.](no_such_fig)", t, f, figures=figs, nframes=nf)
+        call expect("unknown fig caption", t, "Figure 1: Missing.", ncase, nfail)
+        call near("unknown fig frames", real(nf, dp), 0.0_dp, ncase, nfail)
+
+        ! Indented figure (inside blockquote) and invalid negative :width: falls back to natural.
+        call set_doc("> :::{figure} box"//NL// &
+                     "> :width: -1in"//NL// &
+                     "> :align: left"//NL// &
+                     "> Quoted."//NL// &
+                     "> :::", t, f, figures=figs, nframes=nf, last_mat=mat)
+        call expect("quoted fig caption", t, "Figure 1: Quoted.", ncase, nfail)
+        call near("quoted fig natural width", mat(1)*200.0_dp, 200.0_dp, ncase, nfail)
+        call near("quoted fig left x", mat(5), 72.0_dp + 25.0_dp, ncase, nfail)
+
+        ! End-to-end fplotlib capture_figure + named_figure + typeset PDF/SVG.
+        call figure()
+        call plot([0.0_dp, 1.0_dp, 2.0_dp], [0.0_dp, 1.0_dp, 0.0_dp])
+        call title("Triangle")
+        call capture_figure(fr)
+        call fr%metrics(fw, fh)
+        ncase = ncase + 1
+        if (fw <= 0.0_dp .or. fh <= 0.0_dp) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown capture_figure metrics"
+        end if
+        call named_figure(pfigs(1), "tri")
+        call close()
+
+        call typeset([character(len=80) :: &
+                      "# Report", "", "See {numref}`fig:tri`.", "", &
+                      ":::{figure} tri", ":width: 75%", ":name: fig:tri", &
+                      "Vector triangle plot.", ":::"], &
+                     "/tmp/fplotlib_test_fig.pdf", figures=pfigs, status=st)
+        ncase = ncase + 1
+        inquire (file="/tmp/fplotlib_test_fig.pdf", exist=ex, size=sz)
+        if (.not. st%ok() .or. .not. ex .or. sz <= 0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown typeset PDF with figure"
+        end if
+
+        call typeset([character(len=80) :: &
+                      "![Vector triangle.](tri)"], &
+                     "/tmp/fplotlib_test_fig.svg", figures=pfigs, status=st)
+        ncase = ncase + 1
+        inquire (file="/tmp/fplotlib_test_fig.svg", exist=ex, size=sz)
+        if (.not. st%ok() .or. .not. ex .or. sz <= 0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown typeset SVG with figure"
+        else
+            allocate (character(len=sz) :: svg_data)
+            svg_data(1:sz) = " "
+            open (newunit=u, file="/tmp/fplotlib_test_fig.svg", access="stream", &
+                  form="unformatted", status="old", iostat=ios)
+            if (ios == 0) then
+                read (u, iostat=ios) svg_data
+                close (u)
+            end if
+            call expect("svg vector path", svg_data, "<path", ncase, nfail)
+        end if
+
+        open (newunit=u, file="/tmp/fplotlib_test_fig.pdf", status="old", iostat=ios)
+        if (ios == 0) close (u, status="delete")
+        open (newunit=u, file="/tmp/fplotlib_test_fig.svg", status="old", iostat=ios)
+        if (ios == 0) close (u, status="delete")
+    end subroutine figure_cases
 
 end module test_markdown
