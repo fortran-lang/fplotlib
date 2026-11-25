@@ -24,11 +24,13 @@ module fplotlib_markdown
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
     use fplotlib_typeset
+    use fplotlib_io, only: read_bytes, join_path
+    use fplotlib_status, only: status_t
     use, intrinsic :: iso_fortran_env, only: error_unit
     implicit none
     private
 
-    public :: md_typeset, md_document_t, md_ctx_t, md_directive_t, md_heading_t
+    public :: md_typeset, md_typeset_files, md_document_t, md_ctx_t, md_directive_t, md_heading_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
@@ -115,6 +117,7 @@ module fplotlib_markdown
         integer :: NPEND = 0
         type(pending_t), allocatable :: PENDING(:)
         integer :: REF_DEPTH = 0
+        character(len=:), allocatable :: BASE_DIR
     end type md_document_t
 
     ! Template callbacks given to md_typeset. Callbacks receive the
@@ -154,15 +157,45 @@ contains
     ! The document is set twice (see FIRST_PASS), so the callbacks are
     ! called twice, and only the second pass's pages are kept. A callback
     ! may set a nested md_document_t without affecting doc.
-    recursive subroutine md_typeset(doc, text, on_directive, on_body, on_heading)
+    recursive subroutine md_typeset(doc, text, on_directive, on_body, on_heading, base_dir)
         type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        character(len=*), intent(in), optional :: base_dir
+        character(len=:), allocatable :: texts(:), dirs(:), bdir
+
+        allocate (character(len=len(text) + 1) :: texts(1))
+        texts(1) = text//NL
+        if (present(base_dir)) then
+            bdir = trim(base_dir)
+        else
+            bdir = ""
+        end if
+        allocate (character(len=max(1, len(bdir))) :: dirs(1))
+        if (len(bdir) > 0) then
+            dirs(1) = bdir
+        else
+            dirs(1) = " "
+        end if
+        call md_typeset_files(doc, texts, dirs, on_directive=on_directive, &
+                              on_body=on_body, on_heading=on_heading)
+    end subroutine md_typeset
+
+    ! Set one or more MyST Markdown sources as a single document. Front
+    ! matter is read from the first source; labels and cross-references
+    ! resolve across all sources; each source keeps its own base directory
+    ! in dirs for relative paths (such as :::{literalinclude}).
+    recursive subroutine md_typeset_files(doc, texts, dirs, on_directive, on_body, on_heading)
+        type(md_document_t), intent(inout) :: doc
+        character(len=*), intent(in) :: texts(:), dirs(:)
+        procedure(md_directive_cb), optional :: on_directive
+        procedure(md_body_cb), optional :: on_body
+        procedure(md_heading_cb), optional :: on_heading
         type(line_t), allocatable :: lines(:)
         type(md_ctx_t) :: ctx
-        integer :: n, first, pass
+        integer :: nfiles, f, n, first, pass
 
         doc%CB_DIR => null()
         doc%CB_BODY => null()
@@ -171,14 +204,21 @@ contains
         if (present(on_body)) doc%CB_BODY => on_body
         if (present(on_heading)) doc%CB_HEAD => on_heading
 
-        call split_lines(text, lines, n)
+        nfiles = size(texts)
         doc%NLAB = 0
         do pass = 1, 2
             doc%FIRST_PASS = pass == 1
             call ts_reset(doc%engine)
             call defaults(doc)
             first = 1
-            call front_matter(doc, lines, n, first)
+            n = 0
+            if (nfiles >= 1) then
+                if (size(dirs) >= 1) doc%BASE_DIR = trim(dirs(1))
+                call split_lines(texts(1), lines, n)
+                call front_matter(doc, lines, n, first)
+            else
+                doc%PARINDENT = 1.5_dp*doc%BASE
+            end if
             call ts_set_font(doc%engine, doc%BASE, doc%LEAD*doc%BASE)
             call ts_set_parskip(doc%engine, doc%PARSKIP_G)
             call ts_set_colors(doc%engine, doc%TEXT_COL, doc%PAGE_COL)
@@ -195,17 +235,30 @@ contains
             doc%REF_DEPTH = 0
             call title_block(doc, ctx)
             if (associated(doc%CB_BODY)) call doc%CB_BODY(doc, .false., ctx)
-            if (first <= n) call blocks(doc, lines(first:n), n - first + 1, ctx)
+            do f = 1, nfiles
+                if (f <= size(dirs)) then
+                    doc%BASE_DIR = trim(dirs(f))
+                else
+                    doc%BASE_DIR = ""
+                end if
+                if (f == 1) then
+                    if (first <= n) call blocks(doc, lines(first:n), n - first + 1, ctx)
+                else
+                    call split_lines(texts(f), lines, n)
+                    if (n > 0) call blocks(doc, lines(1:n), n, ctx)
+                end if
+            end do
             call place_targets(doc)
             if (associated(doc%CB_BODY)) call doc%CB_BODY(doc, .true., ctx)
         end do
         doc%FIRST_PASS = .false.
+        doc%BASE_DIR = ""
         call ts_paginate(doc%engine)
 
         doc%CB_DIR => null()
         doc%CB_BODY => null()
         doc%CB_HEAD => null()
-    end subroutine md_typeset
+    end subroutine md_typeset_files
 
     recursive subroutine defaults(doc)
         type(md_document_t), intent(inout) :: doc
@@ -227,6 +280,7 @@ contains
         doc%NMETA = 0
         doc%NOINDENT = .false.
         doc%NPEND = 0
+        doc%BASE_DIR = ""
         call ts_set_page(doc%engine, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
     end subroutine defaults
 
@@ -1449,12 +1503,154 @@ contains
         directive%body = body
         handled = .false.
         if (associated(doc%CB_DIR)) call doc%CB_DIR(doc, directive, ctx, handled)
+        if (.not. handled .and. name == "literalinclude") then
+            call set_literalinclude(doc, directive, ctx)
+            handled = .true.
+        end if
         if (.not. handled) then
             if (len(name) > 0) call warn(doc, "unhandled directive '"//name//"'")
             if (j - 1 >= content_at) &
                 call blocks(doc, L(content_at:j - 1), j - content_at, ctx)
         end if
     end subroutine set_div
+
+    ! Built-in :::{literalinclude} path directive. Resolves path relative
+    ! to doc%BASE_DIR, supports :lines: ranges and :language:, and sets
+    ! the selected lines as a code block.
+    recursive subroutine set_literalinclude(doc, directive, ctx)
+        type(md_document_t), intent(inout) :: doc
+        type(md_directive_t), intent(in) :: directive
+        type(md_ctx_t), intent(in) :: ctx
+        character(len=:), allocatable :: arg, path, raw, lines_opt
+        type(line_t), allocatable :: all_lines(:), sel_lines(:)
+        type(status_t) :: st
+        integer :: nall, nsel
+
+        arg = trim(directive%arg)
+        if (len(arg) == 0) then
+            call warn(doc, "literalinclude requires a file path")
+            return
+        end if
+        path = join_path(doc%BASE_DIR, arg)
+        call read_bytes(path, raw, st)
+        if (.not. st%ok()) then
+            call warn(doc, "literalinclude: "//trim(st%message))
+            return
+        end if
+        call split_lines(raw, all_lines, nall)
+        lines_opt = md_option(directive%opts, "lines")
+        if (len(lines_opt) == 0) then
+            if (nall > 0) call code_block(doc, all_lines, nall, ctx)
+        else
+            call select_literal_lines(doc, all_lines, nall, lines_opt, sel_lines, nsel)
+            if (nsel > 0) call code_block(doc, sel_lines, nsel, ctx)
+        end if
+    end subroutine set_literalinclude
+
+    ! Select 1-based inclusive line ranges from spec (e.g. "1-10", "5-",
+    ! "-10", "1-3, 7-9", "4").
+    recursive subroutine select_literal_lines(doc, all_lines, nall, spec, sel, nsel)
+        type(md_document_t), intent(in) :: doc
+        type(line_t), intent(in) :: all_lines(:)
+        integer, intent(in) :: nall
+        character(len=*), intent(in) :: spec
+        type(line_t), allocatable, intent(out) :: sel(:)
+        integer, intent(out) :: nsel
+        integer, allocatable :: lo(:), hi(:)
+        character(len=:), allocatable :: tok, left, right
+        integer :: nparts, nr, i, j, dash, a, b, r, k, m
+        logical :: ok1, ok2
+
+        nparts = 1
+        do i = 1, len(spec)
+            if (spec(i:i) == ",") nparts = nparts + 1
+        end do
+        allocate (lo(nparts), hi(nparts))
+        nr = 0
+        i = 1
+        do while (i <= len(spec))
+            j = index(spec(i:), ",")
+            if (j == 0) then
+                tok = trim(adjustl(spec(i:)))
+                i = len(spec) + 1
+            else
+                tok = trim(adjustl(spec(i:i + j - 2)))
+                i = i + j
+            end if
+            if (len(tok) == 0) cycle
+            dash = index(tok, "-")
+            if (dash == 0) then
+                a = parse_pos_int(tok, ok1)
+                if (.not. ok1) then
+                    call warn(doc, "literalinclude: invalid :lines: '"//trim(spec)//"'")
+                    cycle
+                end if
+                nr = nr + 1
+                lo(nr) = a
+                hi(nr) = a
+            else
+                left = trim(adjustl(tok(1:dash - 1)))
+                right = trim(adjustl(tok(dash + 1:)))
+                if (len(left) == 0 .and. len(right) == 0) then
+                    call warn(doc, "literalinclude: invalid :lines: '"//trim(spec)//"'")
+                    cycle
+                end if
+                if (len(left) == 0) then
+                    a = 1
+                    ok1 = .true.
+                else
+                    a = parse_pos_int(left, ok1)
+                end if
+                if (len(right) == 0) then
+                    b = nall
+                    ok2 = .true.
+                else
+                    b = parse_pos_int(right, ok2)
+                end if
+                if (.not. ok1 .or. .not. ok2) then
+                    call warn(doc, "literalinclude: invalid :lines: '"//trim(spec)//"'")
+                    cycle
+                end if
+                if (len(right) > 0 .and. a > b) then
+                    call warn(doc, "literalinclude: invalid :lines: '"//trim(spec)//"'")
+                    cycle
+                end if
+                nr = nr + 1
+                lo(nr) = a
+                hi(nr) = b
+            end if
+        end do
+
+        nsel = 0
+        do r = 1, nr
+            hi(r) = min(hi(r), nall)
+            if (lo(r) <= hi(r)) nsel = nsel + (hi(r) - lo(r) + 1)
+        end do
+        allocate (sel(nsel))
+        k = 0
+        do r = 1, nr
+            if (lo(r) > hi(r)) cycle
+            do m = lo(r), hi(r)
+                k = k + 1
+                sel(k)%s = all_lines(m)%s
+            end do
+        end do
+    end subroutine select_literal_lines
+
+    recursive integer function parse_pos_int(s, ok)
+        character(len=*), intent(in) :: s
+        logical, intent(out) :: ok
+        integer :: k, d
+        parse_pos_int = 0
+        ok = .false.
+        if (len(s) == 0 .or. len(s) > 9) return
+        do k = 1, len(s)
+            d = iachar(s(k:k)) - iachar("0")
+            if (d < 0 .or. d > 9) return
+            parse_pos_int = parse_pos_int*10 + d
+        end do
+        ok = parse_pos_int >= 1
+    end function parse_pos_int
 
     ! --- Template helpers -------------------------------------------------
 
@@ -2355,7 +2551,7 @@ contains
     ! Small things.
     ! ------------------------------------------------------------------
 
-    subroutine split_lines(text, lines, n)
+    recursive subroutine split_lines(text, lines, n)
         character(len=*), intent(in) :: text
         type(line_t), allocatable, intent(out) :: lines(:)
         integer, intent(out) :: n
@@ -2391,7 +2587,7 @@ contains
     end subroutine split_lines
 
     ! Tabs, to the next tab stop of four columns, as CommonMark has them.
-    subroutine detab(s)
+    recursive subroutine detab(s)
         character(len=:), allocatable, intent(inout) :: s
         character(len=:), allocatable :: t
         integer :: k, col, c

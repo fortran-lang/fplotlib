@@ -22,11 +22,11 @@ module fplotlib
     use fplotlib_artist
     use fplotlib_draw
     use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
-    use fplotlib_io, only: file_ext, write_bytes
+    use fplotlib_io, only: file_ext, write_bytes, read_bytes, dir_name
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-    use fplotlib_markdown, only: md_typeset, md_document_t, md_directive_cb, md_body_cb, &
-                                 md_heading_cb
+    use fplotlib_markdown, only: md_typeset, md_typeset_files, md_document_t, md_directive_cb, &
+                                 md_body_cb, md_heading_cb
     use fplotlib_typeset, only: typeset_context_t, ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
@@ -85,7 +85,7 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
-    public :: typeset
+    public :: typeset, typeset_file
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -239,6 +239,14 @@ module fplotlib
     interface typeset
         module procedure typeset_text, typeset_lines
     end interface typeset
+
+    interface typeset_file
+        module procedure typeset_file_one, typeset_file_many
+    end interface typeset_file
+
+    type :: text_buf_t
+        character(len=:), allocatable :: s
+    end type text_buf_t
 
     interface subplots
         module procedure subplots_grid, subplots_row, subplots_one
@@ -7567,21 +7575,99 @@ contains
                           on_directive=on_directive, on_body=on_body, on_heading=on_heading)
     end subroutine typeset_lines
 
+    ! Read a single Markdown file and typeset it, resolving relative paths
+    ! (such as :::{literalinclude}) against the file's directory.
+    recursive subroutine typeset_file_one(md_file, filename, dpi, status, on_directive, &
+                                          on_body, on_heading)
+        character(len=*), intent(in) :: md_file, filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        procedure(md_directive_cb), optional :: on_directive
+        procedure(md_body_cb), optional :: on_body
+        procedure(md_heading_cb), optional :: on_heading
+        character(len=:), allocatable :: raw
+        type(md_document_t) :: doc
+        type(status_t) :: local
+
+        call check_typeset_args(filename, dpi, "typeset_file")
+        call read_bytes(md_file, raw, local)
+        if (.not. local%ok()) then
+            call fail_run("typeset_file", local%code, trim(local%message), status)
+            return
+        end if
+        call md_typeset(doc, raw, on_directive=on_directive, on_body=on_body, &
+                        on_heading=on_heading, base_dir=dir_name(md_file))
+        call write_pages(doc%engine, filename, dpi, status, "typeset_file")
+    end subroutine typeset_file_one
+
+    ! Read several Markdown files and typeset them as one document: YAML
+    ! front matter comes from the first file, labels and cross-references
+    ! resolve across all files, and each file keeps its own base directory.
+    recursive subroutine typeset_file_many(md_files, filename, dpi, status, on_directive, &
+                                           on_body, on_heading)
+        character(len=*), intent(in) :: md_files(:), filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        procedure(md_directive_cb), optional :: on_directive
+        procedure(md_body_cb), optional :: on_body
+        procedure(md_heading_cb), optional :: on_heading
+        type(text_buf_t), allocatable :: raws(:), dir_bufs(:)
+        character(len=:), allocatable :: texts(:), dirs(:)
+        type(md_document_t) :: doc
+        type(status_t) :: local
+        integer :: n, k, max_t, max_d
+
+        call check_typeset_args(filename, dpi, "typeset_file")
+        n = size(md_files)
+        if (n == 0) then
+            call md_typeset(doc, "", on_directive=on_directive, on_body=on_body, &
+                            on_heading=on_heading)
+            call write_pages(doc%engine, filename, dpi, status, "typeset_file")
+            return
+        end if
+        allocate (raws(n), dir_bufs(n))
+        max_t = 1
+        max_d = 1
+        do k = 1, n
+            call read_bytes(md_files(k), raws(k)%s, local)
+            if (.not. local%ok()) then
+                call fail_run("typeset_file", local%code, trim(local%message), status)
+                return
+            end if
+            dir_bufs(k)%s = dir_name(md_files(k))
+            max_t = max(max_t, len(raws(k)%s) + 1)
+            max_d = max(max_d, len(dir_bufs(k)%s))
+        end do
+        allocate (character(len=max_t) :: texts(n))
+        allocate (character(len=max_d) :: dirs(n))
+        do k = 1, n
+            texts(k) = raws(k)%s//new_line("a")
+            dirs(k) = dir_bufs(k)%s
+        end do
+        call md_typeset_files(doc, texts, dirs, on_directive=on_directive, &
+                              on_body=on_body, on_heading=on_heading)
+        call write_pages(doc%engine, filename, dpi, status, "typeset_file")
+    end subroutine typeset_file_many
+
     ! The pages set last, each recorded into a frame of the paper's size
     ! and colour, written as a paged document. A document with no pages
     ! is written as one blank page.
-    recursive subroutine write_pages(ts, filename, dpi, status)
+    recursive subroutine write_pages(ts, filename, dpi, status, caller)
         type(typeset_context_t), intent(in) :: ts
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
+        character(len=*), intent(in), optional :: caller
         type(paged_document_t) :: document
         type(recording_renderer_t) :: recorder
         type(frame_t) :: page
         type(status_t) :: local
+        character(len=:), allocatable :: who
         real(dp) :: w, h, res
         integer :: p, col, bg(3)
 
+        who = "typeset"
+        if (present(caller)) who = caller
         res = 150.0_dp
         if (present(dpi)) res = dpi
         call ts_page_size(ts, w, h, col)
@@ -7595,7 +7681,7 @@ contains
         end do
         call save_document(document, filename, local, res)
         if (.not. local%ok()) then
-            call fail_run("typeset", local%code, trim(local%message), status)
+            call fail_run(who, local%code, trim(local%message), status)
         else if (present(status)) then
             status = local
         end if
@@ -7603,19 +7689,23 @@ contains
 
     ! The file's format and the resolution, checked before the document is
     ! set: a broken one is the caller's bug, found without the work.
-    subroutine check_typeset_args(filename, dpi)
+    subroutine check_typeset_args(filename, dpi, caller)
         character(len=*), intent(in) :: filename
         real(dp), intent(in), optional :: dpi
+        character(len=*), intent(in), optional :: caller
+        character(len=:), allocatable :: who
 
+        who = "typeset"
+        if (present(caller)) who = caller
         select case (file_ext(filename))
         case ("svg", "pdf", "eps", "png")
         case default
-            call contract_error("typeset: supported formats are .svg, .pdf, .eps and .png, not ." &
+            call contract_error(who//": supported formats are .svg, .pdf, .eps and .png, not ." &
                                 //file_ext(filename))
         end select
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
-                call contract_error("typeset: dpi must be finite and positive")
+                call contract_error(who//": dpi must be finite and positive")
         end if
     end subroutine check_typeset_args
 

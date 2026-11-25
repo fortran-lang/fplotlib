@@ -11,10 +11,13 @@ module test_markdown
     use fplotlib_render, only: renderer_t, glyphrun_t, paint_t
     use fplotlib_glyphs, only: glyph_char, glyph_face, glyph_adv, face_xheight, FACE_REGULAR, &
                                FACE_BOLD, FACE_ITALIC
-    use fplotlib_markdown, only: md_document_t, md_typeset, md_meta, md_directive_cb, &
-                                 md_directive_t, md_ctx_t, md_body_cb, md_heading_cb, &
-                                 md_heading_t, md_blocks, md_option
+    use fplotlib_markdown, only: md_document_t, md_typeset, md_typeset_files, md_meta, &
+                                 md_directive_cb, md_directive_t, md_ctx_t, md_body_cb, &
+                                 md_heading_cb, md_heading_t, md_blocks, md_option
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size
+    use fplotlib_io, only: write_bytes, read_bytes, dir_name, join_path
+    use fplotlib_status, only: status_t, ERROR_IO
+    use fplotlib, only: typeset_file
     implicit none
     private
 
@@ -63,6 +66,7 @@ contains
         call nesting_cases(ncase, nfail)
         call two_docs_cases(ncase, nfail)
         call bugfix_cases(ncase, nfail)
+        call file_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " checks, failures = ", nfail
     end subroutine markdown_check
 
@@ -574,6 +578,168 @@ contains
         call md_blocks(doc, "**"//d%arg//"** ["//md_option(d%opts, "class")//"]"//NL//NL// &
                        d%body, ctx)
     end subroutine admonition
+
+    ! Files, multi-file typesetting, path helpers, and :::{literalinclude}.
+    subroutine file_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f, raw, pdf
+        character(len=256) :: texts(2), dirs(2)
+        character(len=64) :: files(2)
+        type(md_document_t) :: doc
+        type(status_t) :: st
+        logical :: is_pdf
+
+        ! Path helpers: dir_name and join_path.
+        call expect_eq("dir_name plain", dir_name("foo.md"), "", ncase, nfail)
+        call expect_eq("dir_name sub", dir_name("a/b/c.md"), "a/b", ncase, nfail)
+        call expect_eq("dir_name root", dir_name("/c.md"), "/", ncase, nfail)
+        call expect_eq("dir_name backslash", dir_name("a"//achar(92)//"b.md"), "a", ncase, nfail)
+        call expect_eq("dir_name drive", dir_name("C:"//achar(92)//"foo.md"), &
+                       "C:"//achar(92), ncase, nfail)
+        call expect_eq("join_path empty dir", join_path("", "code.f90"), "code.f90", ncase, nfail)
+        call expect_eq("join_path rel", join_path("a/b", "code.f90"), "a/b/code.f90", ncase, nfail)
+        call expect_eq("join_path slash", join_path("a/b/", "c.f90"), "a/b/c.f90", ncase, nfail)
+        call expect_eq("join_path abs", join_path("a/b", "/x/c.f90"), "/x/c.f90", ncase, nfail)
+        call expect_eq("join_path drive", join_path("a/b", "C:"//achar(92)//"x.f90"), &
+                       "C:"//achar(92)//"x.f90", ncase, nfail)
+
+        ! Create test fixtures in subdirectories under tests/out.
+        call execute_command_line("mkdir -p tests/out/md_file_test/sub/code")
+        call write_bytes("tests/out/md_file_test/sub/code/sample.f90", &
+                         "line_one"//NL//"line_two"//NL//"line_three"//NL// &
+                         "line_four"//NL//"line_five"//NL, st)
+        call write_bytes("tests/out/md_file_test/sub/code/local.txt", &
+                         "from_code_dir"//NL, st)
+        call write_bytes("tests/out/md_file_test/sub/code/empty.txt", "", st)
+
+        ! read_bytes round-trip, empty file, and missing file error.
+        call read_bytes("tests/out/md_file_test/sub/code/local.txt", raw, st)
+        call expect_true("read_bytes ok", st%ok(), ncase, nfail)
+        call expect_eq("read_bytes data", raw, "from_code_dir"//NL, ncase, nfail)
+        call read_bytes("tests/out/md_file_test/sub/code/empty.txt", raw, st)
+        call expect_true("read_bytes empty ok", st%ok() .and. len(raw) == 0, ncase, nfail)
+        call read_bytes("tests/out/md_file_test/no_such_file.md", raw, st)
+        call expect_true("read_bytes missing", .not. st%ok() .and. st%code == ERROR_IO, &
+                         ncase, nfail)
+
+        ! :::{literalinclude} relative path resolution, :lines:, :language:.
+        call md_typeset(doc, "Before."//NL//NL// &
+                        ":::{literalinclude} code/sample.f90"//NL// &
+                        ":language: fortran"//NL// &
+                        ":lines: 2-4"//NL// &
+                        ":::"//NL//NL//"After.", &
+                        base_dir="tests/out/md_file_test/sub")
+        call render_doc(doc, t, f)
+        call expect("literalinclude 2-4 has 2", t, "line_two", ncase, nfail)
+        call expect("literalinclude 2-4 has 3", t, "line_three", ncase, nfail)
+        call expect("literalinclude 2-4 has 4", t, "line_four", ncase, nfail)
+        call reject("literalinclude 2-4 no 1", t, "line_one", ncase, nfail)
+        call reject("literalinclude 2-4 no 5", t, "line_five", ncase, nfail)
+
+        ! Multiple ranges and open-ended ranges.
+        call md_typeset(doc, ":::{literalinclude} code/sample.f90"//NL// &
+                        ":lines: 1-2, 4-5"//NL//":::", &
+                        base_dir="tests/out/md_file_test/sub")
+        call render_doc(doc, t, f)
+        call expect("literalinclude multi has 1", t, "line_one", ncase, nfail)
+        call expect("literalinclude multi has 2", t, "line_two", ncase, nfail)
+        call reject("literalinclude multi no 3", t, "line_three", ncase, nfail)
+        call expect("literalinclude multi has 4", t, "line_four", ncase, nfail)
+        call expect("literalinclude multi has 5", t, "line_five", ncase, nfail)
+
+        call md_typeset(doc, ":::{literalinclude} code/sample.f90"//NL// &
+                        ":lines: -2, 5-"//NL//":::", &
+                        base_dir="tests/out/md_file_test/sub")
+        call render_doc(doc, t, f)
+        call expect("literalinclude open has 1", t, "line_one", ncase, nfail)
+        call expect("literalinclude open has 2", t, "line_two", ncase, nfail)
+        call reject("literalinclude open no 3", t, "line_three", ncase, nfail)
+        call expect("literalinclude open has 5", t, "line_five", ncase, nfail)
+
+        ! Missing literalinclude file and invalid/out-of-bounds :lines: continue cleanly.
+        call md_typeset(doc, "Start."//NL//NL// &
+                        ":::{literalinclude} does_not_exist.f90"//NL//":::"//NL//NL// &
+                        ":::{literalinclude} code/sample.f90"//NL// &
+                        ":lines: 5-3, 0, abc, -, 99-"//NL//":::"//NL//NL// &
+                        ":::{literalinclude} code/sample.f90"//NL// &
+                        ":lines: 4-999"//NL//":::"//NL//NL// &
+                        "Still here.", base_dir="tests/out/md_file_test/sub")
+        call render_doc(doc, t, f)
+        call expect("literalinclude clamped 4", t, "line_four", ncase, nfail)
+        call expect("literalinclude clamped 5", t, "line_five", ncase, nfail)
+        call reject("literalinclude clamped no 3", t, "line_three", ncase, nfail)
+        call expect("literalinclude missing continues", t, "Still here.", ncase, nfail)
+
+        ! md_typeset_files with 0 files succeeds cleanly.
+        call md_typeset_files(doc, texts(1:0), dirs(1:0))
+        call render_doc(doc, t, f)
+        call expect_eq("multi zero files", t, "", ncase, nfail)
+
+        ! md_typeset_files: front matter from file 1, cross-references across
+        ! files, and per-file base directories for :::{literalinclude}.
+        texts(1) = "---"//NL//"title: Multi Doc"//NL//"numbersections: true"//NL//"---"//NL// &
+                   "(sec:one)="//NL//"# First"//NL//NL// &
+                   "See {numref}`sec:two` and {eq}`eq:two`."//NL//NL// &
+                   ":::{literalinclude} code/sample.f90"//NL//":lines: 3"//NL//":::"//NL
+        texts(2) = "(sec:two)="//NL//"# Second"//NL//NL// &
+                   "Back to {numref}`sec:one`."//NL// &
+                   "$$ a = b $$ (eq:two)"//NL//NL// &
+                   ":::{literalinclude} local.txt"//NL//":::"//NL
+        dirs(1) = "tests/out/md_file_test/sub"
+        dirs(2) = "tests/out/md_file_test/sub/code"
+        call md_typeset_files(doc, texts, dirs)
+        call render_doc(doc, t, f)
+        call expect("multi title", t, "Multi Doc", ncase, nfail)
+        call expect("multi fwd ref", t, "See Section 2 and (1).", ncase, nfail)
+        call expect("multi back ref", t, "Back to Section 1.", ncase, nfail)
+        call expect("multi dir 1 include", t, "line_three", ncase, nfail)
+        call expect("multi dir 2 include", t, "from_code_dir", ncase, nfail)
+
+        ! typeset_file public API: single file, multiple files, missing file.
+        call write_bytes("tests/out/md_file_test/sub/ch1.md", trim(texts(1)), st)
+        call write_bytes("tests/out/md_file_test/sub/code/ch2.md", trim(texts(2)), st)
+
+        call typeset_file("tests/out/md_file_test/sub/ch1.md", &
+                          "tests/out/md_file_test/one.pdf", status=st)
+        call expect_true("typeset_file one ok", st%ok(), ncase, nfail)
+        call read_bytes("tests/out/md_file_test/one.pdf", pdf, st)
+        is_pdf = .false.
+        if (st%ok() .and. len(pdf) >= 5) is_pdf = pdf(1:5) == "%PDF-"
+        call expect_true("typeset_file one pdf", is_pdf, ncase, nfail)
+
+        files(1) = "tests/out/md_file_test/sub/ch1.md"
+        files(2) = "tests/out/md_file_test/sub/code/ch2.md"
+        call typeset_file(files, "tests/out/md_file_test/many.pdf", status=st)
+        call expect_true("typeset_file many ok", st%ok(), ncase, nfail)
+        call read_bytes("tests/out/md_file_test/many.pdf", pdf, st)
+        is_pdf = .false.
+        if (st%ok() .and. len(pdf) >= 5) is_pdf = pdf(1:5) == "%PDF-"
+        call expect_true("typeset_file many pdf", is_pdf, ncase, nfail)
+
+        call typeset_file("tests/out/md_file_test/missing.md", &
+                          "tests/out/md_file_test/none.pdf", status=st)
+        call expect_true("typeset_file missing err", .not. st%ok() .and. st%code == ERROR_IO, &
+                         ncase, nfail)
+    end subroutine file_cases
+
+    subroutine expect_eq(what, got, want, ncase, nfail)
+        character(len=*), intent(in) :: what, got, want
+        integer, intent(inout) :: ncase, nfail
+        ncase = ncase + 1
+        if (got == want) return
+        nfail = nfail + 1
+        print "(a)", "  FAIL markdown "//what//": got '"//got//"', want '"//want//"'"
+    end subroutine expect_eq
+
+    subroutine expect_true(what, cond, ncase, nfail)
+        character(len=*), intent(in) :: what
+        logical, intent(in) :: cond
+        integer, intent(inout) :: ncase, nfail
+        ncase = ncase + 1
+        if (cond) return
+        nfail = nfail + 1
+        print "(a)", "  FAIL markdown "//what
+    end subroutine expect_true
 
     ! ------------------------------------------------------------------
     ! Setting a document and reading it back.

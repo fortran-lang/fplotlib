@@ -19,6 +19,11 @@ name = "demo"
 source-dir = "examples"
 main = "demo.f90"
 
+[[executable]]
+name = "typeset"
+source-dir = "app"
+main = "typeset.f90"
+
 [[test]]
 name = "test_plots"
 source-dir = "tests"

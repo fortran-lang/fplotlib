@@ -254,6 +254,25 @@ call typeset([character(len=80) :: &
     "and {eq}`eq:einstein` is the best known formula of physics."], "notes.pdf")
 ```
 
+`typeset_file` reads Markdown from one file or an array of files (front matter
+from the first, labels and cross-references resolved across all of them):
+
+```fortran
+call typeset_file("chapter1.md", "chapter1.pdf")
+call typeset_file([character(len=32) :: "ch1.md", "ch2.md"], "book.pdf")
+```
+
+The bundled CLI runs `typeset_file` from the command line:
+
+```bash
+fpm run typeset -- ch1.md ch2.md -o book.pdf
+```
+
+The built-in `:::{literalinclude} path` directive includes a source file as a
+code block, resolving relative paths against the Markdown file's directory,
+with optional `:lines:` (e.g. `1-10`, `5-`, `-10`, `1-3, 7-9`) and `:language:`
+options.
+
 The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
 spacing of its article and book classes:
 
