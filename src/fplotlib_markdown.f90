@@ -40,7 +40,8 @@ module fplotlib_markdown
 
     character, parameter :: BS = achar(92), NL = achar(10)
     integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
-    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3, LAB_FIGURE = 4
+    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3, &
+                          LAB_FIGURE = 4, LAB_TABLE = 5
 
     type :: line_t
         character(len=:), allocatable :: s
@@ -116,7 +117,7 @@ module fplotlib_markdown
         integer :: TEXT_COL = 0, PAGE_COL = 16777215
         integer :: NMETA = 0
         type(meta_t), allocatable :: META(:)
-        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0, FIGNO = 0
+        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0, FIGNO = 0, TABNO = 0
         integer :: NLAB = 0
         type(label_t), allocatable :: LABS(:)
         integer :: NFIG = 0
@@ -262,6 +263,7 @@ contains
             doc%CHAPTER = 0
             doc%EQNO = 0
             doc%FIGNO = 0
+            doc%TABNO = 0
             doc%TARGETS = ""
             doc%AFTER_HEADING = .false.
             ctx = md_ctx_t()
@@ -392,6 +394,8 @@ contains
             doc%SEC = 0
             doc%CHAPTER = 0
             doc%EQNO = 0
+            doc%FIGNO = 0
+            doc%TABNO = 0
             doc%TARGETS = ""
             doc%AFTER_HEADING = .false.
             ctx = md_ctx_t()
@@ -979,6 +983,15 @@ contains
             else if (is_figure_line(t, fig_cap, fig_name)) then
                 call set_figure(doc, fig_name, fig_cap, "", "", "", ctx)
                 i = i + 1
+            else if (i < n .and. is_table_start(s, L(min(i + 1, n))%s)) then
+                j = i + 2
+                do while (j <= n)
+                    if (len_trim(L(j)%s) == 0) exit
+                    if (index(L(j)%s, "|") == 0) exit
+                    j = j + 1
+                end do
+                call set_table(doc, L(i:j - 1), j - i, "", "", "", ctx)
+                i = j
             else if (t(1:1) == ">") then
                 j = i + 1
                 do while (j <= n)
@@ -1014,10 +1027,16 @@ contains
                     if (j > i) then
                         if (.not. in_disp) then
                             if (interrupts(L(j)%s)) exit
+                            if (j < n) then
+                                if (is_table_start(L(j)%s, L(j + 1)%s)) exit
+                            end if
                             if (j == i + 1 .and. (is_underline(t, "=") .or. &
                                                   is_underline(t, "-"))) exit
                         else if (.not. has_display_close(L, j, n)) then
                             if (interrupts(L(j)%s)) exit
+                            if (j < n) then
+                                if (is_table_start(L(j)%s, L(j + 1)%s)) exit
+                            end if
                             if (j == i + 1 .and. (is_underline(t, "=") .or. &
                                                   is_underline(t, "-"))) exit
                         end if
@@ -1259,6 +1278,7 @@ contains
             doc%SEC = 0
             doc%EQNO = 0
             doc%FIGNO = 0
+            doc%TABNO = 0
             if (doc%NUMBER_SECTIONS) num = itoa(doc%CHAPTER)
         else
             if (doc%CHAPTERS) lv = level - 1
@@ -1682,16 +1702,24 @@ contains
         directive%arg = arg
         directive%opts = opts
         directive%body = body
-        if (name /= "figure") call other_block(doc)
+        if (name /= "figure" .and. name /= "table") call other_block(doc)
         handled = .false.
         if (associated(doc%CB_DIR)) call doc%CB_DIR(doc, directive, ctx, handled)
         if (handled) then
-            if (name == "figure") call other_block(doc)
+            if (name == "figure" .or. name == "table") call other_block(doc)
         else if (name == "literalinclude") then
             call set_literalinclude(doc, directive, ctx)
         else if (name == "figure") then
             call set_figure(doc, arg, body, md_option(opts, "width"), &
                             md_option(opts, "align"), md_option(opts, "name"), ctx)
+        else if (name == "table") then
+            if (j - 1 >= content_at) then
+                call set_table_directive(doc, arg, L(content_at:j - 1), j - content_at, &
+                                         md_option(opts, "align"), md_option(opts, "name"), ctx)
+            else
+                call warn(doc, "table directive has no pipe table")
+                call other_block(doc)
+            end if
         else
             if (len(name) > 0) call warn(doc, "unhandled directive '"//name//"'")
             if (j - 1 >= content_at) &
@@ -1972,6 +2000,447 @@ contains
             end if
         end if
     end function figure_width
+
+    ! Built-in :::{table} Caption directive wrapping a pipe table.
+    recursive subroutine set_table_directive(doc, caption, L, n, align_opt, label_opt, ctx)
+        type(md_document_t), intent(inout) :: doc
+        character(len=*), intent(in) :: caption, align_opt, label_opt
+        type(line_t), intent(in) :: L(:)
+        integer, intent(in) :: n
+        type(md_ctx_t), intent(in) :: ctx
+        integer :: i, j
+
+        i = 1
+        do while (i <= n)
+            if (len_trim(L(i)%s) > 0) exit
+            i = i + 1
+        end do
+        if (i + 1 > n) then
+            call warn(doc, "table directive has no pipe table")
+            call other_block(doc)
+            return
+        end if
+        if (.not. is_table_start(L(i)%s, L(i + 1)%s)) then
+            call warn(doc, "table directive body is not a pipe table")
+            call other_block(doc)
+            return
+        end if
+        j = i + 2
+        do while (j <= n)
+            if (len_trim(L(j)%s) == 0) exit
+            if (index(L(j)%s, "|") == 0) exit
+            j = j + 1
+        end do
+        call set_table(doc, L(i:j - 1), j - i, caption, align_opt, label_opt, ctx)
+    end subroutine set_table_directive
+
+    ! Render a Markdown pipe table in booktabs style into a frame_t, place
+    ! it with ts_frame, and attach an optional caption below it.
+    recursive subroutine set_table(doc, L, nlines, caption, align_opt, label_opt, ctx)
+        type(md_document_t), intent(inout) :: doc
+        type(line_t), intent(in) :: L(:)
+        integer, intent(in) :: nlines
+        character(len=*), intent(in) :: caption, align_opt, label_opt
+        type(md_ctx_t), intent(in) :: ctx
+        character(len=:), allocatable :: cap, num, al_str
+        type(line_t), allocatable :: row_cells(:), grid(:, :)
+        integer, allocatable :: col_align(:), cell_handles(:, :)
+        real(dp), allocatable :: col_w(:), col_x(:), cell_w(:, :), cell_h(:, :), row_h(:)
+        type(frame_t) :: cell_scene, cf, tab_frame
+        type(recording_renderer_t) :: rec
+        type(paint_t) :: rule_paint
+        type(clip_t) :: no_clip
+        type(style_t) :: st
+        real(dp) :: avail, fsz, outer_pad, col_gap, total_w, total_h, budget, scale_f
+        real(dp) :: top_rule, mid_rule, bot_rule, hdr_pt, hdr_pb, row_pt, row_pb, last_pb
+        real(dp) :: y_cur, dx, cw, ch
+        integer :: ncols, nrows, nc, r, c, al, ci
+        logical :: ok, wrapped
+
+        cap = trim(adjustl(caption))
+        doc%TABNO = doc%TABNO + 1
+        if (doc%CHAPTERS) then
+            num = itoa(doc%CHAPTER)//"."//itoa(doc%TABNO)
+        else
+            num = itoa(doc%TABNO)
+        end if
+        call place_targets(doc, num, cap, LAB_TABLE)
+        if (len_trim(label_opt) > 0) &
+            call add_label(doc, trim(adjustl(label_opt)), num, cap, LAB_TABLE)
+
+        al = ALIGN_CENTER
+        al_str = lower(trim(adjustl(align_opt)))
+        if (len(al_str) > 0) then
+            ci = align_of(al_str, -1)
+            if (ci < 0) then
+                call warn(doc, "cannot read the alignment '"//trim(adjustl(align_opt))//"'")
+            else
+                al = ci
+            end if
+        end if
+
+        ok = is_table_sep(L(2)%s, col_align, ncols)
+        if (.not. ok .or. ncols <= 0) then
+            doc%AFTER_HEADING = .false.
+            return
+        end if
+
+        nrows = nlines - 1
+        allocate (grid(nrows, ncols))
+        do r = 1, nrows
+            if (r == 1) then
+                call split_table_row(L(1)%s, row_cells, nc)
+            else
+                call split_table_row(L(r + 1)%s, row_cells, nc)
+            end if
+            do c = 1, ncols
+                if (c <= nc) then
+                    grid(r, c)%s = row_cells(c)%s
+                else
+                    grid(r, c)%s = ""
+                end if
+            end do
+        end do
+
+        call ts_end_par(doc%engine)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 4.0_dp, 0, 0)))
+
+        if (.not. doc%FIRST_PASS) then
+            fsz = 0.9_dp*ctx%size
+            avail = max(20.0_dp, ts_hsize(doc%engine) - ctx%left - ctx%right)
+            call cell_scene%init(0.0_dp, 0.0_dp)
+            allocate (cell_handles(nrows, ncols), cell_w(nrows, ncols), cell_h(nrows, ncols))
+            allocate (col_w(ncols), col_x(ncols), row_h(nrows))
+            col_w = 0.0_dp
+
+            do r = 1, nrows
+                do c = 1, ncols
+                    call typeset_cell(doc, grid(r, c)%s, 10000.0_dp, fsz, r == 1, &
+                                      ctx%color, ALIGN_LEFT, cf, cw, ch)
+                    call cell_scene%import_frame(cf, cell_handles(r, c))
+                    cell_w(r, c) = cw
+                    cell_h(r, c) = ch
+                    if (cw > col_w(c)) col_w(c) = cw
+                end do
+            end do
+            do c = 1, ncols
+                col_w(c) = max(col_w(c), 0.5_dp*fsz)
+            end do
+
+            outer_pad = 0.6_dp*fsz
+            col_gap = 1.4_dp*fsz
+            total_w = sum(col_w) + 2.0_dp*outer_pad + real(max(0, ncols - 1), dp)*col_gap
+            wrapped = .false.
+            if (total_w > avail) then
+                wrapped = .true.
+                outer_pad = 0.4_dp*fsz
+                col_gap = 1.0_dp*fsz
+                budget = max(real(ncols, dp)*12.0_dp, &
+                             avail - 2.0_dp*outer_pad - real(max(0, ncols - 1), dp)*col_gap)
+                scale_f = budget/max(1.0_dp, sum(col_w))
+                do c = 1, ncols
+                    col_w(c) = max(12.0_dp, col_w(c)*scale_f)
+                end do
+                call cell_scene%init(0.0_dp, 0.0_dp)
+                do r = 1, nrows
+                    do c = 1, ncols
+                        call typeset_cell(doc, grid(r, c)%s, col_w(c), fsz, r == 1, &
+                                          ctx%color, col_align(c), cf, cw, ch)
+                        call cell_scene%import_frame(cf, cell_handles(r, c))
+                        cell_w(r, c) = cw
+                        cell_h(r, c) = ch
+                    end do
+                end do
+                total_w = sum(col_w) + 2.0_dp*outer_pad + real(max(0, ncols - 1), dp)*col_gap
+            end if
+
+            col_x(1) = outer_pad
+            do c = 2, ncols
+                col_x(c) = col_x(c - 1) + col_w(c - 1) + col_gap
+            end do
+
+            do r = 1, nrows
+                row_h(r) = fsz
+                do c = 1, ncols
+                    if (cell_h(r, c) > row_h(r)) row_h(r) = cell_h(r, c)
+                end do
+            end do
+
+            top_rule = 0.8_dp
+            mid_rule = 0.4_dp
+            bot_rule = 0.8_dp
+            hdr_pt = 4.5_dp
+            hdr_pb = 4.5_dp
+            row_pt = 3.2_dp
+            row_pb = 3.2_dp
+            last_pb = 4.5_dp
+
+            total_h = top_rule + hdr_pt + row_h(1) + hdr_pb + mid_rule
+            do r = 2, nrows
+                if (r == nrows) then
+                    total_h = total_h + row_pt + row_h(r) + last_pb
+                else
+                    total_h = total_h + row_pt + row_h(r) + row_pb
+                end if
+            end do
+            total_h = total_h + bot_rule
+
+            rule_paint%filled = .true.
+            rule_paint%fill_rgb = [ctx%color/65536, mod(ctx%color/256, 256), mod(ctx%color, 256)]
+
+            call rec%open_canvas(total_w, total_h)
+            call rec%draw_rect(0.0_dp, 0.0_dp, total_w, top_rule, rule_paint)
+
+            y_cur = top_rule + hdr_pt
+            do r = 1, nrows
+                if (r == 2) then
+                    call rec%draw_rect(0.0_dp, y_cur, total_w, mid_rule, rule_paint)
+                    y_cur = y_cur + mid_rule + row_pt
+                end if
+                do c = 1, ncols
+                    if (wrapped) then
+                        dx = col_x(c)
+                    else if (col_align(c) == ALIGN_CENTER) then
+                        dx = col_x(c) + 0.5_dp*(col_w(c) - cell_w(r, c))
+                    else if (col_align(c) == ALIGN_RIGHT) then
+                        dx = col_x(c) + col_w(c) - cell_w(r, c)
+                    else
+                        dx = col_x(c)
+                    end if
+                    call rec%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, dx, y_cur], no_clip)
+                    call cell_scene%draw(rec, handle=cell_handles(r, c))
+                    call rec%end_frame()
+                end do
+                if (r == 1) then
+                    y_cur = y_cur + row_h(1) + hdr_pb
+                    if (nrows == 1) then
+                        call rec%draw_rect(0.0_dp, y_cur, total_w, mid_rule, rule_paint)
+                        y_cur = y_cur + mid_rule
+                    end if
+                else if (r == nrows) then
+                    y_cur = y_cur + row_h(r) + last_pb
+                else
+                    y_cur = y_cur + row_h(r) + row_pb + row_pt
+                end if
+            end do
+            call rec%draw_rect(0.0_dp, total_h - bot_rule, total_w, bot_rule, rule_paint)
+            call rec%close_canvas()
+            call rec%take(tab_frame)
+
+            call ts_frame(doc%engine, tab_frame, align=al, left=ctx%left, right=ctx%right)
+        end if
+
+        if (len(cap) > 0) then
+            call ts_penalty(doc%engine, 10000)
+            call ts_vskip(doc%engine, scale(doc, ts_glue_t(6.0_dp, 1.0_dp, 1.0_dp, 0, 0)))
+            st = base_style(ctx)
+            st%size = 0.9_dp*doc%BASE
+            call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, &
+                              right=ctx%right, size=st%size, leading=doc%LEAD*st%size, &
+                              skip=.false.)
+            call ts_word(doc%engine, "Table", FACE_BOLD, st%size, st%color)
+            call ts_nbsp(doc%engine, FACE_BOLD, st%size)
+            call ts_word(doc%engine, num//":", FACE_BOLD, st%size, st%color)
+            call ts_space(doc%engine, FACE_REGULAR, st%size)
+            call inline(doc, cap, st)
+            call ts_end_par(doc%engine)
+        end if
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 4.0_dp, 0, 0)))
+        doc%AFTER_HEADING = .false.
+    end subroutine set_table
+
+    ! Typeset a single table cell into a frame_t of exact height and measured ink width.
+    recursive subroutine typeset_cell(parent, text, width, fsz, bold, col, align, &
+                                      frame, ink_w, box_h)
+        type(md_document_t), intent(in) :: parent
+        character(len=*), intent(in) :: text
+        real(dp), intent(in) :: width, fsz
+        logical, intent(in) :: bold
+        integer, intent(in) :: col, align
+        type(frame_t), intent(out) :: frame
+        real(dp), intent(out) :: ink_w, box_h
+        type(md_document_t) :: sub
+        type(style_t) :: st
+        type(recording_renderer_t) :: rec
+        type(clip_t) :: no_clip
+        real(dp) :: w_use, top_gap, b(4)
+        logical :: has_ink
+
+        w_use = max(1.0_dp, width)
+        call ts_reset(sub%engine)
+        call defaults(sub)
+        sub%BASE = fsz
+        sub%LEAD = 1.2_dp
+        sub%PARINDENT = 0.0_dp
+        sub%DOC_ALIGN = align
+        sub%TEXT_COL = col
+        sub%FIRST_PASS = .false.
+        if (parent%NLAB > 0 .and. allocated(parent%LABS)) then
+            sub%NLAB = parent%NLAB
+            allocate (sub%LABS(parent%NLAB))
+            sub%LABS(1:parent%NLAB) = parent%LABS(1:parent%NLAB)
+        end if
+        call ts_set_page(sub%engine, w_use, 100000.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, &
+                         numbers=.false., headings_=.false., flush=.false.)
+        call ts_set_font(sub%engine, fsz, 1.2_dp*fsz)
+        call ts_set_colors(sub%engine, col, 16777215)
+
+        st%size = fsz
+        st%color = col
+        st%bold = bold
+        st%italic = .false.
+        st%code = .false.
+
+        call ts_begin_par(sub%engine, align, 0.0_dp, size=fsz, leading=1.2_dp*fsz, skip=.false.)
+        call ts_strut(sub%engine, 0.75_dp*fsz, 0.25_dp*fsz)
+        if (len_trim(text) > 0) call inline(sub, trim(text), st)
+        call ts_end_par(sub%engine)
+        call ts_paginate(sub%engine)
+
+        box_h = max(fsz, ts_box_height(sub%engine, 1, top_gap))
+        call rec%open_canvas(w_use, box_h)
+        if (ts_page_count(sub%engine) >= 1) then
+            call rec%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, -top_gap], no_clip)
+            call ts_page_draw(sub%engine, rec, 1)
+            call rec%end_frame()
+        end if
+        call rec%close_canvas()
+        call rec%take(frame)
+
+        call frame%ink_bounds(b, has_ink)
+        if (has_ink) then
+            ink_w = max(0.0_dp, b(3))
+        else
+            ink_w = 0.0_dp
+        end if
+    end subroutine typeset_cell
+
+    ! Whether line1 and line2 begin a Markdown pipe table (header + separator).
+    recursive logical function is_table_start(line1, line2)
+        character(len=*), intent(in) :: line1, line2
+        integer, allocatable :: aligns(:)
+        integer :: nc
+        is_table_start = .false.
+        if (index(line1, "|") == 0) return
+        if (index(line2, "|") == 0) return
+        is_table_start = is_table_sep(line2, aligns, nc)
+    end function is_table_start
+
+    ! Parse a Markdown table separator row like `| --- | :--- | :---: | ---: |`.
+    recursive logical function is_table_sep(s, aligns, ncols)
+        character(len=*), intent(in) :: s
+        integer, allocatable, intent(out) :: aligns(:)
+        integer, intent(out) :: ncols
+        type(line_t), allocatable :: cells(:)
+        character(len=:), allocatable :: c
+        integer :: k, a, b, j
+        logical :: lcol, rcol
+
+        is_table_sep = .false.
+        ncols = 0
+        if (index(s, "|") == 0 .or. index(s, "-") == 0) return
+        call split_table_row(s, cells, ncols)
+        if (ncols <= 0) return
+        allocate (aligns(ncols))
+        do k = 1, ncols
+            c = trim(adjustl(cells(k)%s))
+            if (len(c) == 0) return
+            a = 1
+            b = len(c)
+            lcol = .false.
+            rcol = .false.
+            if (c(a:a) == ":") then
+                lcol = .true.
+                a = a + 1
+            end if
+            if (b >= a) then
+                if (c(b:b) == ":") then
+                    rcol = .true.
+                    b = b - 1
+                end if
+            end if
+            if (a > b) return
+            do j = a, b
+                if (c(j:j) /= "-") return
+            end do
+            if (lcol .and. rcol) then
+                aligns(k) = ALIGN_CENTER
+            else if (rcol) then
+                aligns(k) = ALIGN_RIGHT
+            else
+                aligns(k) = ALIGN_LEFT
+            end if
+        end do
+        is_table_sep = .true.
+    end function is_table_sep
+
+    ! Split a pipe-table row into trimmed cells, handling optional outer pipes
+    ! and escaped `\|`.
+    recursive subroutine split_table_row(s, cells, ncells)
+        character(len=*), intent(in) :: s
+        type(line_t), allocatable, intent(out) :: cells(:)
+        integer, intent(out) :: ncells
+        character(len=:), allocatable :: t, buf
+        type(line_t), allocatable :: grown(:)
+        integer :: a, b, i, cap, nlen
+
+        t = trim(adjustl(s))
+        a = 1
+        b = len(t)
+        if (a <= b) then
+            if (t(a:a) == "|") a = a + 1
+        end if
+        if (a <= b) then
+            if (t(b:b) == "|") then
+                if (b == 1) then
+                    b = b - 1
+                else if (t(b - 1:b - 1) /= BS) then
+                    b = b - 1
+                end if
+            end if
+        end if
+
+        cap = 8
+        allocate (cells(cap))
+        ncells = 0
+        if (a > b) return
+
+        allocate (character(len=max(16, b - a + 1)) :: buf)
+        nlen = 0
+        i = a
+        do while (i <= b)
+            if (t(i:i) == BS .and. i < b) then
+                if (t(i + 1:i + 1) == "|") then
+                    nlen = nlen + 1
+                    buf(nlen:nlen) = "|"
+                    i = i + 2
+                    cycle
+                end if
+            end if
+            if (t(i:i) == "|") then
+                if (ncells == cap) then
+                    allocate (grown(2*cap))
+                    grown(1:ncells) = cells(1:ncells)
+                    call move_alloc(grown, cells)
+                    cap = 2*cap
+                end if
+                ncells = ncells + 1
+                cells(ncells)%s = trim(adjustl(buf(1:nlen)))
+                nlen = 0
+            else
+                nlen = nlen + 1
+                buf(nlen:nlen) = t(i:i)
+            end if
+            i = i + 1
+        end do
+        if (ncells == cap) then
+            allocate (grown(2*cap))
+            grown(1:ncells) = cells(1:ncells)
+            call move_alloc(grown, cells)
+        end if
+        ncells = ncells + 1
+        cells(ncells)%s = trim(adjustl(buf(1:nlen)))
+    end subroutine split_table_row
 
     ! --- Template helpers -------------------------------------------------
 
@@ -2659,6 +3128,8 @@ contains
                         if (doc%LABS(r)%kind == LAB_EQUATION) title = "(%s)"
                         if (doc%LABS(r)%kind == LAB_FIGURE) &
                             title = "Fig."//achar(194)//achar(160)//"%s"
+                        if (doc%LABS(r)%kind == LAB_TABLE) &
+                            title = "Table"//achar(194)//achar(160)//"%s"
                     end if
                     s = replace(replace(replace(title, "%s", doc%LABS(r)%num), "{number}", &
                                         doc%LABS(r)%num), "{name}", doc%LABS(r)%title)

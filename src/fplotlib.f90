@@ -30,6 +30,7 @@ module fplotlib
     use fplotlib_typeset, only: typeset_context_t, ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
+    use fplotlib_report, only: report_t, document_asset_t
     implicit none
     private
 
@@ -86,6 +87,8 @@ module fplotlib
     public :: axes, subplots, sca
     public :: style_use, rc
     public :: typeset, typeset_file, frame_t, md_figure_t, capture_figure, named_figure
+    public :: report_t, document_asset_t, new_report, markdown, include_figure, &
+              include_table, save, render_report
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -244,6 +247,17 @@ module fplotlib
     interface typeset_file
         module procedure typeset_file_one, typeset_file_many
     end interface typeset_file
+
+    ! Immediate-mode report builder (thin facade over report_t).
+    interface markdown
+        module procedure markdown_text, markdown_lines
+    end interface markdown
+
+    interface include_table
+        module procedure include_table_char, include_table_real, include_table_int
+    end interface include_table
+
+    type(report_t), save :: current_report
 
     type :: text_buf_t
         character(len=:), allocatable :: s
@@ -7802,6 +7816,82 @@ contains
                               on_body=on_body, on_heading=on_heading, figures=figures)
         call write_pages(doc%engine, filename, dpi, status, "typeset_file")
     end subroutine typeset_file_many
+
+    ! ------------------------------------------------------------------
+    ! Immediate-mode reports: thin procedural facade over current_report.
+    ! ------------------------------------------------------------------
+
+    subroutine new_report()
+        call current_report%clear()
+    end subroutine new_report
+
+    subroutine markdown_text(text)
+        character(len=*), intent(in) :: text
+        call current_report%markdown(text)
+    end subroutine markdown_text
+
+    subroutine markdown_lines(lines)
+        character(len=*), intent(in) :: lines(:)
+        call current_report%markdown(lines)
+    end subroutine markdown_lines
+
+    subroutine include_figure(caption, label, width, align, facecolor, transparent, &
+                              bbox_inches, pad_inches)
+        character(len=*), intent(in), optional :: caption, label, width, align
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+        type(frame_t) :: frame
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_pad_arg("include_figure", "pad_inches", pad_inches)
+
+        call render_frame(frame, facecolor, transparent, bbox_inches, pad_inches)
+        call current_report%include_frame(frame, caption=caption, label=label, &
+                                          width=width, align=align)
+    end subroutine include_figure
+
+    subroutine include_table_char(cells, columns, caption, label, align)
+        character(len=*), intent(in) :: cells(:, :)
+        character(len=*), intent(in), optional :: columns(:)
+        character(len=*), intent(in), optional :: caption, label
+        character(len=*), intent(in), optional :: align(:)
+        call current_report%include_table(cells, columns=columns, caption=caption, &
+                                          label=label, align=align)
+    end subroutine include_table_char
+
+    subroutine include_table_real(values, columns, caption, label, fmt, align)
+        real(dp), intent(in) :: values(:, :)
+        character(len=*), intent(in), optional :: columns(:)
+        character(len=*), intent(in), optional :: caption, label, fmt
+        character(len=*), intent(in), optional :: align(:)
+        call current_report%include_table(values, columns=columns, caption=caption, &
+                                          label=label, fmt=fmt, align=align)
+    end subroutine include_table_real
+
+    subroutine include_table_int(values, columns, caption, label, align)
+        integer, intent(in) :: values(:, :)
+        character(len=*), intent(in), optional :: columns(:)
+        character(len=*), intent(in), optional :: caption, label
+        character(len=*), intent(in), optional :: align(:)
+        call current_report%include_table(values, columns=columns, caption=caption, &
+                                          label=label, align=align)
+    end subroutine include_table_int
+
+    subroutine save(filename, dpi, status)
+        character(len=*), intent(in) :: filename
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        call current_report%save(filename, dpi=dpi, status=status)
+    end subroutine save
+
+    subroutine render_report(format, assets, dpi, status)
+        character(len=*), intent(in) :: format
+        type(document_asset_t), allocatable, intent(out) :: assets(:)
+        real(dp), intent(in), optional :: dpi
+        type(status_t), intent(out), optional :: status
+        call current_report%export(format, assets, dpi=dpi, status=status)
+    end subroutine render_report
 
     ! The pages set last, each recorded into a frame of the paper's size
     ! and colour, written as a paged document. A document with no pages
