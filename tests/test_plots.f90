@@ -1,7 +1,7 @@
 program test_plots
     use fplotlib
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
-    use test_mathref, only: math_ref_check, delim_ref_check, face_check
+    use test_mathref, only: math_ref_check, delim_ref_check, face_check, mathtext_edge_check
     use test_missing, only: missing_data_check
     use test_contract, only: contract_case, contract_check
     use test_glyph_runs, only: glyph_runs_check
@@ -11,7 +11,7 @@ program test_plots
     use test_typeset, only: para_ref_check
     use test_markdown, only: markdown_check
     implicit none
-    integer :: fig1, nmath, ndelim, nface, nmissing, ncontract, npara
+    integer :: fig1, nmath, ndelim, nface, nedge, nmissing, ncontract, npara
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
@@ -1606,6 +1606,7 @@ program test_plots
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
     call face_check(nface)
+    call mathtext_edge_check(nedge)
     ! NaN and infinite values in every plot type; see test_missing.f90.
     call missing_data_check(nmissing)
     ! Broken preconditions stop with the rule they broke.
@@ -1628,6 +1629,7 @@ program test_plots
     if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
+    if (nedge > 0) error stop "mathtext edge cases failed"
     if (nmissing > 0) error stop "missing data reached the output"
     if (ncontract > 0) error stop "a broken precondition did not stop as expected"
     if (nglyph > 0) error stop "glyph runs failed"

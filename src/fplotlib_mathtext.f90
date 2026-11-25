@@ -623,7 +623,7 @@ contains
         ! got: what a parse returns, kept before it is stored, as the
         ! parse may move the arrays it is stored into.
         integer :: head, tail, cur, i, j, k, code, nb, sl, n, code2, got
-        integer :: num, infix, cls, lv, sup_head
+        integer :: num, infix, cls, lv, sup_head, rem
         character(len=24) :: name
         character :: last
 
@@ -667,8 +667,8 @@ contains
                 end if
                 i = j + 1
             case ("'")
-                ! Primes are a superscript: one, two, three or four of them
-                ! as the single character Unicode has for each.
+                ! Primes are a superscript, decomposed into the available
+                ! prime glyphs (U+2034, U+2033, U+2032) so any run renders.
                 n = 0
                 do while (i + n <= len(s))
                     if (s(i + n:i + n) /= "'") exit
@@ -678,19 +678,26 @@ contains
                     cur = new_noad(state, K_ATOM, CL_ORD)
                     call append(state, head, tail, cur)
                 end if
-                select case (min(n, 4))
-                case (1); code = 8242
-                case (2); code = 8243
-                case (3); code = 8244
-                case default; code = 8279
-                end select
-                k = char_noad(state, code, ALPH_RM, CL_ORD)
                 if (state%noads(cur)%sup >= 0 .and. .not. state%noads(cur)%primed) then
                     cur = new_noad(state, K_ATOM, CL_ORD)
                     call append(state, head, tail, cur)
                 end if
                 sup_head = state%noads(cur)%sup
-                call append_list(state, sup_head, k)
+                rem = n
+                do while (rem > 0)
+                    if (rem >= 3) then
+                        code = 8244
+                        rem = rem - 3
+                    else if (rem == 2) then
+                        code = 8243
+                        rem = rem - 2
+                    else
+                        code = 8242
+                        rem = rem - 1
+                    end if
+                    k = char_noad(state, code, ALPH_RM, CL_ORD)
+                    call append_list(state, sup_head, k)
+                end do
                 state%noads(cur)%sup = sup_head
                 state%noads(cur)%primed = .true.
                 i = i + n
@@ -1463,7 +1470,11 @@ contains
             q = q + 1
         end do
         if (q > len(s)) then
-            k = char_noad(state, max(code, iachar(".")), ALPH_RM, CL_OPEN)
+            if (code > 0) then
+                k = char_noad(state, code, ALPH_RM, CL_OPEN)
+            else
+                k = new_noad(state, K_ATOM, CL_OPEN)
+            end if
             j = p
             return
         end if
@@ -2100,15 +2111,30 @@ contains
                     cls_r(k) = CL_CLOSE
                 end if
             case (K_MID)
-                ! Spaced as a closing on its left and an opening on its
-                ! right, as e-TeX spaces \middle.
-                cls_l(k) = CL_CLOSE
-                cls_r(k) = CL_OPEN
                 if (state%lr_target >= 0.0_dp) then
+                    ! Spaced as a closing on its left and an opening on its
+                    ! right, as e-TeX spaces \middle.
+                    cls_l(k) = CL_CLOSE
+                    cls_r(k) = CL_OPEN
                     call make_delim(state, state%noads(q)%cp, state%lr_target, cur, size, &
                                     bx(k), state%lr_full)
-                else
+                else if (state%lr_target < -1.5_dp) then
+                    ! Measuring pass of \left...\right: \middle does not
+                    ! contribute to the enclosed height.
+                    cls_l(k) = CL_CLOSE
+                    cls_r(k) = CL_OPEN
                     bx(k) = empty_box(state)
+                else
+                    ! \middle outside \left...\right: draw at normal size,
+                    ! spaced as a relation like \mid.
+                    cls_l(k) = CL_REL
+                    cls_r(k) = CL_REL
+                    if (state%noads(q)%cp > 0) then
+                        call glyph_box(state, script_glyph(math_gid(state%noads(q)%cp, &
+                                       FACE_MATH), cur), sz, bx(k))
+                    else
+                        bx(k) = empty_box(state)
+                    end if
                 end if
             case (K_BIG)
                 call make_big(state, q, cur, size, bx(k))
@@ -2843,7 +2869,7 @@ contains
                 sz = style_size(cur, size)
                 i0 = state%ni
                 save = state%lr_target
-                state%lr_target = -1.0_dp
+                state%lr_target = -2.0_dp
                 call mlist_box(state, state%noads(q)%a, cur, cramped, size, inner)
                 state%lr_target = save
                 state%ni = i0
@@ -2910,7 +2936,7 @@ contains
         i0 = state%ni + 1
         save = state%lr_target
         save_full = state%lr_full
-        state%lr_target = -1.0_dp
+        state%lr_target = -2.0_dp
         call mlist_box(state, state%noads(q)%a, style, cramped, size, inner)
         state%ni = i0 - 1
         a = math_const(MC_AXIS_HEIGHT)*sz

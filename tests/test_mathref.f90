@@ -16,11 +16,11 @@ module test_mathref
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t, math_context_t
     use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked, &
-                               glyph_adv, FACE_BOLD, FACE_MATH
+                               glyph_adv, glyph_bbox, FACE_BOLD, FACE_MATH
     implicit none
     private
 
-    public :: math_ref_check, delim_ref_check, face_check
+    public :: math_ref_check, delim_ref_check, face_check, mathtext_edge_check
 
     ! How far, in points, a glyph or rule may sit from XeTeX's.
     real(dp), parameter :: TOL = 0.02_dp
@@ -290,6 +290,143 @@ contains
             nfail = 1
         end if
     end subroutine face_check
+
+    ! Regression checks for mathtext edge cases (#73, #74, #75).
+    subroutine mathtext_edge_check(nfail)
+        integer, intent(out) :: nfail
+        character, parameter :: BS = achar(92)
+        type(glyphrun_t) :: run, run2
+        type(mrules_t) :: rules, rules2
+        real(dp) :: w, w2, wp(6), x0, y0, x1, y1, h_plain, h_scaled
+        integer :: k, np, nbar, c, nbar_scaled
+        logical :: has_dot, has_open
+
+        nfail = 0
+
+        ! #73: unmatched \left. draws nothing, not a literal period.
+        run%n = 0; rules%n = 0
+        call math_layout("$"//BS//"left. "//BS//"frac{a}{b}$", SIZE, run, rules, w)
+        run2%n = 0; rules2%n = 0
+        call math_layout("$"//BS//"frac{a}{b}$", SIZE, run2, rules2, w2)
+        if (run%n /= run2%n) then
+            print "(a,i0,a,i0)", "  #73: unmatched \left. glyph count ", run%n, " /= ", run2%n
+            nfail = nfail + 1
+        else if (run%n > 0) then
+            if (.not. all(run%gid(1:run%n) == run2%gid(1:run2%n))) then
+                print "(a)", "  #73: unmatched \left. glyphs differ from \frac{a}{b}"
+                nfail = nfail + 1
+            end if
+        end if
+
+        ! #73: unmatched \left( still draws the delimiter at normal size.
+        run%n = 0; rules%n = 0
+        call math_layout("$"//BS//"left( "//BS//"frac{a}{b}$", SIZE, run, rules, w)
+        has_open = .false.
+        do k = 1, run%n
+            if (glyph_char(run%gid(k)) == 40) has_open = .true.
+        end do
+        if (.not. has_open) then
+            print "(a)", "  #73: unmatched \left( did not draw '('"
+            nfail = nfail + 1
+        end if
+
+        ! #73: matched \left. ... \right| still works without a period.
+        run%n = 0; rules%n = 0
+        call math_layout("$"//BS//"left. "//BS//"frac{a}{b} "//BS//"right|$", SIZE, &
+                         run, rules, w)
+        has_dot = .false.
+        nbar = 0
+        do k = 1, run%n
+            c = glyph_char(run%gid(k))
+            if (c == 46) has_dot = .true.
+            if (c == 124) nbar = nbar + 1
+        end do
+        if (has_dot .or. nbar == 0) then
+            print "(a)", "  #73: matched \left. ... \right| failed"
+            nfail = nfail + 1
+        end if
+
+        ! #74: 1..6 primes all render visibly with increasing widths.
+        do np = 1, 6
+            run%n = 0; rules%n = 0
+            call math_layout("$f"//repeat("'", np)//"(x)$", SIZE, run, rules, wp(np))
+            nbar = 0
+            do k = 1, run%n
+                c = glyph_char(run%gid(k))
+                if (c == 8242) then
+                    if (glyph_inked(run%gid(k))) nbar = nbar + 1
+                else if (c == 8243) then
+                    if (glyph_inked(run%gid(k))) nbar = nbar + 2
+                else if (c == 8244) then
+                    if (glyph_inked(run%gid(k))) nbar = nbar + 3
+                end if
+            end do
+            if (nbar /= np) then
+                print "(a,i0,a,i0)", "  #74: expected ", np, " primes, got ", nbar
+                nfail = nfail + 1
+            end if
+        end do
+        do np = 2, 6
+            if (wp(np) <= wp(np - 1)) then
+                print "(a,i0,a,f0.3,a,f0.3)", "  #74: width did not increase for ", np, &
+                    " primes: ", wp(np), " <= ", wp(np - 1)
+                nfail = nfail + 1
+            end if
+        end do
+
+        ! #75: \middle outside \left...\right draws its delimiter spaced as CL_REL.
+        run%n = 0; rules%n = 0
+        call math_layout("$a "//BS//"middle| b$", SIZE, run, rules, w)
+        run2%n = 0; rules2%n = 0
+        call math_layout("$ab$", SIZE, run2, rules2, w2)
+        nbar = 0
+        h_plain = 0.0_dp
+        do k = 1, run%n
+            if (glyph_char(run%gid(k)) == 124) then
+                nbar = nbar + 1
+                call glyph_bbox(run%gid(k), x0, y0, x1, y1)
+                h_plain = max(h_plain, (y1 - y0)*run%size(k))
+            end if
+        end do
+        if (nbar /= 1 .or. w <= w2) then
+            print "(a,i0,a,f0.3,a,f0.3)", "  #75: standalone \middle| failed: bars=", nbar, &
+                ", w=", w, ", w_ab=", w2
+            nfail = nfail + 1
+        end if
+
+        ! #75: standalone \middle. (null delimiter) draws nothing.
+        run%n = 0; rules%n = 0
+        call math_layout("$a "//BS//"middle. b$", SIZE, run, rules, w)
+        has_dot = .false.
+        do k = 1, run%n
+            if (glyph_char(run%gid(k)) == 46) has_dot = .true.
+        end do
+        if (has_dot .or. run%n /= 2) then
+            print "(a,i0)", "  #75: standalone \middle. drew unexpected glyphs: ", run%n
+            nfail = nfail + 1
+        end if
+
+        ! #75: \middle| inside \left...\right still scales to enclosed height.
+        run%n = 0; rules%n = 0
+        call math_layout("$"//BS//"left( "//BS//"frac{a}{b} "//BS//"middle| c "//BS// &
+                         "right)$", SIZE, run, rules, w)
+        nbar_scaled = 0
+        h_scaled = 0.0_dp
+        do k = 1, run%n
+            if (glyph_char(run%gid(k)) == 124) then
+                nbar_scaled = nbar_scaled + 1
+                call glyph_bbox(run%gid(k), x0, y0, x1, y1)
+                h_scaled = max(h_scaled, (y1 - y0)*run%size(k))
+            end if
+        end do
+        if (nbar_scaled == 0 .or. h_scaled <= h_plain) then
+            print "(a,i0,a,f0.3,a,f0.3)", "  #75: scaled \middle| failed: bars=", &
+                nbar_scaled, ", h=", h_scaled, ", h_plain=", h_plain
+            nfail = nfail + 1
+        end if
+
+        print "(a,i0,a)", "mathtext edge cases: ", nfail, " failed"
+    end subroutine mathtext_edge_check
 
     ! Sorts glyphs by x, and those within a hundredth of a point of each
     ! other in x from the top down.
