@@ -278,6 +278,28 @@ code block, resolving relative paths against the Markdown file's directory,
 with optional `:lines:` (e.g. `1-10`, `5-`, `-10`, `1-3, 7-9`) and `:language:`
 options.
 
+Markdown pipe tables (`| A | B |` with `:---`, `:---:`, `---:` column
+alignments) and the `:::{table} Caption` directive are rendered in booktabs
+style and numbered for `{numref}` / `{ref}` cross-references.
+
+For building reports directly inside a Fortran simulation without managing
+intermediate files, use the immediate-mode report API (`markdown`,
+`include_figure`, `include_table`, `save`, `new_report`, `render_report`) or
+an explicit `report_t`:
+
+```fortran
+call new_report()
+call markdown("# Results")
+call plot(x, y)
+call include_figure(caption="Simulation output.", label="fig:out", width="85%")
+call clf()
+call include_table(values, columns=[character(len=4) :: "t", "y(t)"], &
+                   caption="Summary.", label="tab:res")
+call markdown("See {numref}`fig:out` and {numref}`tab:res`.")
+call save("report.pdf")
+call save("report.svg")   ! reuses cached layout
+```
+
 The layout is TeX's (`fplotlib_typeset`), with LaTeX's parameters and the
 spacing of its article and book classes:
 

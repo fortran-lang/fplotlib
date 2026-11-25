@@ -18,8 +18,10 @@ module test_markdown
     use fplotlib_typeset, only: ts_page_count, ts_page_draw, ts_page_size, ts_box_height
     use fplotlib_io, only: write_bytes, read_bytes, dir_name, join_path
     use fplotlib_status, only: status_t, ERROR_IO
-    use fplotlib, only: figure, plot, title, close, typeset, typeset_file, &
-                        named_figure, capture_figure
+    use fplotlib, only: figure, plot, title, clf, close, typeset, typeset_file, &
+                        named_figure, capture_figure, report_t, document_asset_t, &
+                        new_report, markdown, include_figure, include_table, save, &
+                        render_report
     implicit none
     private
 
@@ -32,6 +34,7 @@ module test_markdown
     type, extends(renderer_t) :: text_renderer_t
         integer :: n = 0
         integer :: n_frames = 0, frame_depth = 0
+        logical :: include_frames = .false.
         real(dp) :: last_mat(6) = 0.0_dp
         real(dp), allocatable :: x(:), y(:), adv(:)
         integer, allocatable :: cp(:), face(:)
@@ -75,6 +78,8 @@ contains
         call file_cases(ncase, nfail)
         call figure_cases(ncase, nfail)
         call box_cases(ncase, nfail)
+        call table_cases(ncase, nfail)
+        call report_cases(ncase, nfail)
         print "(a,i0,a,i0)", "markdown: ", ncase, " checks, failures = ", nfail
     end subroutine markdown_check
 
@@ -999,7 +1004,7 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
         integer :: k, m
-        if (self%frame_depth > 0) return
+        if (self%frame_depth > 0 .and. .not. self%include_frames) return
         if (self%n + run%n > size(self%x)) call grow(self, self%n + run%n)
         do k = 1, run%n
             m = self%n + k
@@ -1271,5 +1276,184 @@ contains
             end if
         end block
     end subroutine box_cases
+
+    ! Markdown pipe tables, :::{table}, column alignments, and cross-references.
+    subroutine table_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f, src_txt
+        type(md_document_t) :: d
+        real(dp) :: pw, ph
+        integer :: nf, pcol
+
+        ! Basic pipe table with column alignments and inline markup/math.
+        call set_doc("(tab:data)="//NL// &
+                     "| Name | Value | Note |"//NL// &
+                     "| :--- | :---: | ---: |"//NL// &
+                     "| Alpha | $1.5$ | *ok* |"//NL// &
+                     "| Beta | 2.0 | **done** |"//NL//NL// &
+                     "See {numref}`tab:data`.", t, f, nframes=nf)
+        call expect("pipe table numref", t, "See Table 1.", ncase, nfail)
+        call near("pipe table frame count", real(nf, dp), 1.0_dp, ncase, nfail)
+
+        ! Verify table cell text is actually rendered inside the frame.
+        block
+            type(text_renderer_t) :: tr
+            integer :: k
+            call md_typeset(d, "| Name | Value |"//NL//"| :--- | ---: |"//NL// &
+                            "| Alpha | 1.5 |")
+            call ts_page_size(d%engine, pw, ph, pcol)
+            tr%include_frames = .true.
+            call tr%open_canvas(pw, ph)
+            call ts_page_draw(d%engine, tr, 1)
+            call tr%close_canvas()
+            allocate (character(len=max(1, tr%n)) :: src_txt)
+            src_txt(:) = " "
+            do k = 1, tr%n
+                if (tr%cp(k) >= 32 .and. tr%cp(k) <= 126) src_txt(k:k) = achar(tr%cp(k))
+            end do
+            call expect("pipe table header", src_txt, "Name", ncase, nfail)
+            call expect("pipe table cell", src_txt, "Alpha", ncase, nfail)
+        end block
+
+        ! :::{table} directive with caption, :name:, :align:, {numref}, and {ref}.
+        call set_doc("Forward ref: {numref}`tab:res` ({ref}`tab:res`)."//NL//NL// &
+                     ":::{table} Summary of *results*"//NL// &
+                     ":name: tab:res"//NL// &
+                     ":align: center"//NL// &
+                     "| $t$ | $y(t)$ |"//NL// &
+                     "| ---: | ---: |"//NL// &
+                     "| 0.0 | 1.000 |"//NL// &
+                     "| 2.0 | -0.308 |"//NL// &
+                     ":::", t, f, nframes=nf)
+        call expect("table directive numref", t, "Forward ref: Table 1 (Summary of results).", &
+                    ncase, nfail)
+        call expect("table directive caption", t, "Table 1: Summary of results", ncase, nfail)
+        call face("table caption bold", t, f, "Table 1:", FACE_BOLD, ncase, nfail)
+        call face("table caption italic", t, f, "results", FACE_ITALIC, ncase, nfail)
+        call near("table directive frame count", real(nf, dp), 1.0_dp, ncase, nfail)
+
+        ! Chapter-based table numbering.
+        call set_doc("---"//NL//"chapters: true"//NL//"---"//NL// &
+                     "# First"//NL//NL//"(tab:a)="//NL// &
+                     "| A | B |"//NL//"| --- | --- |"//NL//"| 1 | 2 |"//NL//NL// &
+                     "# Second"//NL//NL//"(tab:b)="//NL// &
+                     "| C | D |"//NL//"| --- | --- |"//NL//"| 3 | 4 |"//NL//NL// &
+                     "Tables {numref}`tab:a` and {numref}`tab:b`.", t, f, nframes=nf)
+        call expect("chapter table refs", t, "Tables Table 1.1 and Table 2.1.", ncase, nfail)
+        call near("chapter table frames", real(nf, dp), 2.0_dp, ncase, nfail)
+    end subroutine table_cases
+
+    ! Immediate-mode report API and explicit report_t.
+    subroutine report_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        type(report_t) :: rep
+        type(document_asset_t), allocatable :: svg_assets(:), pdf_assets(:), png_assets(:)
+        type(status_t) :: st
+        real(dp) :: rvals(2, 2)
+        integer :: ivals(2, 2), u, ios, sz
+        character(len=12) :: cvals(2, 2)
+        logical :: ex
+
+        rvals = reshape([0.0_dp, 2.0_dp, 1.0_dp, -0.308_dp], [2, 2])
+        ivals = reshape([1, 2, 10, 20], [2, 2])
+        cvals = reshape(["A           ", "B           ", "pass        ", "ok          "], [2, 2])
+
+        ! Immediate-mode API: markdown + figure + clf() isolation + tables + repeated saves.
+        call new_report()
+        call markdown("# Immediate Report")
+        call markdown([character(len=64) :: &
+                       "See {numref}`fig:p1`, {numref}`tab:r1`, {numref}`tab:i1`,", &
+                       "and {numref}`tab:c1`."])
+
+        call figure()
+        call plot([0.0_dp, 1.0_dp, 2.0_dp], [0.0_dp, 1.0_dp, 0.0_dp])
+        call title("Wave")
+        call include_figure(caption="Captured vector plot.", label="fig:p1", width="80%")
+        ! Clearing the plot afterwards must not affect the already-captured figure.
+        call clf()
+        call close()
+
+        call include_table(rvals, columns=[character(len=8) :: "t", "y"], &
+                           caption="Real values.", label="tab:r1")
+        call include_table(ivals, columns=[character(len=8) :: "id", "count"], &
+                           caption="Integer counts.", label="tab:i1")
+        call include_table(cvals, columns=[character(len=8) :: "key", "status"], &
+                           caption="String status.", label="tab:c1")
+
+        ! Non-destructive repeated save to SVG and PDF.
+        call save("/tmp/fplotlib_test_rep.svg", status=st)
+        ncase = ncase + 1
+        inquire (file="/tmp/fplotlib_test_rep.svg", exist=ex, size=sz)
+        if (.not. st%ok() .or. .not. ex .or. sz <= 0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL report save SVG"
+        end if
+
+        call save("/tmp/fplotlib_test_rep.pdf", status=st)
+        ncase = ncase + 1
+        inquire (file="/tmp/fplotlib_test_rep.pdf", exist=ex, size=sz)
+        if (.not. st%ok() .or. .not. ex .or. sz <= 0) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL report save PDF"
+        end if
+
+        ! In-memory byte export via render_report.
+        call render_report("svg", svg_assets, status=st)
+        ncase = ncase + 1
+        if (.not. st%ok() .or. size(svg_assets) < 1) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL render_report svg"
+        else
+            call expect("report svg path", svg_assets(1)%bytes, "<path", ncase, nfail)
+        end if
+
+        call render_report("pdf", pdf_assets, status=st)
+        ncase = ncase + 1
+        if (.not. st%ok() .or. size(pdf_assets) /= 1) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL render_report pdf"
+        else if (len(pdf_assets(1)%bytes) < 5) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL render_report pdf length"
+        else
+            call expect("report pdf header", pdf_assets(1)%bytes(1:5), "%PDF-", ncase, nfail)
+        end if
+
+        call render_report("png", png_assets, dpi=72.0_dp, status=st)
+        ncase = ncase + 1
+        if (.not. st%ok() .or. size(png_assets) < 1) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL render_report png"
+        else if (len(png_assets(1)%bytes) < 8) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL render_report png length"
+        end if
+
+        ! new_report resets state cleanly.
+        call new_report()
+        call markdown("Fresh report.")
+        call render_report("svg", svg_assets, status=st)
+        ncase = ncase + 1
+        if (.not. st%ok() .or. size(svg_assets) /= 1) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL new_report reset"
+        end if
+
+        ! Explicit report_t works independently with zero global state.
+        call rep%markdown("# Explicit")
+        call rep%include_table(rvals, columns=[character(len=8) :: "x", "f(x)"], fmt="F0.2")
+        call rep%export("pdf", pdf_assets, status=st)
+        ncase = ncase + 1
+        if (.not. st%ok() .or. size(pdf_assets) /= 1) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL explicit report_t export"
+        end if
+        call rep%clear()
+
+        open (newunit=u, file="/tmp/fplotlib_test_rep.svg", status="old", iostat=ios)
+        if (ios == 0) close (u, status="delete")
+        open (newunit=u, file="/tmp/fplotlib_test_rep.pdf", status="old", iostat=ios)
+        if (ios == 0) close (u, status="delete")
+    end subroutine report_cases
 
 end module test_markdown
