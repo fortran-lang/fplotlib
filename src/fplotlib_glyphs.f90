@@ -108,27 +108,15 @@ module fplotlib_glyphs
     public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
               glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
               glyph_ssty, glyph_dotless
-    public :: FACE_OBLIQUE
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
               glyph_kern, glyph_char, glyph_recompose, glyph_inked
     public :: face_ascent, face_descent, face_xheight, face_capheight
-    public :: EM, ASCENT, DESCENT, XHEIGHT
-    public :: glyph_advance, glyph_verbs, glyph_points
 
     integer, parameter :: FACE_REGULAR = 1
     integer, parameter :: FACE_BOLD = 2
     integer, parameter :: FACE_ITALIC = 3
     ! Lete Sans Math, the face with the MATH table.
     integer, parameter :: FACE_MATH = 4
-    ! The name the italic face had when it was an oblique.
-    integer, parameter :: FACE_OBLIQUE = FACE_ITALIC
-
-    ! The text faces' metrics in their own font units, for the code point
-    ! interface.
-    real(dp), parameter :: EM = real(FACE_EM(1), dp)
-    real(dp), parameter :: ASCENT = real(FACE_ASC(1), dp)
-    real(dp), parameter :: DESCENT = real(FACE_DESC(1), dp)
-    real(dp), parameter :: XHEIGHT = real(FACE_XH(1), dp)
 
     ! The range coder's adaptation rate, and the contexts it codes with,
     ! as tools/gen_glyphs.py numbers them.
@@ -496,52 +484,6 @@ contains
         if (gid < 1 .or. gid > NGLYPH) return
         if (DTLS(gid) > 0) glyph_dotless = DTLS(gid)
     end function glyph_dotless
-
-    ! --- the code point interface ------------------------------------
-
-    ! The glyph for a code point in a text face. An unknown face is the
-    ! regular one, and a code point the face has nothing for is a space,
-    ! so that an unexpected one cannot crash a plot.
-    function text_gid(c, face) result(gid)
-        integer, intent(in) :: c
-        integer, intent(in), optional :: face
-        integer :: gid, f
-        f = FACE_REGULAR
-        if (present(face)) f = face
-        if (f < 1 .or. f > NFACE) f = FACE_REGULAR
-        gid = glyph_cmap(f, c)
-        if (gid == 0) gid = glyph_cmap(f, 32)
-    end function text_gid
-
-    ! Advance width in font units.
-    function glyph_advance(c, face) result(a)
-        integer, intent(in) :: c
-        integer, intent(in), optional :: face
-        real(dp) :: a
-        a = real(GADV(text_gid(c, face)), dp)
-    end function glyph_advance
-
-    ! The verbs for one character, empty when there is nothing to draw.
-    subroutine glyph_verbs(c, v, n, face)
-        integer, intent(in) :: c
-        integer, allocatable, intent(out) :: v(:)
-        integer, intent(out) :: n
-        integer, intent(in), optional :: face
-        real(dp), allocatable :: x(:), y(:)
-        integer :: np
-        call outline_of(text_gid(c, face), 1.0_dp, v, n, x, y, np)
-    end subroutine glyph_verbs
-
-    ! The points for one character, in font units.
-    subroutine glyph_points(c, x, y, n, face)
-        integer, intent(in) :: c
-        real(dp), allocatable, intent(out) :: x(:), y(:)
-        integer, intent(out) :: n
-        integer, intent(in), optional :: face
-        integer, allocatable :: v(:)
-        integer :: nv
-        call outline_of(text_gid(c, face), 1.0_dp, v, nv, x, y, n)
-    end subroutine glyph_points
 
     ! --- stored contours to the path the backends fill ---------------
 

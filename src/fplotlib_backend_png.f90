@@ -22,11 +22,19 @@ module fplotlib_backend_png
     use fplotlib_render
     use fplotlib_raster
     use fplotlib_png, only: png_encode
-    use fplotlib_glyphs, only: glyph_outline
+    use fplotlib_glyphs, only: glyph_outline, NGLYPH
     implicit none
     private
 
     public :: png_renderer_t
+
+    ! Cached glyph outline in font units, built once per glyph id on first draw.
+    type :: cached_outline_t
+        logical :: valid = .false.
+        integer :: nv = 0, np = 0
+        integer, allocatable :: gv(:)
+        real(dp), allocatable :: px(:), py(:)
+    end type cached_outline_t
 
     ! Matplotlib's default figure dpi. Points are the API's unit, so this is
     ! the only place a pixel size is decided.
@@ -50,6 +58,7 @@ module fplotlib_backend_png
         logical :: keep_pixels = .false.
         integer :: pw = 0, ph = 0
         character(len=:), allocatable :: rgb
+        type(cached_outline_t), allocatable :: glyph_cache(:)
     contains
         procedure :: open_canvas_impl => png_open_canvas
         procedure :: close_canvas_impl => png_close_canvas
@@ -431,9 +440,7 @@ contains
         type(paint_t), intent(in) :: paint
         real(dp), intent(in) :: angle
         real(dp) :: ca, sa, ax, ay, ox_, oy_, fs, c1x, c1y, c2x, c2y, ex, ey
-        real(dp), allocatable :: px(:), py(:)
-        integer, allocatable :: gv(:)
-        integer :: i, j, p, nv, np
+        integer :: i, j, p, gid, nv
         type(paint_t) :: pp
 
         ca = cos(angle*3.141592653589793_dp/180.0_dp)
@@ -446,28 +453,41 @@ contains
         pp%filled = .true.
         pp%clip = shifted_clip(self, paint%clip)
 
+        if (.not. allocated(self%glyph_cache)) allocate (self%glyph_cache(NGLYPH))
+
         call pb_reset(self%pb)
         do i = 1, run%n
-            call glyph_outline(run%gid(i), gv, nv, px, py, np)
+            gid = run%gid(i)
+            if (gid < 1 .or. gid > NGLYPH) cycle
+            if (.not. self%glyph_cache(gid)%valid) then
+                call glyph_outline(gid, self%glyph_cache(gid)%gv, self%glyph_cache(gid)%nv, &
+                                   self%glyph_cache(gid)%px, self%glyph_cache(gid)%py, &
+                                   self%glyph_cache(gid)%np)
+                self%glyph_cache(gid)%valid = .true.
+            end if
+            nv = self%glyph_cache(gid)%nv
             if (nv == 0) cycle
             ox_ = run%x(i)
             oy_ = run%y(i)
             fs = run%size(i)
             p = 0
             do j = 1, nv
-                select case (gv(j))
+                select case (self%glyph_cache(gid)%gv(j))
                 case (VERB_MOVE)
                     p = p + 1
-                    call gpt(px(p), py(p), ex, ey)
+                    call gpt(self%glyph_cache(gid)%px(p), self%glyph_cache(gid)%py(p), ex, ey)
                     call pb_move(self%pb, ex, ey)
                 case (VERB_LINE)
                     p = p + 1
-                    call gpt(px(p), py(p), ex, ey)
+                    call gpt(self%glyph_cache(gid)%px(p), self%glyph_cache(gid)%py(p), ex, ey)
                     call pb_line(self%pb, ex, ey)
                 case (VERB_CUBIC)
-                    call gpt(px(p + 1), py(p + 1), c1x, c1y)
-                    call gpt(px(p + 2), py(p + 2), c2x, c2y)
-                    call gpt(px(p + 3), py(p + 3), ex, ey)
+                    call gpt(self%glyph_cache(gid)%px(p + 1), self%glyph_cache(gid)%py(p + 1), &
+                             c1x, c1y)
+                    call gpt(self%glyph_cache(gid)%px(p + 2), self%glyph_cache(gid)%py(p + 2), &
+                             c2x, c2y)
+                    call gpt(self%glyph_cache(gid)%px(p + 3), self%glyph_cache(gid)%py(p + 3), &
+                             ex, ey)
                     p = p + 3
                     call pb_cubic(self%pb, c1x, c1y, c2x, c2y, ex, ey)
                 case (VERB_CLOSE)
