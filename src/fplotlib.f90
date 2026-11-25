@@ -25,8 +25,8 @@ module fplotlib
     use fplotlib_io, only: file_ext, write_bytes, read_bytes, dir_name
     use, intrinsic :: iso_fortran_env, only: error_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-    use fplotlib_markdown, only: md_typeset, md_typeset_files, md_document_t, md_directive_cb, &
-                                 md_body_cb, md_heading_cb
+    use fplotlib_markdown, only: md_typeset, md_typeset_files, md_document_t, md_figure_t, &
+                                 md_directive_cb, md_body_cb, md_heading_cb
     use fplotlib_typeset, only: typeset_context_t, ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
@@ -85,7 +85,7 @@ module fplotlib
     public :: close, gcf
     public :: axes, subplots, sca
     public :: style_use, rc
-    public :: typeset, typeset_file
+    public :: typeset, typeset_file, frame_t, md_figure_t, capture_figure, named_figure
 
     ! A handle to one axes of the current figure, so that a script can say
     ! ax%plot(...) instead of selecting an axes and then drawing into it.
@@ -7539,18 +7539,47 @@ contains
     ! md_document_t or call typeset without affecting the outer document.
     ! ------------------------------------------------------------------
 
+    ! Capture the current figure as a vector frame_t, or as a named
+    ! md_figure_t ready to pass to typeset(..., figures=...).
+    subroutine capture_figure(frame, facecolor, transparent, bbox_inches, pad_inches)
+        type(frame_t), intent(out) :: frame
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_pad_arg("capture_figure", "pad_inches", pad_inches)
+
+        call render_frame(frame, facecolor, transparent, bbox_inches, pad_inches)
+    end subroutine capture_figure
+
+    subroutine named_figure(fig, name, facecolor, transparent, bbox_inches, pad_inches)
+        type(md_figure_t), intent(out) :: fig
+        character(len=*), intent(in) :: name
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_pad_arg("named_figure", "pad_inches", pad_inches)
+
+        fig%name = trim(adjustl(name))
+        call render_frame(fig%frame, facecolor, transparent, bbox_inches, pad_inches)
+    end subroutine named_figure
+
     recursive subroutine typeset_text(text, filename, dpi, status, on_directive, on_body, &
-                                      on_heading)
+                                      on_heading, figures)
         character(len=*), intent(in) :: text, filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
         type(md_document_t) :: doc
         call check_typeset_args(filename, dpi)
         call md_typeset(doc, text, on_directive=on_directive, on_body=on_body, &
-                        on_heading=on_heading)
+                        on_heading=on_heading, figures=figures)
         call write_pages(doc%engine, filename, dpi, status)
     end subroutine typeset_text
 
@@ -7558,13 +7587,14 @@ contains
     ! most easily spells one; trailing blanks are dropped, so a hard line
     ! break is a backslash at the end of a line.
     recursive subroutine typeset_lines(lines, filename, dpi, status, on_directive, on_body, &
-                                       on_heading)
+                                       on_heading, figures)
         character(len=*), intent(in) :: lines(:), filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
         character(len=:), allocatable :: text
         integer :: k
         text = ""
@@ -7572,19 +7602,21 @@ contains
             text = text//trim(lines(k))//new_line("a")
         end do
         call typeset_text(text, filename, dpi, status, &
-                          on_directive=on_directive, on_body=on_body, on_heading=on_heading)
+                          on_directive=on_directive, on_body=on_body, &
+                          on_heading=on_heading, figures=figures)
     end subroutine typeset_lines
 
     ! Read a single Markdown file and typeset it, resolving relative paths
     ! (such as :::{literalinclude}) against the file's directory.
     recursive subroutine typeset_file_one(md_file, filename, dpi, status, on_directive, &
-                                          on_body, on_heading)
+                                          on_body, on_heading, figures)
         character(len=*), intent(in) :: md_file, filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
         character(len=:), allocatable :: raw
         type(md_document_t) :: doc
         type(status_t) :: local
@@ -7596,7 +7628,7 @@ contains
             return
         end if
         call md_typeset(doc, raw, on_directive=on_directive, on_body=on_body, &
-                        on_heading=on_heading, base_dir=dir_name(md_file))
+                        on_heading=on_heading, base_dir=dir_name(md_file), figures=figures)
         call write_pages(doc%engine, filename, dpi, status, "typeset_file")
     end subroutine typeset_file_one
 
@@ -7604,13 +7636,14 @@ contains
     ! front matter comes from the first file, labels and cross-references
     ! resolve across all files, and each file keeps its own base directory.
     recursive subroutine typeset_file_many(md_files, filename, dpi, status, on_directive, &
-                                           on_body, on_heading)
+                                           on_body, on_heading, figures)
         character(len=*), intent(in) :: md_files(:), filename
         real(dp), intent(in), optional :: dpi
         type(status_t), intent(out), optional :: status
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
         type(text_buf_t), allocatable :: raws(:), dir_bufs(:)
         character(len=:), allocatable :: texts(:), dirs(:)
         type(md_document_t) :: doc
@@ -7621,7 +7654,7 @@ contains
         n = size(md_files)
         if (n == 0) then
             call md_typeset(doc, "", on_directive=on_directive, on_body=on_body, &
-                            on_heading=on_heading)
+                            on_heading=on_heading, figures=figures)
             call write_pages(doc%engine, filename, dpi, status, "typeset_file")
             return
         end if
@@ -7645,7 +7678,7 @@ contains
             dirs(k) = dir_bufs(k)%s
         end do
         call md_typeset_files(doc, texts, dirs, on_directive=on_directive, &
-                              on_body=on_body, on_heading=on_heading)
+                              on_body=on_body, on_heading=on_heading, figures=figures)
         call write_pages(doc%engine, filename, dpi, status, "typeset_file")
     end subroutine typeset_file_many
 

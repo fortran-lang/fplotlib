@@ -23,6 +23,7 @@ module fplotlib_markdown
     use fplotlib_style, only: dp, utf8_next
     use fplotlib_colors, only: color_from_name
     use fplotlib_glyphs, only: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, face_xheight
+    use fplotlib_scene, only: frame_t, recording_renderer_t
     use fplotlib_typeset
     use fplotlib_io, only: read_bytes, join_path
     use fplotlib_status, only: status_t
@@ -31,13 +32,14 @@ module fplotlib_markdown
     private
 
     public :: md_typeset, md_typeset_files, md_document_t, md_ctx_t, md_directive_t, md_heading_t
+    public :: md_figure_t
     public :: md_directive_cb, md_body_cb, md_heading_cb
     public :: md_blocks, md_inline, md_option, md_meta
     public :: md_length, md_color, md_align, md_noindent, md_base_size
 
     character, parameter :: BS = achar(92), NL = achar(10)
     integer, parameter :: LINK_COL = 1728436, CODE_COL = 5263440
-    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3
+    integer, parameter :: LAB_SECTION = 1, LAB_EQUATION = 2, LAB_OTHER = 3, LAB_FIGURE = 4
 
     type :: line_t
         character(len=:), allocatable :: s
@@ -76,6 +78,12 @@ module fplotlib_markdown
         character(len=:), allocatable :: text, num
     end type md_heading_t
 
+    ! A named vector figure passed to md_typeset / typeset.
+    type :: md_figure_t
+        character(len=:), allocatable :: name
+        type(frame_t) :: frame
+    end type md_figure_t
+
     type :: meta_t
         character(len=:), allocatable :: key, val
     end type meta_t
@@ -107,9 +115,13 @@ module fplotlib_markdown
         integer :: TEXT_COL = 0, PAGE_COL = 16777215
         integer :: NMETA = 0
         type(meta_t), allocatable :: META(:)
-        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0
+        integer :: SEC(4) = 0, CHAPTER = 0, EQNO = 0, FIGNO = 0
         integer :: NLAB = 0
         type(label_t), allocatable :: LABS(:)
+        integer :: NFIG = 0
+        type(frame_t) :: FIG_SCENE
+        integer, allocatable :: FIG_HANDLES(:)
+        type(line_t), allocatable :: FIG_NAMES(:)
         logical :: FIRST_PASS = .false.
         character(len=:), allocatable :: TARGETS
         logical :: AFTER_HEADING = .false.
@@ -157,13 +169,14 @@ contains
     ! The document is set twice (see FIRST_PASS), so the callbacks are
     ! called twice, and only the second pass's pages are kept. A callback
     ! may set a nested md_document_t without affecting doc.
-    recursive subroutine md_typeset(doc, text, on_directive, on_body, on_heading, base_dir)
+    recursive subroutine md_typeset(doc, text, on_directive, on_body, on_heading, base_dir, figures)
         type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
         character(len=*), intent(in), optional :: base_dir
+        type(md_figure_t), intent(in), optional :: figures(:)
         character(len=:), allocatable :: texts(:), dirs(:), bdir
 
         allocate (character(len=len(text) + 1) :: texts(1))
@@ -180,22 +193,24 @@ contains
             dirs(1) = " "
         end if
         call md_typeset_files(doc, texts, dirs, on_directive=on_directive, &
-                              on_body=on_body, on_heading=on_heading)
+                              on_body=on_body, on_heading=on_heading, figures=figures)
     end subroutine md_typeset
 
     ! Set one or more MyST Markdown sources as a single document. Front
     ! matter is read from the first source; labels and cross-references
     ! resolve across all sources; each source keeps its own base directory
     ! in dirs for relative paths (such as :::{literalinclude}).
-    recursive subroutine md_typeset_files(doc, texts, dirs, on_directive, on_body, on_heading)
+    recursive subroutine md_typeset_files(doc, texts, dirs, on_directive, on_body, on_heading, &
+                                          figures)
         type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: texts(:), dirs(:)
         procedure(md_directive_cb), optional :: on_directive
         procedure(md_body_cb), optional :: on_body
         procedure(md_heading_cb), optional :: on_heading
+        type(md_figure_t), intent(in), optional :: figures(:)
         type(line_t), allocatable :: lines(:)
         type(md_ctx_t) :: ctx
-        integer :: nfiles, f, n, first, pass
+        integer :: nfiles, f, n, first, pass, k
 
         doc%CB_DIR => null()
         doc%CB_BODY => null()
@@ -203,6 +218,26 @@ contains
         if (present(on_directive)) doc%CB_DIR => on_directive
         if (present(on_body)) doc%CB_BODY => on_body
         if (present(on_heading)) doc%CB_HEAD => on_heading
+
+        doc%NFIG = 0
+        if (present(figures)) then
+            if (size(figures) > 0) then
+                call doc%FIG_SCENE%init(0.0_dp, 0.0_dp)
+                if (allocated(doc%FIG_NAMES)) deallocate (doc%FIG_NAMES)
+                if (allocated(doc%FIG_HANDLES)) deallocate (doc%FIG_HANDLES)
+                allocate (doc%FIG_NAMES(size(figures)), doc%FIG_HANDLES(size(figures)))
+                do k = 1, size(figures)
+                    if (allocated(figures(k)%name)) then
+                        if (len_trim(figures(k)%name) > 0) then
+                            doc%NFIG = doc%NFIG + 1
+                            doc%FIG_NAMES(doc%NFIG)%s = trim(adjustl(figures(k)%name))
+                            call doc%FIG_SCENE%import_frame(figures(k)%frame, &
+                                                            doc%FIG_HANDLES(doc%NFIG))
+                        end if
+                    end if
+                end do
+            end if
+        end if
 
         nfiles = size(texts)
         doc%NLAB = 0
@@ -225,6 +260,7 @@ contains
             doc%SEC = 0
             doc%CHAPTER = 0
             doc%EQNO = 0
+            doc%FIGNO = 0
             doc%TARGETS = ""
             doc%AFTER_HEADING = .false.
             ctx = md_ctx_t()
@@ -755,7 +791,7 @@ contains
         integer, intent(in) :: n
         type(md_ctx_t), intent(in) :: ctx
         integer :: i, j, k, lev, depth, flen, tot, pos
-        character(len=:), allocatable :: s, t, para, lab
+        character(len=:), allocatable :: s, t, para, lab, fig_cap, fig_name
         character :: fch
         logical :: blank_before, in_disp
 
@@ -800,9 +836,11 @@ contains
                         if (depth == 0) exit
                     end if
                 end do
-                call other_block(doc)
                 call set_div(doc, t, L, i, j, ctx)
                 i = j + 1
+            else if (is_figure_line(t, fig_cap, fig_name)) then
+                call set_figure(doc, fig_name, fig_cap, "", "", "", ctx)
+                i = i + 1
             else if (t(1:1) == ">") then
                 j = i + 1
                 do while (j <= n)
@@ -898,11 +936,12 @@ contains
     ! The targets waiting for a block label it: a heading with its number
     ! and title, anything else with neither, for a reference that gives
     ! its own text.
-    recursive subroutine place_targets(doc, num, title)
+    recursive subroutine place_targets(doc, num, title, kind)
         type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in), optional :: num, title
+        integer, intent(in), optional :: kind
         character(len=:), allocatable :: name
-        integer :: k
+        integer :: k, knd
         if (.not. allocated(doc%TARGETS)) return
         do while (len_trim(doc%TARGETS) > 0)
             doc%TARGETS = adjustl(doc%TARGETS)
@@ -911,7 +950,9 @@ contains
             name = doc%TARGETS(1:k - 1)
             doc%TARGETS = doc%TARGETS(k:)
             if (present(num)) then
-                call add_label(doc, name, num, title, LAB_SECTION)
+                knd = LAB_SECTION
+                if (present(kind)) knd = kind
+                call add_label(doc, name, num, title, knd)
             else
                 call add_label(doc, name, "", "", LAB_OTHER)
             end if
@@ -922,7 +963,7 @@ contains
     ! Whether a line starts a block that ends a paragraph before it.
     logical function interrupts(s)
         character(len=*), intent(in) :: s
-        character(len=:), allocatable :: t, lab
+        character(len=:), allocatable :: t, lab, fig_cap, fig_name
         integer :: k, lev, flen
         character :: fch
         t = trim(adjustl(s))
@@ -930,6 +971,7 @@ contains
         if (len(t) == 0) return
         if (is_heading(t, lev) .or. fence_open(t, fch, flen) .or. &
             (starts(t, ":::") .and. div_opens(t)) .or. &
+            is_figure_line(t, fig_cap, fig_name) .or. &
             t(1:1) == ">" .or. is_rule(t) .or. is_target(t, lab)) then
             interrupts = .true.
         else if (is_item(s, k, lev)) then
@@ -1078,6 +1120,7 @@ contains
             doc%CHAPTER = doc%CHAPTER + 1
             doc%SEC = 0
             doc%EQNO = 0
+            doc%FIGNO = 0
             if (doc%NUMBER_SECTIONS) num = itoa(doc%CHAPTER)
         else
             if (doc%CHAPTERS) lv = level - 1
@@ -1501,13 +1544,17 @@ contains
         directive%arg = arg
         directive%opts = opts
         directive%body = body
+        if (name /= "figure") call other_block(doc)
         handled = .false.
         if (associated(doc%CB_DIR)) call doc%CB_DIR(doc, directive, ctx, handled)
-        if (.not. handled .and. name == "literalinclude") then
+        if (handled) then
+            if (name == "figure") call other_block(doc)
+        else if (name == "literalinclude") then
             call set_literalinclude(doc, directive, ctx)
-            handled = .true.
-        end if
-        if (.not. handled) then
+        else if (name == "figure") then
+            call set_figure(doc, arg, body, md_option(opts, "width"), &
+                            md_option(opts, "align"), md_option(opts, "name"), ctx)
+        else
             if (len(name) > 0) call warn(doc, "unhandled directive '"//name//"'")
             if (j - 1 >= content_at) &
                 call blocks(doc, L(content_at:j - 1), j - content_at, ctx)
@@ -1651,6 +1698,142 @@ contains
         end do
         ok = parse_pos_int >= 1
     end function parse_pos_int
+
+    ! A vector figure (from :::{figure} name or ![caption](name)): looks up
+    ! name in doc%FIG_NAMES, numbers it, binds pending targets and :name:,
+    ! places the frame via ts_frame, and sets the caption beneath it.
+    recursive subroutine set_figure(doc, fig_name, caption, width_opt, align_opt, &
+                                    label_opt, ctx)
+        type(md_document_t), intent(inout) :: doc
+        character(len=*), intent(in) :: fig_name, caption, width_opt, align_opt, label_opt
+        type(md_ctx_t), intent(in) :: ctx
+        character(len=:), allocatable :: name, cap, num, al_str
+        type(style_t) :: st
+        type(recording_renderer_t) :: rec
+        type(frame_t) :: fig_frame
+        real(dp) :: avail, w, fw, fh
+        integer :: idx, al, c, a, b
+
+        name = trim(adjustl(fig_name))
+        a = 1
+        b = len(caption)
+        do while (a <= b)
+            if (caption(a:a) /= " " .and. caption(a:a) /= NL) exit
+            a = a + 1
+        end do
+        do while (b >= a)
+            if (caption(b:b) /= " " .and. caption(b:b) /= NL) exit
+            b = b - 1
+        end do
+        if (a <= b) then
+            cap = caption(a:b)
+        else
+            cap = ""
+        end if
+
+        doc%FIGNO = doc%FIGNO + 1
+        if (doc%CHAPTERS) then
+            num = itoa(doc%CHAPTER)//"."//itoa(doc%FIGNO)
+        else
+            num = itoa(doc%FIGNO)
+        end if
+        call place_targets(doc, num, cap, LAB_FIGURE)
+        if (len_trim(label_opt) > 0) &
+            call add_label(doc, trim(adjustl(label_opt)), num, cap, LAB_FIGURE)
+
+        idx = find_figure(doc, name)
+        if (idx == 0) call warn(doc, "unknown figure '"//name//"'")
+
+        avail = max(0.0_dp, ts_hsize(doc%engine) - ctx%left - ctx%right)
+        w = figure_width(doc, width_opt, avail)
+        al = ALIGN_CENTER
+        al_str = lower(trim(adjustl(align_opt)))
+        if (len(al_str) > 0) then
+            c = align_of(al_str, -1)
+            if (c < 0) then
+                call warn(doc, "cannot read the alignment '"//trim(adjustl(align_opt))//"'")
+            else
+                al = c
+            end if
+        end if
+
+        call ts_end_par(doc%engine)
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(12.0_dp, 3.0_dp, 4.0_dp, 0, 0)))
+        if (idx > 0 .and. .not. doc%FIRST_PASS) then
+            call doc%FIG_SCENE%metrics(fw, fh, handle=doc%FIG_HANDLES(idx))
+            if (fw > 0.0_dp .and. fh > 0.0_dp) then
+                call rec%open_canvas(fw, fh)
+                call doc%FIG_SCENE%draw(rec, handle=doc%FIG_HANDLES(idx))
+                call rec%close_canvas()
+                call rec%take(fig_frame)
+                if (w > 0.0_dp) then
+                    call ts_frame(doc%engine, fig_frame, width=w, align=al, &
+                                  left=ctx%left, right=ctx%right)
+                else
+                    call ts_frame(doc%engine, fig_frame, align=al, &
+                                  left=ctx%left, right=ctx%right)
+                end if
+            end if
+        end if
+        if (len(cap) > 0) then
+            call ts_penalty(doc%engine, 10000)
+            call ts_vskip(doc%engine, scale(doc, ts_glue_t(6.0_dp, 1.0_dp, 1.0_dp, 0, 0)))
+            st = base_style(ctx)
+            st%size = 0.9_dp*doc%BASE
+            call ts_begin_par(doc%engine, ALIGN_CENTER, 0.0_dp, left=ctx%left, &
+                              right=ctx%right, size=st%size, leading=doc%LEAD*st%size, &
+                              skip=.false.)
+            call ts_word(doc%engine, "Figure", FACE_BOLD, st%size, st%color)
+            call ts_nbsp(doc%engine, FACE_BOLD, st%size)
+            call ts_word(doc%engine, num//":", FACE_BOLD, st%size, st%color)
+            call ts_space(doc%engine, FACE_REGULAR, st%size)
+            call inline(doc, cap, st)
+            call ts_end_par(doc%engine)
+        end if
+        call ts_addvspace(doc%engine, scale(doc, ts_glue_t(12.0_dp, 3.0_dp, 4.0_dp, 0, 0)))
+        doc%AFTER_HEADING = .false.
+    end subroutine set_figure
+
+    recursive integer function find_figure(doc, name)
+        type(md_document_t), intent(in) :: doc
+        character(len=*), intent(in) :: name
+        integer :: k
+        find_figure = 0
+        do k = 1, doc%NFIG
+            if (doc%FIG_NAMES(k)%s == name) then
+                find_figure = k
+                return
+            end if
+        end do
+    end function find_figure
+
+    ! Figure width from :width: (percentage of avail, or a length); 0 when omitted.
+    recursive real(dp) function figure_width(doc, val, avail) result(w)
+        type(md_document_t), intent(in) :: doc
+        character(len=*), intent(in) :: val
+        real(dp), intent(in) :: avail
+        character(len=:), allocatable :: t
+        real(dp) :: x
+        logical :: ok
+        w = 0.0_dp
+        t = trim(adjustl(val))
+        if (len(t) == 0) return
+        if (t(len(t):len(t)) == "%") then
+            x = number(doc, trim(t(1:len(t) - 1)), ok)
+            if (ok .and. x > 0.0_dp) then
+                w = (x/100.0_dp)*avail
+            else if (ok) then
+                call warn(doc, "figure width must be positive: '"//t//"'")
+            end if
+        else
+            x = length(doc, t, doc%BASE, ok)
+            if (ok .and. x > 0.0_dp) then
+                w = x
+            else if (ok) then
+                call warn(doc, "figure width must be positive: '"//t//"'")
+            end if
+        end if
+    end function figure_width
 
     ! --- Template helpers -------------------------------------------------
 
@@ -2336,6 +2519,8 @@ contains
                     if (.not. explicit) then
                         title = "Section"//achar(194)//achar(160)//"%s"
                         if (doc%LABS(r)%kind == LAB_EQUATION) title = "(%s)"
+                        if (doc%LABS(r)%kind == LAB_FIGURE) &
+                            title = "Fig."//achar(194)//achar(160)//"%s"
                     end if
                     s = replace(replace(replace(title, "%s", doc%LABS(r)%num), "{number}", &
                                         doc%LABS(r)%num), "{name}", doc%LABS(r)%title)
@@ -2468,6 +2653,26 @@ contains
         if (len(t) <= 3) return
         div_opens = len_trim(t(4:)) > 0 .and. verify(trim(t), ":") > 0
     end function div_opens
+
+    ! A standalone Markdown image block: ![caption](name)
+    logical function is_figure_line(t, caption, name)
+        character(len=*), intent(in) :: t
+        character(len=:), allocatable, intent(out) :: caption, name
+        integer :: j
+        is_figure_line = .false.
+        caption = ""
+        name = ""
+        if (len(t) < 5) return
+        if (t(1:2) /= "![") return
+        j = matching(t, 2)
+        if (j <= 0 .or. j + 2 > len(t)) return
+        if (t(j + 1:j + 1) /= "(") return
+        if (matching(t, j + 1) /= len(t)) return
+        name = trim(adjustl(t(j + 2:len(t) - 1)))
+        if (len(name) == 0) return
+        caption = trim(t(3:j - 1))
+        is_figure_line = .true.
+    end function is_figure_line
 
     logical function is_rule(t)
         character(len=*), intent(in) :: t
