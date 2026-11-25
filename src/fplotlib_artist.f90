@@ -1350,7 +1350,7 @@ contains
         type(text_t), intent(in) :: t
         real(dp), intent(in) :: px, py
         integer :: nl, k, i0, i1, base
-        real(dp) :: lh, dy, wmax, x0, y0, pad, hgt
+        real(dp) :: lh, dy, wmax, x0, y0, pad, hgt, asc, desc
 
         lh = 1.2_dp*t%fontsize
         nl = line_count(t%s)
@@ -1380,16 +1380,18 @@ contains
                                                          t%weight, t%slant))
             end do
             pad = t%box_pad*t%fontsize
-            hgt = (nl - 1)*lh + t%fontsize
+            asc = text_ascent(t%fontsize)
+            desc = text_descent(t%fontsize)
+            hgt = (nl - 1)*lh + asc + desc
             select case (trim(t%ha))
             case ("center"); x0 = px - 0.5_dp*wmax
             case ("right", "end"); x0 = px - wmax
             case default; x0 = px
             end select
-            y0 = py + dy - text_ascent(t%fontsize)
-            if (base == BASE_MIDDLE) y0 = py + dy - 0.5_dp*t%fontsize
+            y0 = py + dy - asc
+            if (base == BASE_MIDDLE) y0 = py + dy - 0.5_dp*(asc + desc)
             if (base == BASE_TOP) y0 = py + dy
-            if (base == BASE_BOTTOM) y0 = py + dy - hgt
+            if (base == BASE_BOTTOM) y0 = py + dy - (asc + desc)
             ! A negative pad, which matplotlib takes, draws the box inside
             ! the text, and none at all once it has shrunk past nothing.
             if (wmax + 2.0_dp*pad < 0.0_dp .or. hgt + 2.0_dp*pad < 0.0_dp) then

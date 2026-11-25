@@ -9,9 +9,12 @@ module test_frames
     use fplotlib_text, only: text_layout
     use fplotlib_glyphs, only: FACE_REGULAR
     use fplotlib_mathtext, only: math_context_t, math_frame
-    use fplotlib_artist, only: append_text
-    use fplotlib, only: figure, plot, clf, render_png
-    use fplotlib_draw, only: render_frame
+    use fplotlib_artist, only: append_text, append_annotation, text_ascent, text_descent
+    use fplotlib_state, only: ax, text_t, fig_suptitle_size, PT_PER_IN, SUPTITLE_Y, TITLE_PAD
+    use fplotlib, only: figure, plot, clf, render_png, render_svg, title, suptitle, &
+                        constrained_layout, tight_layout, xticks, xlabel, tick_params
+    use fplotlib_draw, only: render_frame, title_gap, decor_top, xtick_label_width, &
+                             tick_label_width
     implicit none
     private
     public :: frames_check
@@ -26,6 +29,11 @@ contains
         call recorded_source(nfail)
         call captured_plot(nfail)
         call negative_formulas(nfail)
+        call svg_high_codepoint(nfail)
+        call text_bbox_descenders(nfail)
+        call suptitle_constrained_gap(nfail)
+        call rotated_xtick_layout(nfail)
+        call title_fixed_pad(nfail)
         print "(a,i0)", "owned frames: failures = ", nfail
     end subroutine frames_check
 
@@ -162,5 +170,139 @@ contains
                        "the frame of "//tex//" holds its rules", nfail)
         end subroutine rule_inked
     end subroutine negative_formulas
+
+    ! Issue #69: SVG escaping must handle code points above U+1869F (6+ digits).
+    subroutine svg_high_codepoint(nfail)
+        integer, intent(inout) :: nfail
+        character(len=*), parameter :: bbA = achar(240)//achar(157)//achar(148)//achar(184)
+        character(len=:), allocatable :: svg
+        call clf()
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call title("x "//bbA//" y")
+        svg = render_svg()
+        call check(index(svg, "&#120120;") > 0, &
+                   "svg encodes U+1D538 as decimal reference &#120120;", nfail)
+        call clf()
+    end subroutine svg_high_codepoint
+
+    ! Issue #70: text bounding box must enclose both ascenders and descenders
+    ! across all vertical alignments (single-line and multi-line).
+    subroutine text_bbox_descenders(nfail)
+        integer, intent(inout) :: nfail
+        real(dp), parameter :: fs = 20.0_dp, py = 100.0_dp
+        real(dp) :: asc, desc, lh
+        asc = text_ascent(fs)
+        desc = text_descent(fs)
+        lh = 1.2_dp*fs
+        ! Use "A" (no descender ink) so ink_bounds(4) measures the box itself.
+        call check_box("A", "baseline", py - asc, py + desc)
+        call check_box("A", "center", py - 0.5_dp*(asc + desc), py + 0.5_dp*(asc + desc))
+        call check_box("A", "top", py, py + asc + desc)
+        call check_box("A", "bottom", py - (asc + desc), py)
+        call check_box("A"//achar(10)//"B", "bottom", py - lh - (asc + desc), py)
+    contains
+        subroutine check_box(str, va, want_top, want_bot)
+            character(len=*), intent(in) :: str, va
+            real(dp), intent(in) :: want_top, want_bot
+            type(recording_renderer_t) :: rec
+            type(frame_t) :: frame
+            type(text_t) :: t
+            real(dp) :: bounds(4)
+            logical :: ink
+            t%s = str
+            t%fontsize = fs
+            t%va = va
+            t%has_box = .true.
+            t%box_fc = "#f5deb3"
+            t%box_ec = ""
+            t%box_pad = 0.0_dp
+            t%box_style = "square"
+            call rec%open_canvas(200.0_dp, 200.0_dp)
+            call append_annotation(rec, t, 40.0_dp, py)
+            call rec%close_canvas()
+            call rec%take(frame)
+            call frame%ink_bounds(bounds, ink)
+            call check(ink .and. abs(bounds(2) - want_top) < 1.0e-5_dp .and. &
+                       abs(bounds(4) - want_bot) < 1.0e-5_dp, &
+                       "text bbox encloses ascent and descent for va="//trim(va), nfail)
+        end subroutine check_box
+    end subroutine text_bbox_descenders
+
+    ! Issue #71: suptitle must leave a positive gap above the axes title under
+    ! constrained_layout and tight_layout.
+    subroutine suptitle_constrained_gap(nfail)
+        integer, intent(inout) :: nfail
+        real(dp) :: H, sup_bot, ax_t, title_top
+        character(len=:), allocatable :: svg
+
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call constrained_layout(.true.)
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call title("Axes title gjpqy")
+        call suptitle("Figure suptitle gjpqy")
+        svg = render_svg()
+        H = 4.8_dp*PT_PER_IN
+        sup_bot = (1.0_dp - SUPTITLE_Y)*H + text_ascent(fig_suptitle_size) &
+                  + text_descent(fig_suptitle_size)
+        ax_t = (1.0_dp - ax(1)%top)*H
+        title_top = ax_t - title_gap(ax(1)) - text_ascent(ax(1)%title_size)
+        call check(len(svg) > 0 .and. title_top > sup_bot + 1.0_dp, &
+                   "constrained_layout keeps suptitle clear of axes title", nfail)
+
+        call clf()
+        call figure(figsize=[4.0_dp, 10.0_dp])
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call title("Axes title gjpqy")
+        call suptitle("Figure suptitle gjpqy")
+        call tight_layout()
+        H = 10.0_dp*PT_PER_IN
+        sup_bot = (1.0_dp - SUPTITLE_Y)*H + text_ascent(fig_suptitle_size) &
+                  + text_descent(fig_suptitle_size)
+        ax_t = (1.0_dp - ax(1)%top)*H
+        title_top = ax_t - title_gap(ax(1)) - text_ascent(ax(1)%title_size)
+        call check(title_top > sup_bot + 1.0_dp, &
+                   "tight_layout keeps suptitle clear of axes title on tall figure", nfail)
+        call clf()
+    end subroutine suptitle_constrained_gap
+
+    ! Issue #72: rotated x tick labels must reserve bottom margin from x tick
+    ! widths, not y tick widths.
+    subroutine rotated_xtick_layout(nfail)
+        integer, intent(inout) :: nfail
+        real(dp) :: H, xw, yw, bot_pt
+        character(len=:), allocatable :: svg
+
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call constrained_layout(.true.)
+        call plot([0.0_dp, 1.0_dp, 2.0_dp], [0.0_dp, 5.0_dp, 2.0_dp])
+        call xticks([0.0_dp, 1.0_dp, 2.0_dp], [character(len=24) :: &
+                    "2026-01-01 00:00 UTC", "2026-01-02 00:00 UTC", &
+                    "2026-01-03 00:00 UTC"])
+        call tick_params(axis="x", rotation=90.0_dp)
+        call xlabel("date")
+        svg = render_svg()
+        H = 4.8_dp*PT_PER_IN
+        xw = xtick_label_width(ax(1))
+        yw = tick_label_width(ax(1))
+        bot_pt = ax(1)%bottom*H
+        call check(len(svg) > 0 .and. xw > 5.0_dp*yw .and. bot_pt > xw, &
+                   "rotated x ticks reserve bottom margin from x tick width", nfail)
+        call clf()
+    end subroutine rotated_xtick_layout
+
+    ! Issue #76: axes title pad is matplotlib's fixed 6 pt, not 0.5*fontsize.
+    subroutine title_fixed_pad(nfail)
+        integer, intent(inout) :: nfail
+        call clf()
+        call figure(figsize=[4.0_dp, 4.0_dp])
+        call plot([0.0_dp, 1.0_dp], [0.0_dp, 1.0_dp])
+        call title("Title", fontsize=36.0_dp)
+        call check(abs(title_gap(ax(1)) - TITLE_PAD) < 1.0e-9_dp .and. &
+                   abs(decor_top(ax(1)) - (TITLE_PAD + text_ascent(36.0_dp))) < 1.0e-9_dp, &
+                   "large title uses fixed 6 pt pad", nfail)
+        call clf()
+    end subroutine title_fixed_pad
 
 end module test_frames
