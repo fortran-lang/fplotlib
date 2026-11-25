@@ -62,7 +62,8 @@ contains
         call heading_template_cases(ncase, nfail)
         call nesting_cases(ncase, nfail)
         call two_docs_cases(ncase, nfail)
-        print "(a,i0,a,i0)", "markdown: ", ncase, " documents, failures = ", nfail
+        call bugfix_cases(ncase, nfail)
+        print "(a,i0,a,i0)", "markdown: ", ncase, " checks, failures = ", nfail
     end subroutine markdown_check
 
     ! Sections and displays are numbered as they are set, and references
@@ -390,6 +391,137 @@ contains
             print "(a)", "  FAIL markdown two simultaneous documents differ from solo"
         end if
     end subroutine two_docs_cases
+
+    ! Regression cases for #105.
+    subroutine bugfix_cases(ncase, nfail)
+        integer, intent(inout) :: ncase, nfail
+        character(len=:), allocatable :: t, f, longp
+        real(dp) :: low
+        real(dp), allocatable :: bl(:)
+        integer :: k
+        character(len=*), parameter :: LQUOT = achar(226)//achar(128)//achar(156)
+        character(len=*), parameter :: RQUOT = achar(226)//achar(128)//achar(157)
+        character(len=*), parameter :: LSQUOT = achar(226)//achar(128)//achar(152)
+
+        ! {ref} formats markup inside referenced titles and explicit text,
+        ! and breaks long titles across lines instead of overflowing.
+        call set_doc("(sec:r)="//NL//"# Results -- part *one* and $x^2$"//NL//NL// &
+                     "See {ref}`sec:r` and {ref}`the *intro* -- here <sec:r>`.", t, f)
+        call expect("ref en-dash", t, "Results "//DASH//" part one", ncase, nfail)
+        call reject("ref raw asterisks", t, "*one*", ncase, nfail)
+        call reject("ref raw explicit asterisks", t, "*intro*", ncase, nfail)
+        call expect("ref explicit en-dash", t, "the intro "//DASH//" here", ncase, nfail)
+
+        ! Cyclic self-referencing heading title terminates safely.
+        call set_doc("(sec:self)="//NL//"# Loop {ref}`sec:self`"//NL//NL//"Body.", t, f)
+        call expect("cyclic ref", t, "Body.", ncase, nfail)
+
+        ! Document starting with a --- rule followed by a blank line keeps its content.
+        call set_doc("---"//NL//NL//"Intro paragraph."//NL//NL//"Section"//NL//"---"//NL//NL// &
+                     "Body.", t, f)
+        call expect("leading rule intro", t, "Intro paragraph.", ncase, nfail)
+        call expect("leading rule section", t, "Section", ncase, nfail)
+        call expect("leading rule body", t, "Body.", ncase, nfail)
+
+        ! Inline triple-backtick code span does not open a code fence;
+        ! 4-backtick fence is not closed by inner 3-backtick fence.
+        call set_doc("```x``` is code"//NL//NL//"Next *para*."//NL//NL//"# Heading", t, f)
+        call expect("inline 3-tick", t, "x is code", ncase, nfail)
+        call face("inline 3-tick next para", t, f, "para", FACE_ITALIC, ncase, nfail)
+        call face("inline 3-tick heading", t, f, "Heading", FACE_BOLD, ncase, nfail)
+
+        call set_doc("````"//NL//"```"//NL//"inside"//NL//"```"//NL//"````"//NL//NL// &
+                     "*after*", t, f)
+        call expect("4-tick fence", t, "inside", ncase, nfail)
+        call face("4-tick fence after", t, f, "after", FACE_ITALIC, ncase, nfail)
+
+        ! Closing #s are stripped only after a space.
+        call set_doc("# Programming in C#"//NL//NL//"# Title ###", t, f)
+        call expect("heading C#", t, "Programming in C#", ncase, nfail)
+        call reject("heading closing ###", t, "###", ncase, nfail)
+
+        ! Quotes right after emphasis marks open rather than close.
+        call set_doc("*""Hello""* and **""Bold""** and _'x'_", t, f)
+        call expect("italic open quote", t, LQUOT//"Hello"//RQUOT, ncase, nfail)
+        call expect("bold open quote", t, LQUOT//"Bold"//RQUOT, ncase, nfail)
+        call expect("italic open single quote", t, LSQUOT//"x", ncase, nfail)
+
+        ! $a$$b$, \$$x$$, and lone unclosed $$ do not swallow the next heading.
+        call set_doc("Values $a$$b$ here"//NL//"# Heading", t, f)
+        call face("adjacent inline math heading", t, f, "Heading", FACE_BOLD, ncase, nfail)
+        call set_doc(achar(92)//"$$x$$"//NL//"# Heading", t, f)
+        call face("escaped dollar heading", t, f, "Heading", FACE_BOLD, ncase, nfail)
+        call set_doc("Cost is $$"//NL//"# Heading", t, f)
+        call face("unclosed $$ heading", t, f, "Heading", FACE_BOLD, ncase, nfail)
+
+        ! Block quote ends before a heading that does not start with >.
+        call set_doc("> quoted"//NL//"# Heading", t, f)
+        call face("quote ends at heading", t, f, "Heading", FACE_BOLD, ncase, nfail)
+
+        ! List item starting with a heading places its bullet on the heading's line.
+        call set_doc("- # Item Head"//NL//NL//"  Next para.", t, f)
+        call expect("list heading bullet", t, BULLET//" Item Head", ncase, nfail)
+
+        ! Loose list preserves paragraph spacing after an inner code block.
+        call set_doc("- First"//NL//NL//"  ```"//NL//"  code"//NL//"  ```"//NL//NL// &
+                     "  Second"//NL//NL//"  Third", t, f, baselines=bl)
+        ncase = ncase + 1
+        if (size(bl) < 4) then
+            nfail = nfail + 1
+            print "(a)", "  FAIL markdown loose list after code: too few baselines"
+        else if (bl(size(bl)) - bl(size(bl) - 1) < 13.0_dp) then
+            nfail = nfail + 1
+            print "(a,f0.2)", "  FAIL markdown loose list after code: gap = ", &
+                bl(size(bl)) - bl(size(bl) - 1)
+        end if
+
+        ! Nested emphasis with the same delimiter stays italic with no stray *.
+        call set_doc("*a *b* c*", t, f)
+        call reject("nested emphasis stray *", t, "*", ncase, nfail)
+        call face("nested emphasis c italic", t, f, "c", FACE_ITALIC, ncase, nfail)
+
+        ! Bad front matter sizes warn and keep valid defaults instead of crashing.
+        call set_doc("---"//NL//"fontsize: -10pt"//NL//"paper: -100 x 200"//NL// &
+                     "margin: 900pt"//NL//"---"//NL//"Safe body.", t, f)
+        call expect("bad sizes safe", t, "Safe body.", ncase, nfail)
+
+        ! Malformed math warns and does not crash.
+        call set_doc("Before $\frac{a$ after.", t, f)
+        call expect("malformed math safe", t, "after.", ncase, nfail)
+
+        ! Deep display at the foot of a flushbottom page respects maxdepth.
+        call set_doc("---"//NL//"paper: 300 x 200"//NL//"margin: 36pt"//NL//"fontsize: 14pt"//NL// &
+                     "pagenumbers: false"//NL//"flushbottom: true"//NL//"---"//NL// &
+                     "One."//NL//NL//"Two."//NL//NL//"Three."//NL//NL//"Four."//NL//NL// &
+                     "Text before the display"//NL//"$$ \int_0^1 f(x)\,dx $$"//NL// &
+                     "and after it."//NL//NL//"More text.", t, f, lowest=low)
+        ncase = ncase + 1
+        if (low > 171.0_dp) then
+            nfail = nfail + 1
+            print "(a,f0.2)", "  FAIL markdown deep display foot: lowest = ", low
+        end if
+
+        ! Pandoc column-1 YAML author list and blank line in abstract: |.
+        call set_doc("---"//NL//"title: Paper # draft comment"//NL//"author:"//NL// &
+                     "- Author One"//NL//"- Author Two"//NL//"abstract: |"//NL// &
+                     "  First abstract."//NL//NL//"  Second abstract."//NL//"---"//NL// &
+                     "Body.", t, f)
+        call expect("yaml comment stripped", t, "Paper", ncase, nfail)
+        call reject("yaml comment absent", t, "draft", ncase, nfail)
+        call expect("yaml col1 author 1", t, "Author One", ncase, nfail)
+        call expect("yaml col1 author 2", t, "Author Two", ncase, nfail)
+        call expect("yaml abstract para 2", t, "Second abstract.", ncase, nfail)
+
+        ! Long word and long paragraph do not overflow stack (especially under flang).
+        call set_doc(repeat("x", 5000), t, f)
+        call expect("long word", t, "xxxx", ncase, nfail)
+        allocate (character(len=500*12) :: longp)
+        do k = 1, 500
+            longp((k - 1)*12 + 1:k*12) = "word line  "//NL
+        end do
+        call set_doc(longp, t, f)
+        call expect("long paragraph", t, "word line", ncase, nfail)
+    end subroutine bugfix_cases
 
     ! An on_body callback that sets a nested document of its own.
     recursive subroutine nested_body(doc, after, ctx)

@@ -44,8 +44,9 @@ GALLERY = ROOT / "docs" / "gallery" / "typesetting"
 FILTER = Path(__file__).resolve().parent / "compare_docs.lua"
 
 PAPERS = {"a4": (595.2756, 841.8898), "a5": (419.5276, 595.2756),
-          "a6": (297.6378, 419.5276), "letter": (612.0, 792.0),
-          "us-letter": (612.0, 792.0), "legal": (612.0, 1008.0)}
+          "a6": (297.6378, 419.5276), "b5": (498.8976, 708.6614),
+          "letter": (612.0, 792.0), "us-letter": (612.0, 792.0),
+          "legal": (612.0, 1008.0)}
 
 
 def fortran_document(path):
@@ -100,8 +101,8 @@ def front_matter(md):
 def length(v, size):
     m = re.match(r"^\s*([\d.]+)\s*([a-z]*)\s*$", v)
     n, u = float(m.group(1)), m.group(2)
-    return {"in": 72 * n, "cm": 72 / 2.54 * n, "mm": 72 / 25.4 * n,
-            "em": size * n}.get(u, n)
+    return {"pc": 12 * n, "in": 72 * n, "cm": 72 / 2.54 * n, "mm": 72 / 25.4 * n,
+            "em": size * n, "ex": 0.507 * size * n}.get(u, n)
 
 
 def settings(meta):

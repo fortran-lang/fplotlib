@@ -24,8 +24,8 @@ program plot_invitation
         "fontsize: 12pt", &
         "align: center", &
         "parskip: 8pt", &
-        "pagecolor: #fbf3e4", &
-        "color: #3b2b23", &
+        "pagecolor: ""#fbf3e4""", &
+        "color: ""#3b2b23""", &
         "pagenumbers: false", &
         "valign: center", &
         "---", &

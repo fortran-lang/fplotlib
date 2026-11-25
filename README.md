@@ -297,7 +297,9 @@ alike), as in Typst, or `pc`, `in`, `cm`, `mm`, `em` or `ex`. A value that
 cannot be read is warned of and leaves the default. Other keys are kept for
 templates, which read them with `md_meta`.
 
-The core sets the article and book layouts and nothing else. A template is
+The core sets the article layout, with optional chapter-based numbering
+(`chapters: true`) and running-head placement (`runningheads: true`, drawing
+marks set by a template with `ts_mark`). A template is
 given to `typeset` as callbacks that receive the `md_document_t` first (with
 its `doc%engine` public for `ts_*` calls): `on_directive` is given each MyST
 directive, `:::{name} argument` with `:key: value` options and a body, as an
