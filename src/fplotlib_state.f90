@@ -80,6 +80,9 @@ module fplotlib_state
     ! matplotlib's axes.labelpad, the gap between the tick labels and the
     ! axis label.
     real(dp), parameter :: LABEL_PAD = 4.0_dp
+    ! matplotlib's axes.titlepad, the gap between the top of the axes and the
+    ! title's baseline.
+    real(dp), parameter :: TITLE_PAD = 6.0_dp
     real(dp), parameter :: PI = 3.141592653589793_dp
 
     ! What a series draws. LINE covers plot/scatter/semilog*; the rest are

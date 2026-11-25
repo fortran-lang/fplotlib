@@ -287,7 +287,8 @@ contains
             ! and the row below puts its title into the same gap.
             if (ax(i)%g_row > 0) inner_t = max(inner_t, decor_top(ax(i)))
         end do
-        if (len_trim(fig_suptitle) > 0) need_t = need_t + LABEL_BOX * fig_suptitle_size
+        if (len_trim(fig_suptitle) > 0) need_t = need_t + (1.0_dp - SUPTITLE_Y) * H &
+            + text_ascent(fig_suptitle_size) + text_descent(fig_suptitle_size)
 
         ! A figure too small for its decorations keeps the layout it had,
         ! with the warning matplotlib gives, rather than axes of negative
@@ -363,7 +364,7 @@ contains
             if (len_trim(a%cbar_label) > 0) v = v + LABEL_PAD &
                 + text_ascent(a%xlabel_size) + text_descent(a%xlabel_size)
         end if
-        if (a%xtick_rot /= 0.0_dp) v = v + tick_label_width(a) * &
+        if (.not. a%x_top .and. a%xtick_rot /= 0.0_dp) v = v + xtick_label_width(a) * &
                                         abs(sin(a%xtick_rot * PI / 180.0_dp))
         if (len_trim(a%xlabel) > 0) &
             v = v + a%xlabel_pad + text_ascent(a%xlabel_size) &
@@ -435,17 +436,20 @@ contains
     pure elemental function title_gap(a) result(v)
         type(axes_t), intent(in) :: a
         real(dp) :: v
-        v = xtop_band(a) + 0.5_dp*a%title_size
+        v = xtop_band(a) + TITLE_PAD
     end function title_gap
 
     function decor_top(a) result(v)
         type(axes_t), intent(in) :: a
-        real(dp) :: v
-        v = xtop_band(a)
-        if (len_trim(a%title) > 0) v = title_gap(a) + text_ascent(a%title_size)
+        real(dp) :: v, rot_h
+        rot_h = 0.0_dp
+        if (a%x_top .and. a%xtick_rot /= 0.0_dp) &
+            rot_h = xtick_label_width(a) * abs(sin(a%xtick_rot * PI / 180.0_dp))
+        v = xtop_band(a) + rot_h
+        if (len_trim(a%title) > 0) v = max(v, title_gap(a) + text_ascent(a%title_size))
     end function decor_top
 
-    ! Widest tick label an axes will draw, in points, measured as it will
+    ! Widest y tick label an axes will draw, in points, measured as it will
     ! be set.
     function tick_label_width(a) result(v)
         type(axes_t), intent(in) :: a
@@ -462,9 +466,31 @@ contains
             call tick_label(a%ytick_labeled, a%ytick_lab, i, t(i), a%ysc, &
                             axis_fmt(t, nt, a, .false., min(ymin, ymax), &
                                      max(ymin, ymax)), du, lbl, ln)
-            v = max(v, str_width(lbl(1:ln), a%ytick_size))
+            if (ln > 0) v = max(v, str_width(lbl(1:ln), a%ytick_size))
         end do
     end function tick_label_width
+
+    ! Widest x tick label an axes will draw, in points, measured as it will
+    ! be set.
+    function xtick_label_width(a) result(v)
+        type(axes_t), intent(in) :: a
+        real(dp) :: v, xmin, xmax, ymin, ymax
+        real(dp) :: t(MAX_TICKS)
+        character(len=64) :: lbl
+        integer :: nt, i, ln, du
+        v = 0.0_dp
+        if (a%xaxis_off .or. a%xticklabels_off) return
+        call compute_limits(a, xmin, xmax, ymin, ymax)
+        call axis_ticks(a%n_xticks, a%xtick_pos, min(xmin, xmax), max(xmin, xmax), &
+                        a%xsc, nbins_for(a%xtick_nbins, 0.0_dp, a%xtick_size, .true.), &
+                        a%x_date, t, nt, du, a%xtick_base)
+        do i = 1, nt
+            call tick_label(a%xtick_labeled, a%xtick_lab, i, t(i), a%xsc, &
+                            axis_fmt(t, nt, a, .true., min(xmin, xmax), &
+                                     max(xmin, xmax)), du, lbl, ln)
+            if (ln > 0) v = max(v, str_width(lbl(1:ln), a%xtick_size))
+        end do
+    end function xtick_label_width
 
     ! Whether an artist shows up in the legend at all. matplotlib keeps
     ! out anything whose label starts with an underscore, which is how an
@@ -3462,7 +3488,7 @@ contains
         ! sitting on the box, which would run straight through it.
         if (len_trim(a%title) > 0) &
             call append_text(b, cx, cy - R - 4.0_dp - 1.6_dp*a%xtick_size &
-                             - 0.5_dp*a%title_size, trim(a%title), &
+                             - TITLE_PAD, trim(a%title), &
                              "center", a%title_size, rc_text_color)
     end subroutine render_polar
 
@@ -3790,7 +3816,7 @@ contains
         call render_series3d(b, a, M, bl, bt, side)
 
         if (len_trim(a%title) > 0) &
-            call append_text(b, bl + 0.5_dp*side, bt - 0.5_dp*a%title_size, &
+            call append_text(b, bl + 0.5_dp*side, bt - TITLE_PAD, &
                              trim(a%title), "center", a%title_size, rc_text_color)
     end subroutine render_axes3d
 
