@@ -60,6 +60,7 @@ module fplotlib_markdown
         logical :: indent = .true.
         integer, private :: depth = 0
         integer, private :: ilev = 0, elev = 0
+        type(ts_glue_t), private :: parskip = ts_glue_t(0.0_dp, 1.0_dp, 0.0_dp, 0, 0)
     end type md_ctx_t
 
     ! A MyST directive, as on_directive is given it.
@@ -113,6 +114,7 @@ module fplotlib_markdown
         logical :: NOINDENT = .false.
         integer :: NPEND = 0
         type(pending_t), allocatable :: PENDING(:)
+        integer :: REF_DEPTH = 0
     end type md_document_t
 
     ! Template callbacks given to md_typeset. Callbacks receive the
@@ -189,6 +191,8 @@ contains
             ctx%size = doc%BASE
             ctx%color = doc%TEXT_COL
             ctx%align = doc%DOC_ALIGN
+            ctx%parskip = doc%PARSKIP_G
+            doc%REF_DEPTH = 0
             call title_block(doc, ctx)
             if (associated(doc%CB_BODY)) call doc%CB_BODY(doc, .false., ctx)
             if (first <= n) call blocks(doc, lines(first:n), n - first + 1, ctx)
@@ -252,24 +256,41 @@ contains
         heads = .false.
         flushb = .false.
         last = 0
-        if (n >= 1) then
-            if (trim(lines(1)%s) == "---") then
-                do i = 2, n
-                    if (trim(lines(i)%s) == "---" .or. trim(lines(i)%s) == "...") then
-                        last = i
-                        exit
-                    end if
-                end do
+        if (n >= 3) then
+            if (trim(lines(1)%s) == "---" .and. len_trim(lines(2)%s) > 0) then
+                if (lines(2)%s(1:1) == "#" .or. &
+                    (lines(2)%s(1:1) /= " " .and. index(lines(2)%s, ":") > 1)) then
+                    do i = 2, n
+                        if (trim(lines(i)%s) == "---" .or. trim(lines(i)%s) == "...") then
+                            last = i
+                            exit
+                        end if
+                    end do
+                end if
             end if
         end if
-        do i = 2, last - 1
-            if (.not. entry(lines, i, last, key, val)) cycle
+        i = 2
+        do while (i <= last - 1)
+            if (.not. entry(lines, i, last, key, val, c)) then
+                i = i + 1
+                cycle
+            end if
+            i = c
             if (key /= "fontsize") cycle
             x = length(doc, val, doc%BASE, ok)
-            if (ok) doc%BASE = x
+            if (ok .and. x > 0.0_dp) then
+                doc%BASE = x
+            else if (ok) then
+                call warn(doc, "fontsize must be positive: '"//val//"'")
+            end if
         end do
-        do i = 2, last - 1
-            if (.not. entry(lines, i, last, key, val)) cycle
+        i = 2
+        do while (i <= last - 1)
+            if (.not. entry(lines, i, last, key, val, c)) then
+                i = i + 1
+                cycle
+            end if
+            i = c
             call add_meta(doc, key, val)
             select case (key)
             case ("title")
@@ -288,19 +309,23 @@ contains
                 doc%ABSTRACT = val
             case ("linestretch", "leading")
                 x = number(doc, val, ok)
-                if (ok) doc%LEAD = 1.2_dp*x
+                if (ok .and. x > 0.0_dp) then
+                    doc%LEAD = 1.2_dp*x
+                else if (ok) then
+                    call warn(doc, "linestretch must be positive: '"//val//"'")
+                end if
             case ("paper", "papersize")
                 call paper_size(doc, lower(val), pw, ph)
             case ("margin")
-                call set_length(doc, val, m)
+                call set_nonneg_length(doc, val, m, "margin")
             case ("margin-left")
-                call set_length(doc, val, ml)
+                call set_nonneg_length(doc, val, ml, "margin-left")
             case ("margin-right")
-                call set_length(doc, val, mr)
+                call set_nonneg_length(doc, val, mr, "margin-right")
             case ("margin-top")
-                call set_length(doc, val, mt)
+                call set_nonneg_length(doc, val, mt, "margin-top")
             case ("margin-bottom")
-                call set_length(doc, val, mb)
+                call set_nonneg_length(doc, val, mb, "margin-bottom")
             case ("indent", "parindent")
                 if (lower(val) == "false" .or. lower(val) == "no") then
                     doc%PARINDENT = 0.0_dp
@@ -309,9 +334,11 @@ contains
                 end if
             case ("parskip")
                 x = length(doc, val, doc%BASE, ok)
-                if (ok) then
+                if (ok .and. x >= 0.0_dp) then
                     doc%PARSKIP_G = ts_glue_t(x, 0.2_dp*x, 0.0_dp, 0, 0)
                     if (doc%PARINDENT < 0.0_dp) doc%PARINDENT = 0.0_dp
+                else if (ok) then
+                    call warn(doc, "parskip must not be negative: '"//val//"'")
                 end if
             case ("align")
                 c = align_of(lower(val), -1)
@@ -346,45 +373,110 @@ contains
         if (mr < 0.0_dp) mr = m
         if (mt < 0.0_dp) mt = m
         if (mb < 0.0_dp) mb = m
+        if (ml + mr >= pw .or. mt + mb >= ph) then
+            call warn(doc, "margins leave no room on the page; keeping default margins")
+            ml = min(72.0_dp, 0.1_dp*pw)
+            mr = ml
+            mt = min(72.0_dp, 0.1_dp*ph)
+            mb = mt
+        end if
         call ts_set_page(doc%engine, pw, ph, ml, mr, mt, mb, numbers, heads, flushb)
     end subroutine front_matter
 
     ! The key and value of front matter line i, when it is a line that is
     ! not indented and has a colon. The value goes on over the indented
-    ! lines after it, up to line last; "- item" lines, or [a, b], are a
-    ! list, its items one to a line.
-    logical function entry(lines, i, last, key, val)
+    ! lines after it (or column-1 "- item" lines after an empty value), up
+    ! to line last; "- item" lines, or [a, b], are a list, its items one
+    ! to a line. next_i is the first line after the entry.
+    logical function entry(lines, i, last, key, val, next_i)
         type(line_t), intent(in) :: lines(:)
         integer, intent(in) :: i, last
         character(len=:), allocatable, intent(out) :: key, val
-        character(len=:), allocatable :: t
-        integer :: c, j
+        integer, intent(out) :: next_i
+        character(len=:), allocatable :: t, raw
+        integer :: c, j, k
+        logical :: blk_lit, blk_fold, empty_val, has_more, blank_seen
         entry = .false.
         key = ""
         val = ""
+        next_i = i + 1
         if (len(lines(i)%s) == 0) return
-        if (lines(i)%s(1:1) == " ") return
+        if (lines(i)%s(1:1) == " " .or. lines(i)%s(1:1) == "#") return
         c = index(lines(i)%s, ":")
         if (c == 0) return
         entry = .true.
         key = trim(lower(adjustl(lines(i)%s(1:c - 1))))
-        val = unquote(trim(adjustl(lines(i)%s(c + 1:))))
-        if (val == "|" .or. val == ">") val = ""
+        raw = trim(adjustl(strip_yaml_comment(lines(i)%s(c + 1:))))
+        blk_lit = raw == "|"
+        blk_fold = raw == ">"
+        if (blk_lit .or. blk_fold) then
+            val = ""
+        else
+            val = unquote(raw)
+        end if
+        empty_val = len(val) == 0 .and. .not. blk_lit .and. .not. blk_fold
         if (len(val) >= 2) then
             if (val(1:1) == "[" .and. val(len(val):) == "]") val = flow_list(val(2:len(val) - 1))
         end if
-        do j = i + 1, last - 1
-            if (len(lines(j)%s) == 0) exit
-            if (lines(j)%s(1:1) /= " ") exit
-            t = trim(adjustl(lines(j)%s))
-            if (starts(t, "- ")) then
-                if (len(val) > 0) val = val//NL
-                val = val//unquote(trim(adjustl(t(3:))))
-            else
-                if (len(val) > 0) val = val//" "
-                val = val//t
+        blank_seen = .false.
+        j = i + 1
+        do while (j <= last - 1)
+            if (len_trim(lines(j)%s) == 0) then
+                if (blk_lit .or. blk_fold) then
+                    has_more = .false.
+                    do k = j + 1, last - 1
+                        if (len_trim(lines(k)%s) > 0) then
+                            has_more = lines(k)%s(1:1) == " "
+                            exit
+                        end if
+                    end do
+                    if (has_more) then
+                        blank_seen = .true.
+                        j = j + 1
+                        cycle
+                    end if
+                end if
+                exit
             end if
+            if (lines(j)%s(1:1) == " ") then
+                t = trim(adjustl(lines(j)%s))
+                if (starts(t, "#") .and. .not. blk_lit .and. .not. blk_fold) then
+                    j = j + 1
+                    cycle
+                end if
+                if (starts(t, "- ") .and. .not. blk_lit .and. .not. blk_fold) then
+                    if (len(val) > 0) val = val//NL
+                    val = val//unquote(trim(adjustl(strip_yaml_comment(t(3:)))))
+                else if (blk_lit) then
+                    if (len(val) > 0) then
+                        if (blank_seen) then
+                            val = val//NL//NL
+                        else
+                            val = val//NL
+                        end if
+                    end if
+                    val = val//t
+                else
+                    if (len(val) > 0) then
+                        if (blank_seen) then
+                            val = val//NL//NL
+                        else
+                            val = val//" "
+                        end if
+                    end if
+                    val = val//t
+                end if
+                blank_seen = .false.
+            else if (empty_val .and. starts(lines(j)%s, "- ")) then
+                t = trim(adjustl(strip_yaml_comment(lines(j)%s(3:))))
+                if (len(val) > 0) val = val//NL
+                val = val//unquote(t)
+            else
+                exit
+            end if
+            j = j + 1
         end do
+        next_i = j
     end function entry
 
     ! The items of a YAML flow list, a, "b, c", one to a line.
@@ -439,6 +531,20 @@ contains
         x = length(doc, val, doc%BASE, ok)
         if (ok) var = x
     end subroutine set_length
+
+    recursive subroutine set_nonneg_length(doc, val, var, name)
+        type(md_document_t), intent(in) :: doc
+        character(len=*), intent(in) :: val, name
+        real(dp), intent(inout) :: var
+        real(dp) :: x
+        logical :: ok
+        x = length(doc, val, doc%BASE, ok)
+        if (ok .and. x >= 0.0_dp) then
+            var = x
+        else if (ok) then
+            call warn(doc, name//" must not be negative: '"//val//"'")
+        end if
+    end subroutine set_nonneg_length
 
     recursive subroutine set_color(doc, val, var)
         type(md_document_t), intent(in) :: doc
@@ -500,7 +606,7 @@ contains
                 a = length(doc, trim(v(1:x - 1)), doc%BASE, oka)
                 b = length(doc, trim(v(x + 1:)), doc%BASE, okb)
             end if
-            if (oka .and. okb) then
+            if (oka .and. okb .and. a > 0.0_dp .and. b > 0.0_dp) then
                 w = a
                 h = b
             else
@@ -594,9 +700,10 @@ contains
         type(line_t), intent(in) :: L(:)
         integer, intent(in) :: n
         type(md_ctx_t), intent(in) :: ctx
-        integer :: i, j, k, lev, depth
+        integer :: i, j, k, lev, depth, flen, tot, pos
         character(len=:), allocatable :: s, t, para, lab
-        logical :: blank_before
+        character :: fch
+        logical :: blank_before, in_disp
 
         i = 1
         blank_before = .true.
@@ -619,11 +726,11 @@ contains
             if (is_heading(t, lev)) then
                 call heading(doc, heading_text(t, lev), lev, ctx)
                 i = i + 1
-            else if (is_fence(t)) then
+            else if (fence_open(t, fch, flen)) then
                 call other_block(doc)
                 j = i + 1
                 do while (j <= n)
-                    if (is_fence(trim(adjustl(L(j)%s)))) exit
+                    if (fence_close(trim(adjustl(L(j)%s)), fch, flen)) exit
                     j = j + 1
                 end do
                 call code_block(doc, L(i + 1:min(j - 1, n)), max(0, min(j - 1, n) - i), ctx)
@@ -643,9 +750,12 @@ contains
                 call set_div(doc, t, L, i, j, ctx)
                 i = j + 1
             else if (t(1:1) == ">") then
-                j = i
+                j = i + 1
                 do while (j <= n)
                     if (len_trim(L(j)%s) == 0) exit
+                    if (.not. starts(trim(adjustl(L(j)%s)), ">")) then
+                        if (interrupts(L(j)%s)) exit
+                    end if
                     j = j + 1
                 end do
                 call other_block(doc)
@@ -664,21 +774,43 @@ contains
                 call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
                 i = i + 1
             else
-                para = ""
+                in_disp = .false.
                 j = i
                 do while (j <= n)
                     t = trim(adjustl(L(j)%s))
                     if (len(t) == 0) exit
                     ! Inside a display, a line is mathematics, whatever it
-                    ! starts with.
-                    if (j > i .and. .not. open_display(para)) then
-                        if (interrupts(L(j)%s)) exit
-                        if (j == i + 1 .and. (is_underline(t, "=") .or. &
-                                              is_underline(t, "-"))) exit
+                    ! starts with, provided a closing $$ follows in the block.
+                    if (j > i) then
+                        if (.not. in_disp) then
+                            if (interrupts(L(j)%s)) exit
+                            if (j == i + 1 .and. (is_underline(t, "=") .or. &
+                                                  is_underline(t, "-"))) exit
+                        else if (.not. has_display_close(L, j, n)) then
+                            if (interrupts(L(j)%s)) exit
+                            if (j == i + 1 .and. (is_underline(t, "=") .or. &
+                                                  is_underline(t, "-"))) exit
+                        end if
                     end if
-                    if (len(para) > 0) para = para//NL
-                    para = para//L(j)%s
+                    call scan_display(L(j)%s, in_disp)
                     j = j + 1
+                end do
+                tot = max(0, j - i - 1)
+                do k = i, j - 1
+                    tot = tot + len(L(k)%s)
+                end do
+                if (allocated(para)) deallocate (para)
+                allocate (character(len=tot) :: para)
+                pos = 1
+                do k = i, j - 1
+                    if (k > i) then
+                        para(pos:pos) = NL
+                        pos = pos + 1
+                    end if
+                    if (len(L(k)%s) > 0) then
+                        para(pos:pos + len(L(k)%s) - 1) = L(k)%s
+                        pos = pos + len(L(k)%s)
+                    end if
                 end do
                 if (j == i + 1 .and. j <= n) then
                     t = trim(adjustl(L(j)%s))
@@ -737,11 +869,13 @@ contains
     logical function interrupts(s)
         character(len=*), intent(in) :: s
         character(len=:), allocatable :: t, lab
-        integer :: k, lev
+        integer :: k, lev, flen
+        character :: fch
         t = trim(adjustl(s))
         interrupts = .false.
         if (len(t) == 0) return
-        if (is_heading(t, lev) .or. is_fence(t) .or. (starts(t, ":::") .and. div_opens(t)) .or. &
+        if (is_heading(t, lev) .or. fence_open(t, fch, flen) .or. &
+            (starts(t, ":::") .and. div_opens(t)) .or. &
             t(1:1) == ">" .or. is_rule(t) .or. is_target(t, lab)) then
             interrupts = .true.
         else if (is_item(s, k, lev)) then
@@ -749,17 +883,17 @@ contains
         end if
     end function interrupts
 
-    ! Whether text leaves a $$ display open: whether it has an odd number
-    ! of $$, outside code spans and escapes.
-    logical function open_display(text)
+    ! Update in_disp after scanning one line, respecting escapes, code
+    ! spans, and inline $...$ spans so $a$$b$ and \$$x$$ do not open one.
+    subroutine scan_display(text, in_disp)
         character(len=*), intent(in) :: text
+        logical, intent(inout) :: in_disp
         integer :: i, j, r
-        open_display = .false.
         i = 1
         do while (i <= len(text))
             if (text(i:i) == BS) then
                 i = i + 2
-            else if (text(i:i) == "`" .and. .not. open_display) then
+            else if (text(i:i) == "`" .and. .not. in_disp) then
                 r = 1
                 do while (i + r <= len(text))
                     if (text(i + r:i + r) /= "`") exit
@@ -768,10 +902,21 @@ contains
                 j = index(text(i + r:), repeat("`", r))
                 i = i + r
                 if (j > 0) i = i + j - 1 + r
-            else if (i < len(text) .and. text(i:i) == "$") then
-                if (text(i + 1:i + 1) == "$") then
-                    open_display = .not. open_display
-                    i = i + 2
+            else if (text(i:i) == "$") then
+                if (i < len(text)) then
+                    if (text(i + 1:i + 1) == "$") then
+                        in_disp = .not. in_disp
+                        i = i + 2
+                        cycle
+                    end if
+                end if
+                if (.not. in_disp) then
+                    j = closing_dollar(text, i)
+                    if (j > 0) then
+                        i = j + 1
+                    else
+                        i = i + 1
+                    end if
                 else
                     i = i + 1
                 end if
@@ -779,7 +924,25 @@ contains
                 i = i + 1
             end if
         end do
-    end function open_display
+    end subroutine scan_display
+
+    ! Whether a closing $$ appears in lines(from:n) before the next blank line.
+    logical function has_display_close(L, from, n) result(found)
+        type(line_t), intent(in) :: L(:)
+        integer, intent(in) :: from, n
+        integer :: k
+        logical :: in_disp
+        found = .false.
+        in_disp = .true.
+        do k = from, n
+            if (len_trim(L(k)%s) == 0) exit
+            call scan_display(L(k)%s, in_disp)
+            if (.not. in_disp) then
+                found = .true.
+                return
+            end if
+        end do
+    end function has_display_close
 
     ! A paragraph of inline text in the context's settings.
     recursive subroutine paragraph(doc, text, ctx)
@@ -877,7 +1040,7 @@ contains
                 end do
             end if
         end if
-        call place_targets(doc, num, strip_markup(text))
+        call place_targets(doc, num, text)
         if (associated(doc%CB_HEAD)) then
             this%level = level
             this%text = text
@@ -920,6 +1083,7 @@ contains
         call ts_begin_par(doc%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, &
                 size=size, &
                           leading=baseline, hang=hang, nobreak=.true.)
+        call put_labels(doc, ctx, ctx%left)
         if (len(num) > 0) then
             call ts_word(doc%engine, num, FACE_BOLD, size, ctx%color)
             call ts_kern(doc%engine, size)
@@ -1025,6 +1189,7 @@ contains
         sub%left = ctx%left + lm
         sub%indent = .false.
         sub%align = ctx%align
+        sub%parskip = parsep
         if (kind == 0) then
             sub%ilev = ctx%ilev + 1
         else
@@ -1093,8 +1258,7 @@ contains
             j = k
         end do
         call ts_end_par(doc%engine)
-        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(doc%engine, parsep_of(doc, ctx%depth))
+        call ts_set_parskip(doc%engine, ctx%parskip)
         call ts_addpenalty(doc%engine, -51)
         if (ctx%depth == 0) then
             call ts_addvspace(doc%engine, add_glue(topsep, partopsep))
@@ -1179,14 +1343,14 @@ contains
         sub%left = ctx%left + 2.5_dp*doc%BASE
         sub%right = ctx%right + 2.5_dp*doc%BASE
         sub%indent = .false.
+        sub%parskip = parsep_of(doc, sub%depth)
         call ts_end_par(doc%engine)
         call ts_addpenalty(doc%engine, -51)
         call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
         call ts_set_parskip(doc%engine, parsep_of(doc, sub%depth))
         call blocks(doc, q, n, sub)
         call ts_end_par(doc%engine)
-        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
-        if (ctx%depth > 0) call ts_set_parskip(doc%engine, parsep_of(doc, ctx%depth))
+        call ts_set_parskip(doc%engine, ctx%parskip)
         call ts_addpenalty(doc%engine, -51)
         call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine quote_block
@@ -1227,7 +1391,7 @@ contains
             end do
             call ts_end_par(doc%engine)
         end do
-        call ts_set_parskip(doc%engine, doc%PARSKIP_G)
+        call ts_set_parskip(doc%engine, ctx%parskip)
         call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
     end subroutine code_block
 
@@ -1285,8 +1449,11 @@ contains
         directive%body = body
         handled = .false.
         if (associated(doc%CB_DIR)) call doc%CB_DIR(doc, directive, ctx, handled)
-        if (.not. handled .and. j - 1 >= content_at) &
-            call blocks(doc, L(content_at:j - 1), j - content_at, ctx)
+        if (.not. handled) then
+            if (len(name) > 0) call warn(doc, "unhandled directive '"//name//"'")
+            if (j - 1 >= content_at) &
+                call blocks(doc, L(content_at:j - 1), j - content_at, ctx)
+        end if
     end subroutine set_div
 
     ! --- Template helpers -------------------------------------------------
@@ -1306,6 +1473,7 @@ contains
         type(md_document_t), intent(inout) :: doc
         character(len=*), intent(in) :: text
         type(md_ctx_t), intent(in) :: ctx
+        if (doc%NPEND > 0 .and. ts_in_par(doc%engine)) call put_labels(doc, ctx, ctx%left)
         call inline(doc, text, base_style(ctx))
     end subroutine md_inline
 
@@ -1411,24 +1579,24 @@ contains
         character(len=*), intent(in) :: s
         type(style_t), intent(in) :: st0
         type(style_t) :: st, sp
-        character(len=:), allocatable :: w, src, tag, cmd, arg
-        integer :: i, j, k, r, cp, nb, sp_face
+        character(len=:), allocatable :: wbuf, src, tag, cmd, arg, ref_text
+        integer :: i, j, k, r, cp, nb, sp_face, nw, em_depth, strong_depth
         real(dp) :: sp_size
-        logical :: space, em_open, strong_open, lf, rf
-        character :: c, em_c, strong_c, prev, next
+        logical :: space, lf, rf, m_ok
+        character :: c, prev, next
+        character :: em_cs(16), strong_cs(16)
 
         st = st0
-        w = ""
+        allocate (character(len=max(64, len(s))) :: wbuf)
+        nw = 0
         space = .false.
-        em_open = .false.
-        strong_open = .false.
-        em_c = " "
-        strong_c = " "
+        em_depth = 0
+        strong_depth = 0
+        em_cs = " "
+        strong_cs = " "
         i = 1
         do while (i <= len(s))
             c = s(i:i)
-            prev = " "
-            if (i > 1) prev = s(i - 1:i - 1)
             select case (c)
             case (" ", NL, achar(9))
                 ! Two spaces before the end of a line break it.
@@ -1451,32 +1619,37 @@ contains
                 i = i + 1
             case ("*", "_")
                 call delimiter_run(s, i, r, lf, rf)
-                if (rf .and. ((r == 1 .and. em_open .and. em_c == c) .or. &
-                              (r == 2 .and. strong_open .and. strong_c == c) .or. &
-                              (r >= 3 .and. em_open .and. strong_open))) then
+                if (rf .and. ((r == 1 .and. em_depth > 0 .and. em_cs(max(1, em_depth)) == c) .or. &
+                              (r == 2 .and. strong_depth > 0 .and. &
+                               strong_cs(max(1, strong_depth)) == c) .or. &
+                              (r >= 3 .and. em_depth > 0 .and. strong_depth > 0))) then
                     call flush()
                     if (r == 1 .or. r >= 3) then
-                        em_open = .false.
-                        st%italic = st0%italic
+                        em_depth = max(0, em_depth - 1)
+                        st%italic = (em_depth > 0) .neqv. st0%italic
                     end if
                     if (r >= 2) then
-                        strong_open = .false.
-                        st%bold = st0%bold
+                        strong_depth = max(0, strong_depth - 1)
+                        st%bold = (strong_depth > 0) .or. st0%bold
                     end if
                 else if (lf .and. r <= 3 .and. has_closer(s, i + r, c, r)) then
                     call flush()
                     if (r == 1 .or. r == 3) then
-                        em_open = .true.
-                        em_c = c
-                        st%italic = .not. st0%italic
+                        if (em_depth < size(em_cs)) then
+                            em_depth = em_depth + 1
+                            em_cs(em_depth) = c
+                        end if
+                        st%italic = (em_depth > 0) .neqv. st0%italic
                     end if
                     if (r >= 2) then
-                        strong_open = .true.
-                        strong_c = c
+                        if (strong_depth < size(strong_cs)) then
+                            strong_depth = strong_depth + 1
+                            strong_cs(strong_depth) = c
+                        end if
                         st%bold = .true.
                     end if
                 else
-                    w = w//s(i:i + r - 1)
+                    call append_w(s(i:i + r - 1))
                 end if
                 i = i + r
             case ("`")
@@ -1487,7 +1660,7 @@ contains
                 end do
                 j = index(s(i + r:), repeat("`", r))
                 if (j == 0) then
-                    w = w//s(i:i + r - 1)
+                    call append_w(s(i:i + r - 1))
                     i = i + r
                     cycle
                 end if
@@ -1511,7 +1684,8 @@ contains
                             tag = ""
                             call display_tag(doc, s, k, tag)
                             call ts_math(doc%engine, src, st%size, st%color, display=.true., &
-                                    tag=tag)
+                                         tag=tag, ok=m_ok)
+                            if (.not. m_ok) call warn(doc, "malformed math '"//trim(src)//"'")
                             space = .false.
                             i = k
                             do while (i <= len(s))
@@ -1521,7 +1695,7 @@ contains
                             cycle
                         end if
                         ! A $$ that is not closed is text.
-                        w = w//"$$"
+                        call append_w("$$")
                         i = i + 2
                         cycle
                     end if
@@ -1530,15 +1704,18 @@ contains
                 if (j > 0) then
                     call flush()
                     call flush_space()
-                    call ts_math(doc%engine, s(i + 1:j - 1), st%size, st%color, display=.false.)
+                    call ts_math(doc%engine, s(i + 1:j - 1), st%size, st%color, display=.false., &
+                                 ok=m_ok)
+                    if (.not. m_ok) &
+                        call warn(doc, "malformed math '"//trim(s(i + 1:j - 1))//"'")
                     i = j + 1
                 else
-                    w = w//"$"
+                    call append_w("$")
                     i = i + 1
                 end if
             case (BS)
                 if (i == len(s)) then
-                    w = w//BS
+                    call append_w(BS)
                     i = i + 1
                     cycle
                 end if
@@ -1549,10 +1726,10 @@ contains
                     space = .false.
                     i = i + 2
                 else if (punct(next)) then
-                    w = w//next
+                    call append_w(next)
                     i = i + 2
                 else
-                    w = w//BS
+                    call append_w(BS)
                     i = i + 1
                 end if
             case ("[")
@@ -1571,7 +1748,7 @@ contains
                         end if
                     end if
                 end if
-                w = w//"["
+                call append_w("[")
                 i = i + 1
             case ("{")
                 ! MyST cross-reference roles: {eq}`name`, {numref}`name`, {ref}`name`.
@@ -1582,53 +1759,69 @@ contains
                         k = index(s(i + j + 1:), "`")
                         if (k > 1) then
                             arg = trim(s(i + j + 1:i + j + k - 1))
-                            w = w//reference(doc, cmd, arg)
+                            ref_text = reference(doc, cmd, arg)
+                            if (cmd == "eq") then
+                                call append_w(ref_text)
+                            else
+                                call flush()
+                                call flush_space()
+                                if (doc%REF_DEPTH >= 4) then
+                                    call warn(doc, "cyclic reference {"//cmd//"}`"//arg//"`")
+                                    call append_w("??")
+                                else
+                                    doc%REF_DEPTH = doc%REF_DEPTH + 1
+                                    call inline(doc, ref_text, st)
+                                    doc%REF_DEPTH = doc%REF_DEPTH - 1
+                                end if
+                            end if
                             i = i + j + k + 1
                             cycle
                         end if
                     end if
                 end if
-                w = w//"{"
+                call append_w("{")
                 i = i + 1
             case ("-")
                 if (i + 2 <= len(s)) then
                     if (s(i:i + 2) == "---") then
-                        w = w//achar(226)//achar(128)//achar(148)
+                        call append_w(achar(226)//achar(128)//achar(148))
                         i = i + 3
                         cycle
                     end if
                 end if
                 if (i + 1 <= len(s)) then
                     if (s(i:i + 1) == "--") then
-                        w = w//achar(226)//achar(128)//achar(147)
+                        call append_w(achar(226)//achar(128)//achar(147))
                         i = i + 2
                         cycle
                     end if
                 end if
-                w = w//"-"
+                call append_w("-")
                 i = i + 1
             case (".")
                 if (i + 2 <= len(s)) then
                     if (s(i:i + 2) == "...") then
-                        w = w//achar(226)//achar(128)//achar(166)
+                        call append_w(achar(226)//achar(128)//achar(166))
                         i = i + 3
                         cycle
                     end if
                 end if
-                w = w//"."
+                call append_w(".")
                 i = i + 1
             case ('"')
+                prev = quote_prev(s, i)
                 if (opening(prev)) then
-                    w = w//achar(226)//achar(128)//achar(156)
+                    call append_w(achar(226)//achar(128)//achar(156))
                 else
-                    w = w//achar(226)//achar(128)//achar(157)
+                    call append_w(achar(226)//achar(128)//achar(157))
                 end if
                 i = i + 1
             case ("'")
+                prev = quote_prev(s, i)
                 if (opening(prev)) then
-                    w = w//achar(226)//achar(128)//achar(152)
+                    call append_w(achar(226)//achar(128)//achar(152))
                 else
-                    w = w//achar(226)//achar(128)//achar(153)
+                    call append_w(achar(226)//achar(128)//achar(153))
                 end if
                 i = i + 1
             case default
@@ -1640,7 +1833,7 @@ contains
                     call ts_nbsp(doc%engine, face_of(st), st%size)
                     space = .false.
                 else
-                    w = w//s(i:i + nb - 1)
+                    call append_w(s(i:i + nb - 1))
                 end if
                 i = i + nb
             end select
@@ -1649,16 +1842,32 @@ contains
 
     contains
 
+        subroutine append_w(piece)
+            character(len=*), intent(in) :: piece
+            character(len=:), allocatable :: grown
+            integer :: need, m
+            m = len(piece)
+            if (m == 0) return
+            need = nw + m
+            if (need > len(wbuf)) then
+                allocate (character(len=max(2*len(wbuf), need)) :: grown)
+                if (nw > 0) grown(1:nw) = wbuf(1:nw)
+                call move_alloc(grown, wbuf)
+            end if
+            wbuf(nw + 1:need) = piece
+            nw = need
+        end subroutine append_w
+
         ! The word so far goes out, after a space if one came before it.
         subroutine flush()
-            if (len(w) == 0) return
+            if (nw == 0) return
             call flush_space()
             if (st%code) then
-                call ts_word(doc%engine, w, FACE_REGULAR, st%size, CODE_COL)
+                call ts_word(doc%engine, wbuf(1:nw), FACE_REGULAR, st%size, CODE_COL)
             else
-                call ts_word(doc%engine, w, face_of(st), st%size, st%color)
+                call ts_word(doc%engine, wbuf(1:nw), face_of(st), st%size, st%color)
             end if
-            w = ""
+            nw = 0
         end subroutine flush
 
         subroutine flush_space()
@@ -1667,6 +1876,20 @@ contains
         end subroutine flush_space
 
     end subroutine inline
+
+    ! The character before a quote at s(i:i), skipping emphasis/code delimiters.
+    pure character function quote_prev(s, i)
+        character(len=*), intent(in) :: s
+        integer, intent(in) :: i
+        integer :: k
+        k = i - 1
+        do while (k >= 1)
+            if (s(k:k) /= "*" .and. s(k:k) /= "_" .and. s(k:k) /= "`") exit
+            k = k - 1
+        end do
+        quote_prev = " "
+        if (k >= 1) quote_prev = s(k:k)
+    end function quote_prev
 
     ! The run of * or _ at s(i:i): its length r, and whether it can open
     ! (lf, left-flanking) and close (rf, right-flanking) emphasis, by
@@ -1915,7 +2138,7 @@ contains
             case ("numref")
                 if (len(doc%LABS(r)%num) > 0) then
                     if (.not. explicit) then
-                        title = "Section %s"
+                        title = "Section"//achar(194)//achar(160)//"%s"
                         if (doc%LABS(r)%kind == LAB_EQUATION) title = "(%s)"
                     end if
                     s = replace(replace(replace(title, "%s", doc%LABS(r)%num), "{number}", &
@@ -1974,12 +2197,21 @@ contains
         character(len=*), intent(in) :: t
         integer, intent(in) :: lev
         character(len=:), allocatable :: h
+        integer :: k
         h = trim(adjustl(t(lev + 1:)))
-        ! Closing #s go.
-        do while (len(h) > 0)
-            if (h(len(h):len(h)) /= "#") exit
-            h = trim(h(1:len(h) - 1))
+        ! Closing #s go only when preceded by a space (or alone), as in CommonMark.
+        k = len(h)
+        do while (k > 0)
+            if (h(k:k) /= "#") exit
+            k = k - 1
         end do
+        if (k < len(h)) then
+            if (k == 0) then
+                h = ""
+            else if (h(k:k) == " " .or. h(k:k) == achar(9)) then
+                h = trim(h(1:k))
+            end if
+        end if
     end function heading_text
 
     ! A MyST target line: (name)=
@@ -2002,10 +2234,37 @@ contains
         is_target = .true.
     end function is_target
 
-    logical function is_fence(t)
+    logical function fence_open(t, ch, flen)
         character(len=*), intent(in) :: t
-        is_fence = starts(t, "```") .or. starts(t, "~~~")
-    end function is_fence
+        character, intent(out) :: ch
+        integer, intent(out) :: flen
+        integer :: k
+        fence_open = .false.
+        ch = " "
+        flen = 0
+        if (len(t) < 3) return
+        if (t(1:1) /= "`" .and. t(1:1) /= "~") return
+        ch = t(1:1)
+        k = 1
+        do while (k <= len(t))
+            if (t(k:k) /= ch) exit
+            k = k + 1
+        end do
+        flen = k - 1
+        if (flen < 3) return
+        ! CommonMark: a backtick fence's info string may not contain a backtick.
+        if (ch == "`" .and. k <= len(t)) then
+            if (index(t(k:), "`") > 0) return
+        end if
+        fence_open = .true.
+    end function fence_open
+
+    logical function fence_close(t, ch, flen)
+        character(len=*), intent(in) :: t
+        character, intent(in) :: ch
+        integer, intent(in) :: flen
+        fence_close = len(t) >= flen .and. verify(t, ch) == 0
+    end function fence_close
 
     logical function div_opens(t)
         character(len=*), intent(in) :: t
@@ -2235,16 +2494,30 @@ contains
         starts = s(1:len(p)) == p
     end function starts
 
-    ! A heading's text without emphasis marks.
-    function strip_markup(s) result(t)
+    ! Strip an unquoted YAML # comment (preceded by whitespace or at start).
+    function strip_yaml_comment(s) result(t)
         character(len=*), intent(in) :: s
         character(len=:), allocatable :: t
+        character :: q
         integer :: k
-        t = ""
+        q = " "
         do k = 1, len(s)
-            if (s(k:k) /= "*" .and. s(k:k) /= "_" .and. s(k:k) /= "`") t = t//s(k:k)
+            if (q /= " ") then
+                if (s(k:k) == q) q = " "
+            else if (s(k:k) == '"' .or. s(k:k) == "'") then
+                q = s(k:k)
+            else if (s(k:k) == "#") then
+                if (k == 1) then
+                    t = ""
+                    return
+                else if (s(k - 1:k - 1) == " " .or. s(k - 1:k - 1) == achar(9)) then
+                    t = trim(s(1:k - 1))
+                    return
+                end if
+            end if
         end do
-    end function strip_markup
+        t = s
+    end function strip_yaml_comment
 
     function lower(s) result(t)
         character(len=*), intent(in) :: s

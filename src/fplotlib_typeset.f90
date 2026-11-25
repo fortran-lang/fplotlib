@@ -514,13 +514,14 @@ contains
     ! with display, displayed (TeX's $$...$$, below) with the number tag.
     ! The layout of the formula itself is the same, math_formula's; only
     ! its style and where it goes differ.
-    subroutine ts_math(ts, src, size, color, display, tag)
+    subroutine ts_math(ts, src, size, color, display, tag, ok)
         type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         integer, intent(in), optional :: color
         logical, intent(in), optional :: display
         character(len=*), intent(in), optional :: tag
+        logical, intent(out), optional :: ok
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         real(dp) :: w, h, d
@@ -530,15 +531,16 @@ contains
         if (present(display)) then
             if (display) then
                 if (present(tag)) then
-                    call set_display(ts, src, size, tag, col)
+                    call set_display(ts, src, size, tag, col, ok)
                 else
-                    call set_display(ts, src, size, "", col)
+                    call set_display(ts, src, size, "", col, ok)
                 end if
                 return
             end if
         end if
         if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
         call math_formula(src, size, .false., run, rules, w, h, d)
+        if (present(ok)) ok = math_ok(src, run%n, rules%n, w, h, d)
         call h_new(ts, HK_BOX)
         ts%HW(ts%HN) = w
         ts%HH(ts%HN) = h
@@ -546,6 +548,39 @@ contains
         call box_items(ts, run, rules, col, ts%HI0(ts%HN), ts%HI1(ts%HN))
         ts%P_SF = 1000.0_dp
     end subroutine ts_math
+
+    ! Whether a formula's source and laid-out box look well-formed.
+    logical function math_ok(src, ng, nr, w, h, d)
+        character(len=*), intent(in) :: src
+        integer, intent(in) :: ng, nr
+        real(dp), intent(in) :: w, h, d
+        integer :: i, depth
+        math_ok = .true.
+        if (len_trim(src) == 0) return
+        depth = 0
+        i = 1
+        do while (i <= len(src))
+            if (src(i:i) == achar(92)) then
+                i = i + 2
+                cycle
+            else if (src(i:i) == "{") then
+                depth = depth + 1
+            else if (src(i:i) == "}") then
+                depth = depth - 1
+                if (depth < 0) then
+                    math_ok = .false.
+                    return
+                end if
+            end if
+            i = i + 1
+        end do
+        if (depth /= 0) then
+            math_ok = .false.
+            return
+        end if
+        if (ng == 0 .and. nr == 0 .and. w == 0.0_dp .and. h == 0.0_dp .and. d == 0.0_dp) &
+            math_ok = .false.
+    end function math_ok
 
     ! A label hung to the left of the paragraph's first line, ending sep
     ! before the text, as a LaTeX \item puts it; a penalty of 0 follows,
@@ -1612,12 +1647,13 @@ contains
     ! between \abovedisplayskip and \belowdisplayskip (or the short ones
     ! when the line before ends well before it), with its number, tag, at
     ! the right margin, and the paragraph goes on after it, not indented.
-    subroutine set_display(ts, src, size, tag, col)
+    subroutine set_display(ts, src, size, tag, col, ok)
         type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: src
         real(dp), intent(in) :: size
         character(len=*), intent(in) :: tag
         integer, intent(in) :: col
+        logical, intent(out), optional :: ok
         type(glyphrun_t) :: run, trun
         type(mrules_t) :: rules
         real(dp) :: w, h, d, z, e, dd, pre, s, f, x0, tw, ts_
@@ -1646,6 +1682,7 @@ contains
         ts%IN_PAR = .false.
 
         call math_formula(src, size, .true., run, rules, w, h, d)
+        if (present(ok)) ok = math_ok(src, run%n, rules%n, w, h, d)
         z = ts%HSIZE - lft - rgt
         s = lft
         ! The number, in the text font.
@@ -2136,6 +2173,10 @@ contains
                     depth = 0.0_dp
                 end if
             end select
+            if (depth > ts%MAXDEPTH) then
+                total = total + depth - ts%MAXDEPTH
+                depth = ts%MAXDEPTH
+            end if
         end do
         ts%PGSET(p) = 0.0_dp
         ts%PGORD(p) = 0
