@@ -48,7 +48,7 @@ module fplotlib_typeset
     public :: ts_vskip, ts_addvspace, ts_penalty, ts_addpenalty, ts_vfil, ts_rule, ts_frame
     public :: ts_page_break, ts_mark, ts_nobreak_next, ts_set_clubpenalty
     public :: ts_vkeep, ts_set_colors, ts_hsize, ts_font_size, ts_strut, ts_set_parskip
-    public :: ts_paginate, ts_page_count, ts_page_draw, ts_page_size
+    public :: ts_paginate, ts_page_count, ts_page_draw, ts_page_size, ts_box_height
     public :: ts_line_count, ts_line_info, ts_par_lines
     public :: ts_glue_t, ts_xheight, ts_quad
     public :: ALIGN_JUSTIFY, ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT
@@ -2255,6 +2255,64 @@ contains
         type(typeset_context_t), intent(in) :: ts
         ts_page_count = ts%NPAGE
     end function ts_page_count
+
+    ! Exact vertical extent of the laid-out boxes on page p, matching ts_page_draw.
+    ! Returns the content height from the top of the first box to the bottom of
+    ! the last box (0 if empty). Optional top_gap is the distance from ts%MARGIN_T
+    ! to the top of the first box (due to \topskip).
+    real(dp) function ts_box_height(ts, p, top_gap) result(h)
+        type(typeset_context_t), intent(in) :: ts
+        integer, intent(in), optional :: p
+        real(dp), intent(out), optional :: top_gap
+        real(dp) :: y, depth, gw, y_top, y_bot
+        integer :: k, pg
+        logical :: first
+
+        h = 0.0_dp
+        if (present(top_gap)) top_gap = 0.0_dp
+        pg = 1
+        if (present(p)) pg = p
+        if (pg < 1 .or. pg > ts%NPAGE) return
+
+        y = 0.0_dp
+        depth = 0.0_dp
+        y_top = 0.0_dp
+        y_bot = 0.0_dp
+        first = .true.
+        do k = ts%PG0(pg), ts%PG1(pg)
+            select case (ts%VK(k))
+            case (VK_BOX)
+                if (first) then
+                    y = max(ts%TOPSKIP, ts%VH(k))
+                    y_top = y - ts%VH(k)
+                    first = .false.
+                else
+                    y = y + depth + ts%VH(k)
+                end if
+                depth = ts%VD(k)
+                y_bot = max(y_bot, y + depth)
+            case (VK_GLUE)
+                if (.not. first) then
+                    gw = ts%VW(k)
+                    if (ts%PGSET(pg) < 0.0_dp .and. ts%VHO(k) == 0) &
+                        gw = gw + ts%PGSET(pg)*ts%VSH(k)
+                    if (ts%PGSET(pg) > 0.0_dp .and. ts%VSO(k) == ts%PGORD(pg)) &
+                        gw = gw + ts%PGSET(pg)*ts%VST(k)
+                    y = y + depth + gw
+                    depth = 0.0_dp
+                end if
+            case (VK_KERN)
+                if (.not. first) then
+                    y = y + depth + ts%VW(k)
+                    depth = 0.0_dp
+                end if
+            end select
+        end do
+        if (.not. first) then
+            h = max(0.0_dp, y_bot - y_top)
+            if (present(top_gap)) top_gap = y_top
+        end if
+    end function ts_box_height
 
     ! Draw page p on r, which the caller has opened at the paper's size.
     subroutine ts_page_draw(ts, r, p)

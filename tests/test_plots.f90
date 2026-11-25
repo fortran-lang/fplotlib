@@ -1595,6 +1595,7 @@ program test_plots
     ! A document: Markdown set by TeX's rules over three pages, written in
     ! every format.
     call document_case()
+    call textbox_case()
 
     print *, "All test plots written."
 
@@ -1692,6 +1693,44 @@ contains
         call typeset(doc, "tests/out/document.eps", on_directive=doc_directive)
         print *, "wrote tests/out/document.pdf and its pages as .svg, .png and .eps"
     end subroutine document_case
+
+    subroutine textbox_case()
+        character, parameter :: NL = achar(10)
+        character(len=:), allocatable :: svg_s, pdf_s, png_s, eps_s
+        real(dp) :: tx(20), ty(20)
+        integer :: k
+        do k = 1, 20
+            tx(k) = real(k - 1, dp)/19.0_dp
+            ty(k) = sin(3.141592653589793_dp*tx(k))
+        end do
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call plot(tx, ty, "C0-", lw=2.0_dp)
+        call textbox(0.0_dp, 1.03_dp, &
+                     "**Wrapped Title**"//NL//NL//"*Subtitle with $y = \sin(\pi x)$*", &
+                     coords="axes", ha="left", va="bottom", align="left", fontsize=10.0_dp)
+        call textbox(0.95_dp, 0.92_dp, "**Card**"//NL//NL//"$$y = \sin(\pi x)$$"//NL//NL// &
+                     "- peak at $x = 0.5$", width=150.0_dp, coords="axes", ha="right", va="top", &
+                     fontsize=8.5_dp, facecolor="#f8fafc", edgecolor="#64748b", lw=0.8_dp, &
+                     alpha=0.95_dp, pad=6.0_dp, radius=4.0_dp)
+        call textbox(0.5_dp, 0.2_dp, "Data note", width=70.0_dp, coords="data", &
+                     ha="center", va="center", fontsize=8.0_dp, align="center")
+        call textbox(0.5_dp, 0.03_dp, "**Figure 1.** Caption in figure coordinates.", &
+                     width=300.0_dp, coords="figure", ha="center", va="bottom", &
+                     fontsize=8.5_dp, align="justify")
+        svg_s = render_svg()
+        pdf_s = render_pdf()
+        png_s = render_png()
+        eps_s = render_eps()
+        if (len(svg_s) < 500 .or. index(svg_s, "</svg>") == 0) &
+            error stop "textbox_case: invalid SVG"
+        if (len(pdf_s) < 500 .or. index(pdf_s, "%PDF-") /= 1) &
+            error stop "textbox_case: invalid PDF"
+        if (len(png_s) < 500 .or. index(png_s, achar(137)//"PNG") /= 1) &
+            error stop "textbox_case: invalid PNG"
+        if (len(eps_s) < 500 .or. index(eps_s, "%!PS-Adobe-") /= 1) &
+            error stop "textbox_case: invalid EPS"
+    end subroutine textbox_case
 
     recursive subroutine doc_directive(doc, d, ctx, handled)
         use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, &

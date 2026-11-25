@@ -56,6 +56,11 @@ call suptitle("figure title")
   `transform="axes"` places in fractions of the axes box.
   `connectionstyle="arc3,rad=0.3"` bows the leader out of the straight
   line, and `boxstyle="round,pad=0.5"` rounds the corners of the box
+- `textbox` places a rich MyST Markdown block (bold, italic, inline and
+  displayed TeX math, lists, Knuth–Plass justification and hyphenation)
+  in axes, figure, or data coordinates, with optional rounded `facecolor=`,
+  `edgecolor=`, `pad=` and `radius=` for inset cards, wrapped titles, and
+  figure captions
 - `imshow` of an (row, column, channel) array paints the colours given,
   three channels for RGB or four for RGBA
 - `imshow` with `cmap`, `extent`, `origin`, `vmin`/`vmax` and square-pixel

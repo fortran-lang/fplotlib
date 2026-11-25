@@ -62,7 +62,7 @@ module fplotlib
     public :: step, stem, pie, boxplot, violinplot
     public :: axis, set_aspect, tick_params, spines
     public :: margins, autoscale
-    public :: text, annotate, figtext, set_facecolor
+    public :: text, annotate, figtext, textbox, set_facecolor
     public :: xticks, yticks, minorticks_on, locator_params
     public :: ticklabel_format, tick_format, tick_locator
     public :: imshow, colorbar, contour, contourf, clabel
@@ -144,6 +144,7 @@ module fplotlib
         procedure :: vlines => ax_vlines
         procedure :: text => ax_text
         procedure :: annotate => ax_annotate
+        procedure :: textbox => ax_textbox
         procedure :: set_title => ax_set_title
         procedure :: set_xlabel => ax_set_xlabel
         procedure :: set_ylabel => ax_set_ylabel
@@ -2115,6 +2116,30 @@ contains
                   transform=transform)
     end subroutine ax_text
 
+    subroutine ax_textbox(self, x, y, text, width, coords, ha, va, fontsize, &
+                          align, color, facecolor, edgecolor, lw, alpha, pad, &
+                          radius, zorder)
+        class(axes), intent(in) :: self
+        real(dp), intent(in) :: x, y
+        character(len=*), intent(in) :: text
+        real(dp), intent(in), optional :: width, fontsize, lw, alpha, pad, radius, zorder
+        character(len=*), intent(in), optional :: coords, ha, va, align
+        character(len=*), intent(in), optional :: color, facecolor, edgecolor
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("textbox", "width", width)
+        call check_size_arg("textbox", "fontsize", fontsize)
+        call check_size_arg("textbox", "lw", lw)
+        call check_unit_arg("textbox", "alpha", alpha)
+        call check_size_arg("textbox", "pad", pad)
+        call check_size_arg("textbox", "radius", radius)
+        call check_size_arg("textbox", "zorder", zorder)
+
+        call ax_sca(self)
+        call textbox(x, y, text, width, coords, ha, va, fontsize, align, &
+                     color, facecolor, edgecolor, lw, alpha, pad, radius, zorder)
+    end subroutine ax_textbox
+
     subroutine ax_annotate(self, s, x, y, xtext, ytext, color, fontsize, ha, &
                            fontweight, fontstyle, transform)
         class(axes), intent(in) :: self
@@ -3402,6 +3427,25 @@ contains
         a%n_texts = a%n_texts + 1
         it = a%n_texts
     end subroutine push_text
+
+    subroutine push_textbox(a, it)
+        type(axes_t), intent(inout) :: a
+        integer, intent(out) :: it
+        type(textbox_t), allocatable :: tmp(:)
+        integer :: cap, i
+
+        if (.not. allocated(a%textboxes)) allocate (a%textboxes(INIT_SLOTS))
+        cap = size(a%textboxes)
+        if (a%n_textboxes >= cap) then
+            allocate (tmp(2*cap))
+            do i = 1, cap
+                tmp(i) = a%textboxes(i)
+            end do
+            call move_alloc(tmp, a%textboxes)
+        end if
+        a%n_textboxes = a%n_textboxes + 1
+        it = a%n_textboxes
+    end subroutine push_textbox
 
     ! Start a new series of the given kind and return its index, applying the
     ! shared bookkeeping (point count, color cycling, label).
@@ -7189,6 +7233,83 @@ contains
         it = ax(cur_i)%n_texts
         ax(cur_i)%texts(it)%in_fig = .true.
     end subroutine figtext
+
+    ! Rich typeset Markdown box placed in axes, figure, or data coordinates.
+    ! width is in points (0 defaults to the full axes or figure width).
+    subroutine textbox(x, y, text, width, coords, ha, va, fontsize, align, &
+                       color, facecolor, edgecolor, lw, alpha, pad, radius, &
+                       zorder)
+        real(dp), intent(in) :: x, y
+        character(len=*), intent(in) :: text
+        real(dp), intent(in), optional :: width, fontsize, lw, alpha, pad, radius, zorder
+        character(len=*), intent(in), optional :: coords, ha, va, align
+        character(len=*), intent(in), optional :: color, facecolor, edgecolor
+        character(len=7) :: col
+        integer :: it
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_size_arg("textbox", "width", width)
+        call check_size_arg("textbox", "fontsize", fontsize)
+        call check_size_arg("textbox", "lw", lw)
+        call check_unit_arg("textbox", "alpha", alpha)
+        call check_size_arg("textbox", "pad", pad)
+        call check_size_arg("textbox", "radius", radius)
+        call check_size_arg("textbox", "zorder", zorder)
+
+        if (.not. (ieee_is_finite(x) .and. ieee_is_finite(y))) return
+        call ensure_fig()
+        call push_textbox(ax(cur_i), it)
+        associate (tb => ax(cur_i)%textboxes(it))
+            tb%x = x
+            tb%y = y
+            tb%text = text
+            tb%width = 0.0_dp
+            tb%fontsize = 10.0_dp
+            tb%lw = 0.8_dp
+            tb%alpha = 1.0_dp
+            tb%pad = -1.0_dp
+            tb%radius = 0.0_dp
+            tb%zorder = 5.0_dp
+            tb%coords = "axes"
+            tb%ha = "left"
+            tb%va = "top"
+            tb%align = "justify"
+            tb%color = rc_text_color
+            tb%facecolor = ""
+            tb%edgecolor = ""
+            if (present(width)) tb%width = width
+            if (present(coords)) tb%coords = coords
+            if (present(ha)) tb%ha = ha
+            if (present(va)) tb%va = va
+            if (present(fontsize)) tb%fontsize = fontsize
+            if (present(align)) tb%align = align
+            if (present(color)) then
+                col = resolve_color(color)
+                if (len_trim(col) > 0) tb%color = col
+            end if
+            if (present(facecolor)) then
+                if (lower(trim(facecolor)) == "none") then
+                    tb%facecolor = ""
+                else
+                    col = resolve_color(facecolor)
+                    if (len_trim(col) > 0) tb%facecolor = col
+                end if
+            end if
+            if (present(edgecolor)) then
+                if (lower(trim(edgecolor)) == "none") then
+                    tb%edgecolor = ""
+                else
+                    col = resolve_color(edgecolor)
+                    if (len_trim(col) > 0) tb%edgecolor = col
+                end if
+            end if
+            if (present(lw)) tb%lw = lw
+            if (present(alpha)) tb%alpha = alpha
+            if (present(pad)) tb%pad = pad
+            if (present(radius)) tb%radius = radius
+            if (present(zorder)) tb%zorder = zorder
+        end associate
+    end subroutine textbox
 
     ! Text at (xtext, ytext) with an arrow pointing at (x, y).
     subroutine annotate(s, x, y, xtext, ytext, color, fontsize, ha, &

@@ -29,6 +29,7 @@ module fplotlib_draw
     use fplotlib_state
     use fplotlib_artist
     use fplotlib_scene, only: frame_t, recording_renderer_t
+    use fplotlib_markdown, only: md_typeset_box
     implicit none
     public
 
@@ -4733,7 +4734,103 @@ contains
         end if
 
         call render_table(b, a, ax_l, ax_w, ax_b, ax_h)
+        call render_textboxes(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, &
+                              xsc, ysc, W, H)
     end subroutine render_axes
+
+    ! Render rich typeset Markdown textboxes attached to an axes (in axes,
+    ! figure, or data coordinates).
+    subroutine render_textboxes(b, a, xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h, &
+                                xsc, ysc, W, H)
+        class(renderer_t), intent(inout) :: b
+        type(axes_t), intent(in) :: a
+        real(dp), intent(in) :: xmin, xmax, ymin, ymax
+        real(dp), intent(in) :: ax_l, ax_w, ax_b, ax_h, W, H
+        type(scale_t), intent(in) :: xsc, ysc
+        type(frame_t) :: frame
+        type(clip_t) :: no_clip
+        real(dp) :: px, py, bw, bh, tx, ty, w_use
+        character(len=16) :: col
+        integer, allocatable :: ord(:)
+        integer :: i, j, idx, key
+
+        if (a%n_textboxes <= 0) return
+        ! Stable insertion sort by zorder so higher-zorder boxes draw on top.
+        allocate (ord(a%n_textboxes))
+        do i = 1, a%n_textboxes
+            ord(i) = i
+        end do
+        do i = 2, a%n_textboxes
+            key = ord(i)
+            j = i - 1
+            do while (j >= 1)
+                if (a%textboxes(ord(j))%zorder <= a%textboxes(key)%zorder) exit
+                ord(j + 1) = ord(j)
+                j = j - 1
+            end do
+            ord(j + 1) = key
+        end do
+
+        do i = 1, a%n_textboxes
+            idx = ord(i)
+            associate (tb => a%textboxes(idx))
+                if (.not. allocated(tb%text)) cycle
+                select case (lower(trim(tb%coords)))
+                case ("figure")
+                    px = tb%x*W
+                    py = (1.0_dp - tb%y)*H
+                    w_use = W
+                case ("data")
+                    px = map_x(tb%x, xmin, xmax, ax_l, ax_w, xsc)
+                    py = map_y(tb%y, ymin, ymax, ax_b, ax_h, ysc)
+                    w_use = ax_w
+                case default
+                    px = ax_l + tb%x*ax_w
+                    py = ax_b - tb%y*ax_h
+                    w_use = ax_w
+                end select
+                if (.not. (ieee_is_finite(px) .and. ieee_is_finite(py))) cycle
+                if (tb%width > 0.0_dp) w_use = tb%width
+                col = tb%color
+                if (len_trim(col) == 0) col = rc_text_color
+                if (tb%pad >= 0.0_dp) then
+                    call md_typeset_box(tb%text, w_use, frame, fontsize=tb%fontsize, &
+                                        align=trim(tb%align), color=trim(col), &
+                                        bg_color=trim(tb%facecolor), &
+                                        border_color=trim(tb%edgecolor), &
+                                        border_width=tb%lw, alpha=tb%alpha, &
+                                        pad=tb%pad, radius=tb%radius)
+                else
+                    call md_typeset_box(tb%text, w_use, frame, fontsize=tb%fontsize, &
+                                        align=trim(tb%align), color=trim(col), &
+                                        bg_color=trim(tb%facecolor), &
+                                        border_color=trim(tb%edgecolor), &
+                                        border_width=tb%lw, alpha=tb%alpha, &
+                                        radius=tb%radius)
+                end if
+                call frame%metrics(bw, bh)
+                select case (lower(trim(tb%ha)))
+                case ("center")
+                    tx = px - 0.5_dp*bw
+                case ("right")
+                    tx = px - bw
+                case default
+                    tx = px
+                end select
+                select case (lower(trim(tb%va)))
+                case ("center")
+                    ty = py - 0.5_dp*bh
+                case ("bottom")
+                    ty = py - bh
+                case default
+                    ty = py
+                end select
+                call b%begin_frame([1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, tx, ty], no_clip)
+                call frame%draw(b)
+                call b%end_frame()
+            end associate
+        end do
+    end subroutine render_textboxes
 
     ! Draw the whole figure into any backend. Everything above this point is
     ! format independent; the only thing render_svg and its PDF and PNG
