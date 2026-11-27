@@ -1052,15 +1052,18 @@ contains
 
     subroutine ax_plot(self, x, y, fmt, label, lw, color, marker, linestyle, &
                        alpha, markersize, markerfacecolor, markeredgecolor, &
-                       markeredgewidth, markevery, drawstyle, dashes)
+                       markeredgewidth, markevery, drawstyle, dashes, &
+                       title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
         class(axes), intent(in) :: self
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         character(len=*), intent(in), optional :: markerfacecolor, markeredgecolor
         character(len=*), intent(in), optional :: drawstyle
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
-        real(dp), intent(in), optional :: dashes(:)
+        real(dp), intent(in), optional :: dashes(:), xlim(2), ylim(2)
         integer, intent(in), optional :: markevery
+        logical, intent(in), optional :: grid, legend, show
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
@@ -1068,25 +1071,31 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
         call check_count_arg("plot", "markevery", markevery)
 
         call ax_sca(self)
         call plot(x, y, fmt, label, lw, color, marker, linestyle, alpha, &
                   markersize, markerfacecolor, markeredgecolor, &
-                  markeredgewidth, markevery, drawstyle, dashes)
+                  markeredgewidth, markevery, drawstyle, dashes, &
+                  title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
     end subroutine ax_plot
 
     subroutine ax_plot_y(self, ydata, fmt, label, lw, color, marker, linestyle, &
                          alpha, markersize, markerfacecolor, markeredgecolor, &
-                         markeredgewidth, markevery, drawstyle, dashes)
+                         markeredgewidth, markevery, drawstyle, dashes, &
+                         title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
         class(axes), intent(in) :: self
         real(dp), intent(in) :: ydata(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         character(len=*), intent(in), optional :: markerfacecolor, markeredgecolor
         character(len=*), intent(in), optional :: drawstyle
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
-        real(dp), intent(in), optional :: dashes(:)
+        real(dp), intent(in), optional :: dashes(:), xlim(2), ylim(2)
         integer, intent(in), optional :: markevery
+        logical, intent(in), optional :: grid, legend, show
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
@@ -1094,28 +1103,37 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
         call check_count_arg("plot", "markevery", markevery)
 
         call ax_sca(self)
         call plot(ydata, fmt, label, lw, color, marker, linestyle, alpha, &
                   markersize, markerfacecolor, markeredgecolor, &
-                  markeredgewidth, markevery, drawstyle, dashes)
+                  markeredgewidth, markevery, drawstyle, dashes, &
+                  title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
     end subroutine ax_plot_y
 
     subroutine ax_plot_cat(self, cats, y, fmt, label, lw, color, marker, &
-                           linestyle, alpha)
+                           linestyle, alpha, title, xlabel, ylabel, xlim, ylim, &
+                           grid, legend, savefig, show)
         class(axes), intent(in) :: self
         character(len=*), intent(in) :: cats(:)
         real(dp), intent(in) :: y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
-        real(dp), intent(in), optional :: lw, alpha
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
+        real(dp), intent(in), optional :: lw, alpha, xlim(2), ylim(2)
+        logical, intent(in), optional :: grid, legend, show
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
 
         call ax_sca(self)
-        call plot(cats, y, fmt, label, lw, color, marker, linestyle, alpha)
+        call plot(cats, y, fmt, label, lw, color, marker, linestyle, alpha, &
+                  title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
     end subroutine ax_plot_cat
 
     subroutine ax_bar_cat(self, cats, height, width, color, label, alpha, &
@@ -3153,16 +3171,40 @@ contains
         ax(cur_i)%series(ax(cur_i)%n_series)%zorder = z
     end subroutine set_zorder
 
+    subroutine apply_plot_extras(p_title, p_xlabel, p_ylabel, p_xlim, p_ylim, &
+                                 p_grid, p_legend, p_savefig, p_show)
+        character(len=*), intent(in), optional :: p_title, p_xlabel, p_ylabel, p_savefig
+        real(dp), intent(in), optional :: p_xlim(2), p_ylim(2)
+        logical, intent(in), optional :: p_grid, p_legend, p_show
+
+        if (present(p_title)) call title(p_title)
+        if (present(p_xlabel)) call xlabel(p_xlabel)
+        if (present(p_ylabel)) call ylabel(p_ylabel)
+        if (present(p_xlim)) call xlim(p_xlim(1), p_xlim(2))
+        if (present(p_ylim)) call ylim(p_ylim(1), p_ylim(2))
+        if (present(p_grid)) call grid(p_grid)
+        if (present(p_legend)) then
+            if (p_legend) call legend()
+        end if
+        if (present(p_savefig)) call savefig(p_savefig)
+        if (present(p_show)) then
+            if (p_show) call show()
+        end if
+    end subroutine apply_plot_extras
+
     subroutine plot_num(x, y, fmt, label, lw, color, marker, linestyle, alpha, &
                         markersize, markerfacecolor, markeredgecolor, &
-                        markeredgewidth, markevery, drawstyle, dashes)
+                        markeredgewidth, markevery, drawstyle, dashes, &
+                        title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
         real(dp), intent(in) :: x(:), y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         character(len=*), intent(in), optional :: markerfacecolor, markeredgecolor
         character(len=*), intent(in), optional :: drawstyle
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
-        real(dp), intent(in), optional :: dashes(:)
+        real(dp), intent(in), optional :: dashes(:), xlim(2), ylim(2)
         integer, intent(in), optional :: markevery
+        logical, intent(in), optional :: grid, legend, show
         integer :: is
         real(dp), allocatable :: sx(:), sy(:)
 
@@ -3172,6 +3214,8 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
         call check_count_arg("plot", "markevery", markevery)
 
         call ensure_fig()
@@ -3186,33 +3230,39 @@ contains
                             linestyle, alpha)
         end if
         is = ax(cur_i)%n_series
-        if (is < 1) return
-        if (present(markersize)) ax(cur_i)%series(is)%markersize = markersize
-        if (present(markerfacecolor)) &
-            ax(cur_i)%series(is)%mfc = resolve_color(markerfacecolor)
-        if (present(markeredgecolor)) &
-            ax(cur_i)%series(is)%mec = resolve_color(markeredgecolor)
-        if (present(markeredgewidth)) ax(cur_i)%series(is)%mew = markeredgewidth
-        if (present(markevery)) ax(cur_i)%series(is)%markevery = max(1, markevery)
-        if (present(dashes)) then
-            ax(cur_i)%series(is)%n_dash = size(dashes)
-            ax(cur_i)%series(is)%dashes(1:ax(cur_i)%series(is)%n_dash) = &
-                dashes(1:ax(cur_i)%series(is)%n_dash)
+        if (is >= 1) then
+            if (present(markersize)) ax(cur_i)%series(is)%markersize = markersize
+            if (present(markerfacecolor)) &
+                ax(cur_i)%series(is)%mfc = resolve_color(markerfacecolor)
+            if (present(markeredgecolor)) &
+                ax(cur_i)%series(is)%mec = resolve_color(markeredgecolor)
+            if (present(markeredgewidth)) ax(cur_i)%series(is)%mew = markeredgewidth
+            if (present(markevery)) ax(cur_i)%series(is)%markevery = max(1, markevery)
+            if (present(dashes)) then
+                ax(cur_i)%series(is)%n_dash = size(dashes)
+                ax(cur_i)%series(is)%dashes(1:ax(cur_i)%series(is)%n_dash) = &
+                    dashes(1:ax(cur_i)%series(is)%n_dash)
+            end if
         end if
+        call apply_plot_extras(title, xlabel, ylabel, xlim, ylim, grid, legend, &
+                               savefig, show)
     end subroutine plot_num
 
     ! plot(y): matplotlib numbers the points 0, 1, 2 ... when it is given
     ! only one array, and so does this.
     subroutine plot_y(ydata, fmt, label, lw, color, marker, linestyle, alpha, &
                       markersize, markerfacecolor, markeredgecolor, &
-                      markeredgewidth, markevery, drawstyle, dashes)
+                      markeredgewidth, markevery, drawstyle, dashes, &
+                      title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
         real(dp), intent(in) :: ydata(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
         character(len=*), intent(in), optional :: markerfacecolor, markeredgecolor
         character(len=*), intent(in), optional :: drawstyle
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
         real(dp), intent(in), optional :: lw, alpha, markersize, markeredgewidth
-        real(dp), intent(in), optional :: dashes(:)
+        real(dp), intent(in), optional :: dashes(:), xlim(2), ylim(2)
         integer, intent(in), optional :: markevery
+        logical, intent(in), optional :: grid, legend, show
         integer :: i
         real(dp) :: idx(size(ydata))
 
@@ -3222,6 +3272,8 @@ contains
         call check_size_arg("plot", "markersize", markersize)
         call check_size_arg("plot", "markeredgewidth", markeredgewidth)
         call check_dashes_arg("plot", "dashes", dashes)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
         call check_count_arg("plot", "markevery", markevery)
 
         do i = 1, size(ydata)
@@ -3229,22 +3281,30 @@ contains
         end do
         call plot_num(idx, ydata, fmt, label, lw, color, marker, linestyle, alpha, &
                       markersize, markerfacecolor, markeredgecolor, &
-                      markeredgewidth, markevery, drawstyle, dashes)
+                      markeredgewidth, markevery, drawstyle, dashes, &
+                      title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
     end subroutine plot_y
 
-    subroutine plot_cat(cats, y, fmt, label, lw, color, marker, linestyle, alpha)
+    subroutine plot_cat(cats, y, fmt, label, lw, color, marker, linestyle, alpha, &
+                        title, xlabel, ylabel, xlim, ylim, grid, legend, savefig, show)
         character(len=*), intent(in) :: cats(:)
         real(dp), intent(in) :: y(:)
         character(len=*), intent(in), optional :: fmt, label, color, marker, linestyle
-        real(dp), intent(in), optional :: lw, alpha
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, savefig
+        real(dp), intent(in), optional :: lw, alpha, xlim(2), ylim(2)
+        logical, intent(in), optional :: grid, legend, show
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("plot", "lw", lw)
         call check_unit_arg("plot", "alpha", alpha)
+        call check_finite_args("plot", "xlim", xlim)
+        call check_finite_args("plot", "ylim", ylim)
 
         call plot_num(category_positions(size(cats)), y, fmt, label, lw, color, &
                       marker, linestyle, alpha)
         call xticks(category_positions(size(cats)), cats)
+        call apply_plot_extras(title, xlabel, ylabel, xlim, ylim, grid, legend, &
+                               savefig, show)
     end subroutine plot_cat
 
     ! Marker-only plot. s is the marker area in points^2 (matplotlib's

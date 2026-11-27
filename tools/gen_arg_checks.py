@@ -103,6 +103,7 @@ ARRAYS = {
     'figsize': 'own', 'rect': 'own',
     'yerr': 'errors', 'xerr': 'errors', 'yerr_lo': 'errors', 'yerr_hi': 'errors',
     'xerr_lo': 'errors', 'xerr_hi': 'errors',
+    'xlim': 'finite', 'ylim': 'finite',
     'col_widths': 'size',
 }
 # Arrays of data, which may hold missing values. An array argument that is

@@ -1596,6 +1596,7 @@ program test_plots
     ! every format.
     call document_case()
     call textbox_case()
+    call plot_kwargs_case()
 
     print *, "All test plots written."
 
@@ -1733,6 +1734,116 @@ contains
         if (len(eps_s) < 500 .or. index(eps_s, "%!PS-Adobe-") /= 1) &
             error stop "textbox_case: invalid EPS"
     end subroutine textbox_case
+
+    subroutine plot_kwargs_case()
+        character(len=:), allocatable :: svg_s, svg_ref, svg_disk
+        real(dp) :: px(20), py(20), cy(4), xlo, xhi, ylo, yhi
+        character(len=6), parameter :: cats(4) = ["apple ", "banana", "cherry", "date  "]
+        type(axes), allocatable :: pax(:, :)
+        integer :: k, u, sz, ios
+
+        do k = 1, 20
+            px(k) = real(k - 1, dp)/19.0_dp*6.28_dp
+            py(k) = sin(px(k))
+        end do
+        cy = [1.0_dp, 3.0_dp, 2.0_dp, 4.0_dp]
+
+        ! 1) plot(x, y, ...) single-call kwargs match the multi-call equivalent
+        call clf()
+        call plot(px, py, "k-", label="sin", title="My plot", xlabel="x", ylabel="y", &
+                  xlim=[0.0_dp, 6.28_dp], ylim=[-1.1_dp, 1.1_dp], &
+                  grid=.true., legend=.true., savefig="tests/out/single_call_plot.svg")
+        svg_s = render_svg()
+        call get_xlim(xlo, xhi)
+        call get_ylim(ylo, yhi)
+        if (abs(xlo - 0.0_dp) > 1.0e-12_dp .or. abs(xhi - 6.28_dp) > 1.0e-12_dp) &
+            error stop "plot_kwargs_case: xlim mismatch"
+        if (abs(ylo - (-1.1_dp)) > 1.0e-12_dp .or. abs(yhi - 1.1_dp) > 1.0e-12_dp) &
+            error stop "plot_kwargs_case: ylim mismatch"
+
+        call clf()
+        call plot(px, py, "k-", label="sin")
+        call title("My plot")
+        call xlabel("x")
+        call ylabel("y")
+        call xlim(0.0_dp, 6.28_dp)
+        call ylim(-1.1_dp, 1.1_dp)
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) &
+            error stop "plot_kwargs_case: single-call plot(x, y) differs from multi-call"
+
+        inquire (file="tests/out/single_call_plot.svg", size=sz)
+        if (sz /= len(svg_s)) error stop "plot_kwargs_case: saved SVG size mismatch"
+        allocate (character(len=sz) :: svg_disk)
+        open (newunit=u, file="tests/out/single_call_plot.svg", access="stream", &
+              form="unformatted", status="old", action="read", iostat=ios)
+        if (ios /= 0) error stop "plot_kwargs_case: failed to open saved SVG"
+        read (u, iostat=ios) svg_disk
+        close (u)
+        if (ios /= 0 .or. svg_disk /= svg_ref) &
+            error stop "plot_kwargs_case: saved SVG content mismatch"
+        deallocate (svg_disk, svg_s, svg_ref)
+
+        ! 2) plot(y, ...) single-call kwargs (including legend=.false.)
+        call clf()
+        call plot(py, "b-", label="sin", title="Y only", xlabel="idx", ylabel="val", &
+                  grid=.true., legend=.false.)
+        svg_s = render_svg()
+        call clf()
+        call plot(py, "b-", label="sin")
+        call title("Y only")
+        call xlabel("idx")
+        call ylabel("val")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) &
+            error stop "plot_kwargs_case: single-call plot(y) differs from multi-call"
+        deallocate (svg_s, svg_ref)
+
+        ! 3) plot(cats, y, ...) applies xticks before savefig
+        call clf()
+        call plot(cats, cy, "r-o", title="Cat plot", grid=.true., &
+                  savefig="tests/out/single_call_cat.svg")
+        svg_s = render_svg()
+        call clf()
+        call plot(cats, cy, "r-o")
+        call title("Cat plot")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) &
+            error stop "plot_kwargs_case: single-call plot(cats, y) differs from multi-call"
+        inquire (file="tests/out/single_call_cat.svg", size=sz)
+        if (sz /= len(svg_ref)) error stop "plot_kwargs_case: saved cat SVG size mismatch"
+        deallocate (svg_s, svg_ref)
+
+        ! 4) ax%plot(..., title=..., grid=.true.) on axes handle
+        call clf()
+        call subplots(1, 2, pax)
+        call pax(1, 1)%plot(px, py, "k-", label="sin", title="Axes XY", xlabel="x", &
+                            ylabel="y", xlim=[0.0_dp, 6.28_dp], ylim=[-1.1_dp, 1.1_dp], &
+                            grid=.true., legend=.true.)
+        call pax(1, 2)%plot(py, "b-", title="Axes Y", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call subplots(1, 2, pax)
+        call pax(1, 1)%plot(px, py, "k-", label="sin")
+        call pax(1, 1)%set_title("Axes XY")
+        call pax(1, 1)%set_xlabel("x")
+        call pax(1, 1)%set_ylabel("y")
+        call pax(1, 1)%set_xlim(0.0_dp, 6.28_dp)
+        call pax(1, 1)%set_ylim(-1.1_dp, 1.1_dp)
+        call pax(1, 1)%grid(.true.)
+        call pax(1, 1)%legend()
+        call pax(1, 2)%plot(py, "b-")
+        call pax(1, 2)%set_title("Axes Y")
+        call pax(1, 2)%grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) &
+            error stop "plot_kwargs_case: single-call ax%plot differs from multi-call"
+        deallocate (svg_s, svg_ref)
+    end subroutine plot_kwargs_case
 
     recursive subroutine doc_directive(doc, d, ctx, handled)
         use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, &
