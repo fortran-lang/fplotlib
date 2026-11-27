@@ -37,6 +37,8 @@ call suptitle("figure title")
 
 ## Features
 
+- Object-oriented `figure_t` and `axes_t` handles for explicit figure
+  management and multiple simultaneous independent figures
 - `plot`, `scatter`, `bar`, `hist`, `fill_between`, `errorbar`
 - `bar` takes `yerr=`, `capsize=`, `align="edge"` and `tick_label=`;
   `errorbar` takes `ecolor=`, `elinewidth=`, `lw=` and `alpha=`

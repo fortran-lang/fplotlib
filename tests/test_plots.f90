@@ -1,5 +1,148 @@
+module test_oop_figure
+    implicit none
+    private
+    public :: oop_figure_check
+contains
+
+    subroutine oop_figure_check()
+        use fplotlib, only: dp, figure_t, axes_t
+        use fplotlib_io, only: read_bytes
+        use fplotlib_status, only: status_t
+        type(figure_t) :: fig, fig1, fig2, fig3
+        type(axes_t) :: ax, ax1, ax2, ax2b, ax3
+        type(axes_t), allocatable :: row(:), grid(:, :)
+        real(dp) :: x(20), y1(20), y2(20), lo1, hi1, lo2, hi2
+        character(len=:), allocatable :: s1, s2
+        type(status_t) :: st
+        integer :: i
+
+        do i = 1, 20
+            x(i) = real(i - 1, dp)*6.283185307179586_dp/19.0_dp
+            y1(i) = sin(x(i))
+            y2(i) = 10.0_dp + cos(x(i))
+        end do
+
+        ! 1) Basic OOP figure_t + add_subplot with declarative kwargs, zero global imports.
+        fig = figure_t(figsize=[6.4_dp, 4.8_dp], dpi=100.0_dp)
+        ax = fig%add_subplot(title="Sine", xlabel="x", ylabel="sin(x)", &
+                             xlim=[0.0_dp, 6.3_dp], ylim=[-1.15_dp, 1.15_dp], grid=.true.)
+        call ax%plot(x, y1, "C0-", label="sin(x)")
+        call ax%legend()
+        call fig%suptitle("OOP Basic", fontweight="bold", fontstyle="italic")
+        call fig%tight_layout()
+        call fig%save("tests/out/oop_basic.svg")
+        call fig%savefig("tests/out/oop_basic.png")
+        call read_bytes("tests/out/oop_basic.svg", s1, st)
+        if (.not. st%ok()) error stop "oop_figure_check: cannot read oop_basic.svg"
+        if (.not. allocated(s1)) error stop "oop_figure_check: unallocated oop_basic.svg"
+        if (index(s1, "</svg>") == 0) error stop "oop_figure_check: invalid oop_basic.svg"
+        call fig%close()
+
+        ! 2) Bare type(figure_t) with lazy initialization on add_subplot.
+        ax2 = fig2%add_subplot(1, 2, 1, title="Left")
+        ax2b = fig2%add_subplot(1, 2, 2, title="Right")
+        call ax2%plot(x, y1, "b-")
+        call ax2b%plot(x, y2, "r--")
+        call fig2%subplots_adjust(wspace=0.3_dp)
+        call fig2%constrained_layout(.true.)
+        call fig2%save("tests/out/oop_lazy.svg")
+        call read_bytes("tests/out/oop_lazy.svg", s1, st)
+        if (.not. st%ok()) error stop "oop_figure_check: cannot read oop_lazy.svg"
+        if (.not. allocated(s1)) error stop "oop_figure_check: unallocated oop_lazy.svg"
+        if (index(s1, "</svg>") == 0) error stop "oop_figure_check: invalid oop_lazy.svg"
+        call fig2%close()
+
+        ! 3) Two simultaneous figure_t objects with interleaved plotting and saving.
+        fig1 = figure_t(figsize=[5.0_dp, 4.0_dp])
+        ax1 = fig1%add_subplot(title="Fig 1", ylim=[-2.0_dp, 2.0_dp])
+        fig2 = figure_t(figsize=[5.0_dp, 4.0_dp])
+        ax2 = fig2%add_subplot(title="Fig 2", ylim=[8.0_dp, 12.0_dp])
+        call ax1%plot(x, y1, "C0-", label="a")
+        call ax2%plot(x, y2, "C1-", label="b")
+        call ax1%legend()
+        call ax2%legend()
+        call ax1%get_ylim(lo1, hi1)
+        call ax2%get_ylim(lo2, hi2)
+        if (abs(lo1 - (-2.0_dp)) > 1.0e-9_dp .or. abs(hi1 - 2.0_dp) > 1.0e-9_dp) &
+            error stop "oop_figure_check: fig1 ylim clobbered"
+        if (abs(lo2 - 8.0_dp) > 1.0e-9_dp .or. abs(hi2 - 12.0_dp) > 1.0e-9_dp) &
+            error stop "oop_figure_check: fig2 ylim clobbered"
+        call fig1%save("tests/out/oop_iso1.svg")
+        call fig2%save("tests/out/oop_iso2.svg")
+        call read_bytes("tests/out/oop_iso1.svg", s1, st)
+        if (.not. st%ok()) error stop "oop_figure_check: cannot read oop_iso1.svg"
+        if (.not. allocated(s1)) error stop "oop_figure_check: unallocated oop_iso1.svg"
+        if (index(s1, "</svg>") == 0) error stop "oop_figure_check: invalid oop_iso1.svg"
+        call read_bytes("tests/out/oop_iso2.svg", s2, st)
+        if (.not. st%ok()) error stop "oop_figure_check: cannot read oop_iso2.svg"
+        if (.not. allocated(s2)) error stop "oop_figure_check: unallocated oop_iso2.svg"
+        if (index(s2, "</svg>") == 0) error stop "oop_figure_check: invalid oop_iso2.svg"
+        if (s1 == s2) error stop "oop_figure_check: isolated figures produced identical SVG"
+        call fig1%clf()
+        call fig1%close()
+        call fig2%close()
+
+        ! 4) fig%subplots (one, row, grid) and 3D projection.
+        call fig3%subplots(ax3)
+        call ax3%plot(x, y1)
+        call fig3%subplots(1, 2, row, sharey=.true.)
+        call row(1)%plot(x, y1)
+        call row(2)%plot(x, y2)
+        call fig3%subplots(2, 2, grid, sharex=.true., sharey=.true.)
+        call grid(1, 1)%plot(x, y1)
+        call grid(2, 2)%plot(x, y2)
+        call fig3%save("tests/out/oop_grid.svg")
+        call fig3%close()
+
+        fig3 = figure_t()
+        ax3 = fig3%add_subplot(projection="3d", title="3D OOP")
+        call ax3%plot3d(x, y1, y2)
+        call fig3%save("tests/out/oop_3d.svg")
+        call fig3%close()
+
+        ! 5) twinx, inset_axes returning type(axes) assigned to type(axes_t), and polar.
+        fig3 = figure_t()
+        ax1 = fig3%add_subplot(title="Twin + Inset")
+        call ax1%plot(x, y1, "C0-")
+        ax2 = ax1%twinx()
+        call ax2%plot(x, y2, "C1--")
+        ax3 = ax1%inset_axes([0.55_dp, 0.55_dp, 0.35_dp, 0.35_dp])
+        call ax3%plot(x, y1, "C2-")
+        call fig3%save("tests/out/oop_twin_inset.svg")
+        call fig3%close()
+
+        fig3 = figure_t()
+        ax3 = fig3%add_subplot(projection="polar", title="Polar OOP")
+        call ax3%plot(x, 1.0_dp + 0.5_dp*y1)
+        call fig3%save("tests/out/oop_polar.svg")
+        call fig3%close()
+
+        call oop_capture_check()
+    end subroutine oop_figure_check
+
+    subroutine oop_capture_check()
+        use fplotlib, only: dp, figure_t, axes_t, frame_t
+        type(figure_t) :: fig
+        type(axes_t) :: ax
+        type(frame_t) :: frame
+        real(dp) :: x(5), fw, fh, fb
+
+        x = [0.0_dp, 1.0_dp, 2.0_dp, 3.0_dp, 4.0_dp]
+        fig = figure_t(figsize=[4.0_dp, 3.0_dp])
+        ax = fig%add_subplot(title="Captured")
+        call ax%plot(x, x*x)
+        call fig%capture(frame)
+        call frame%metrics(fw, fh, fb)
+        if (fw <= 0.0_dp .or. fh <= 0.0_dp) &
+            error stop "oop_capture_check: empty captured frame"
+        call fig%close()
+    end subroutine oop_capture_check
+
+end module test_oop_figure
+
 program test_plots
     use fplotlib
+    use test_oop_figure, only: oop_figure_check
     use test_fingerprint, only: fp_check_png, fp_check_apng, fp_check_gif, fp_finish
     use test_mathref, only: math_ref_check, delim_ref_check, face_check, mathtext_edge_check
     use test_missing, only: missing_data_check
@@ -1597,6 +1740,7 @@ program test_plots
     call document_case()
     call textbox_case()
     call plot_kwargs_case()
+    call oop_figure_check()
 
     print *, "All test plots written."
 
