@@ -25,6 +25,9 @@ module fplotlib_report
         private
         character(len=:), allocatable :: md_buf
         integer :: md_len = 0
+        character(len=:), allocatable :: doc_title, doc_subtitle
+        character(len=:), allocatable :: doc_author, doc_date, doc_paper
+        real(dp) :: default_dpi = 150.0_dp
         type(frame_t) :: fig_scene
         integer, allocatable :: fig_handles(:)
         integer :: nfig = 0
@@ -32,6 +35,7 @@ module fplotlib_report
         logical :: dirty = .true.
         logical :: has_pages = .false.
     contains
+        procedure :: init => report_init
         procedure :: clear => report_clear
         procedure, private :: report_markdown_text, report_markdown_lines
         generic :: markdown => report_markdown_text, report_markdown_lines
@@ -42,12 +46,49 @@ module fplotlib_report
         procedure :: save => report_save
     end type report_t
 
+    interface report_t
+        module procedure new_report_t
+    end interface report_t
+
 contains
+
+    function new_report_t(title, subtitle, author, date, page_size, dpi) result(r)
+        character(len=*), intent(in), optional :: title, subtitle, author, date, page_size
+        real(dp), intent(in), optional :: dpi
+        type(report_t) :: r
+
+        call r%init(title=title, subtitle=subtitle, author=author, date=date, &
+                    page_size=page_size, dpi=dpi)
+    end function new_report_t
+
+    subroutine report_init(self, title, subtitle, author, date, page_size, dpi)
+        class(report_t), intent(inout) :: self
+        character(len=*), intent(in), optional :: title, subtitle, author, date, page_size
+        real(dp), intent(in), optional :: dpi
+
+        call report_clear(self)
+        if (present(title)) self%doc_title = trim(title)
+        if (present(subtitle)) self%doc_subtitle = trim(subtitle)
+        if (present(author)) self%doc_author = trim(author)
+        if (present(date)) self%doc_date = trim(date)
+        if (present(page_size)) self%doc_paper = trim(page_size)
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("report_t: dpi must be finite and positive")
+            self%default_dpi = dpi
+        end if
+    end subroutine report_init
 
     subroutine report_clear(self)
         class(report_t), intent(inout) :: self
         self%md_len = 0
         if (allocated(self%md_buf)) deallocate (self%md_buf)
+        if (allocated(self%doc_title)) deallocate (self%doc_title)
+        if (allocated(self%doc_subtitle)) deallocate (self%doc_subtitle)
+        if (allocated(self%doc_author)) deallocate (self%doc_author)
+        if (allocated(self%doc_date)) deallocate (self%doc_date)
+        if (allocated(self%doc_paper)) deallocate (self%doc_paper)
+        self%default_dpi = 150.0_dp
         self%nfig = 0
         if (allocated(self%fig_handles)) deallocate (self%fig_handles)
         call self%pages%clear()
@@ -284,16 +325,52 @@ contains
         type(md_figure_t), allocatable :: figs(:)
         type(recording_renderer_t) :: rec
         type(frame_t) :: page
-        character(len=:), allocatable :: src
+        character(len=:), allocatable :: src, hdr, body
         real(dp) :: fw, fh, w, h
         integer :: k, p, col, bg(3)
+        logical :: has_fm
 
         if (.not. self%dirty .and. self%has_pages) return
 
         if (self%md_len > 0 .and. allocated(self%md_buf)) then
-            src = self%md_buf(1:self%md_len)
+            body = self%md_buf(1:self%md_len)
         else
-            src = ""
+            body = ""
+        end if
+
+        has_fm = .false.
+        if (len(body) >= 4) then
+            if (body(1:4) == "---"//NL) has_fm = .true.
+        end if
+
+        hdr = ""
+        if (.not. has_fm) then
+            if (allocated(self%doc_title)) then
+                if (len_trim(self%doc_title) > 0) hdr = hdr//"title: "//self%doc_title//NL
+            end if
+            if (allocated(self%doc_subtitle)) then
+                if (len_trim(self%doc_subtitle) > 0) &
+                    hdr = hdr//"subtitle: "//self%doc_subtitle//NL
+            end if
+            if (allocated(self%doc_author)) then
+                if (len_trim(self%doc_author) > 0) hdr = hdr//"author: "//self%doc_author//NL
+            end if
+            if (allocated(self%doc_date)) then
+                if (len_trim(self%doc_date) > 0) hdr = hdr//"date: "//self%doc_date//NL
+            end if
+            if (allocated(self%doc_paper)) then
+                if (len_trim(self%doc_paper) > 0) hdr = hdr//"paper: "//self%doc_paper//NL
+            end if
+        end if
+
+        if (len(hdr) > 0) then
+            if (len(body) > 0) then
+                src = "---"//NL//hdr//"---"//NL//NL//body
+            else
+                src = "---"//NL//hdr//"---"//NL
+            end if
+        else
+            src = body
         end if
 
         if (self%nfig > 0) then
@@ -334,7 +411,7 @@ contains
         real(dp) :: res
         type(status_t) :: ok
 
-        res = 150.0_dp
+        res = self%default_dpi
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
                 call contract_error("render_report: dpi must be finite and positive")
@@ -359,7 +436,7 @@ contains
             call contract_error("save: supported formats are .svg, .pdf, .eps and .png, not ." &
                                 //file_ext(filename))
         end select
-        res = 150.0_dp
+        res = self%default_dpi
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
                 call contract_error("save: dpi must be finite and positive")
