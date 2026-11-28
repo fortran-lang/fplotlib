@@ -18,9 +18,9 @@ module fplotlib
     use fplotlib_backend_png
     use fplotlib_mathtext
     use fplotlib_dates
-    use fplotlib_state
-    use fplotlib_artist
-    use fplotlib_draw
+    use fplotlib_state, axes_state_t => axes_t, fig_state_t => figure_t
+    use fplotlib_artist, axes_state_t_a => axes_t, fig_state_t_a => figure_t
+    use fplotlib_draw, axes_state_t_d => axes_t, fig_state_t_d => figure_t
     use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
     use fplotlib_io, only: file_ext, write_bytes, read_bytes, dir_name
     use, intrinsic :: iso_fortran_env, only: error_unit
@@ -84,7 +84,7 @@ module fplotlib
     public :: twinx, twiny
     public :: set_fontsize, set_zorder
     public :: close, gcf
-    public :: axes, subplots, sca
+    public :: axes, axes_t, figure_t, subplots, sca
     public :: style_use, rc
     public :: typeset, typeset_file, frame_t, md_figure_t, capture_figure, named_figure
     public :: report_t, document_asset_t, new_report, markdown, include_figure, &
@@ -100,6 +100,7 @@ module fplotlib
     ! binding is still reachable by making the axes current with sca.
     type :: axes
         integer :: idx = 0
+        integer :: fig = 0
     contains
         procedure :: sca => ax_sca
         procedure :: inset_axes => ax_inset_axes
@@ -205,6 +206,38 @@ module fplotlib
         procedure :: twiny => ax_twiny
     end type axes
 
+    ! OOP alias for axes, inheriting all type-bound plotting methods.
+    type, extends(axes) :: axes_t
+    contains
+        procedure, private :: assign_from_axes => axes_t_from_axes
+        generic :: assignment(=) => assign_from_axes
+    end type axes_t
+
+    ! A lightweight handle to a figure slot in the store, enabling multi-figure
+    ! OOP usage (fig = figure_t(...), ax = fig%add_subplot(...), fig%save(...))
+    ! without importing module-level stateful procedures.
+    type :: figure_t
+        integer, private :: num = 0
+    contains
+        procedure :: add_subplot => fig_add_subplot
+        procedure, private :: fig_subplots_one, fig_subplots_row, fig_subplots_grid
+        generic :: subplots => fig_subplots_one, fig_subplots_row, fig_subplots_grid
+        procedure :: suptitle => fig_set_suptitle
+        procedure :: tight_layout => fig_tight_layout
+        procedure :: constrained_layout => fig_constrained_layout
+        procedure :: subplots_adjust => fig_subplots_adjust
+        procedure :: save => fig_save
+        procedure :: savefig => fig_save
+        procedure :: show => fig_show
+        procedure :: capture => fig_capture
+        procedure :: clf => fig_clf
+        procedure :: close => fig_close
+    end type figure_t
+
+    interface figure_t
+        module procedure new_figure_t
+    end interface figure_t
+
     ! subplots(m, n, axs) fills a grid; the rank of axs decides whether the
     ! panels come back shaped or in a row, and a lone axes needs no counts.
     ! Categories instead of numbers on an axis: the same call with a list
@@ -288,6 +321,8 @@ contains
         figs(k)%d_tick = def_tick
         figs(k)%d_legend = def_legend
         figs(k)%suptitle_size = fig_suptitle_size
+        figs(k)%suptitle_w = fig_suptitle_w
+        figs(k)%suptitle_sl = fig_suptitle_sl
         figs(k)%n_ax = n_ax
         figs(k)%cur_i = cur_i
         figs(k)%grid_m = grid_m
@@ -324,6 +359,8 @@ contains
         def_tick = figs(k)%d_tick
         def_legend = figs(k)%d_legend
         fig_suptitle_size = figs(k)%suptitle_size
+        fig_suptitle_w = figs(k)%suptitle_w
+        fig_suptitle_sl = figs(k)%suptitle_sl
         n_ax = figs(k)%n_ax
         cur_i = figs(k)%cur_i
         grid_m = figs(k)%grid_m
@@ -574,7 +611,7 @@ contains
 
     subroutine add_twin(share_x_axis)
         logical, intent(in) :: share_x_axis
-        type(axes_t), allocatable :: tmp(:)
+        type(axes_state_t), allocatable :: tmp(:)
         integer :: parent
 
         call ensure_fig()
@@ -676,7 +713,7 @@ contains
     ! two narrow ones is built.
     ! Grow the axes array by one and make the new axes current.
     subroutine push_axes()
-        type(axes_t), allocatable :: tmp(:)
+        type(axes_state_t), allocatable :: tmp(:)
 
         call ensure_fig()
         if (n_ax > 0) then
@@ -720,12 +757,14 @@ contains
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_finite_args("inset_axes", "bounds", bounds)
 
+        call ax_sca(self)
         parent = self%idx
         call push_axes()
         ax(cur_i)%inset_of = parent
         ax(cur_i)%inset_rect = bounds
         call layout_grid()
         h%idx = cur_i
+        h%fig = self%fig
     end function ax_inset_axes
 
     function ax_secondary_xaxis(self, location, scale, offset) result(h)
@@ -738,7 +777,9 @@ contains
         call check_finite_arg("secondary_xaxis", "scale", scale)
         call check_finite_arg("secondary_xaxis", "offset", offset)
 
+        call ax_sca(self)
         h = add_secondary(self%idx, .true., location, scale, offset)
+        h%fig = self%fig
     end function ax_secondary_xaxis
 
     function ax_secondary_yaxis(self, location, scale, offset) result(h)
@@ -751,7 +792,9 @@ contains
         call check_finite_arg("secondary_yaxis", "scale", scale)
         call check_finite_arg("secondary_yaxis", "offset", offset)
 
+        call ax_sca(self)
         h = add_secondary(self%idx, .false., location, scale, offset)
+        h%fig = self%fig
     end function ax_secondary_yaxis
 
     function secondary_xaxis(location, scale, offset) result(h)
@@ -853,7 +896,7 @@ contains
         integer, intent(in) :: shape(2), loc(2)
         integer, intent(in), optional :: rowspan, colspan
         type(axes) :: h
-        type(axes_t), allocatable :: tmp(:)
+        type(axes_state_t), allocatable :: tmp(:)
         integer :: rs, cs
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
@@ -1007,6 +1050,16 @@ contains
     subroutine make_grid(m, n, sharex, sharey)
         integer, intent(in) :: m, n
         logical, intent(in), optional :: sharex, sharey
+
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) &
+            call contract_error("subplots: a grid of more than 10000 axes")
+        call figure()
+        call make_grid_current(m, n, sharex, sharey)
+    end subroutine make_grid
+
+    subroutine make_grid_current(m, n, sharex, sharey)
+        integer, intent(in) :: m, n
+        logical, intent(in), optional :: sharex, sharey
         integer :: i, r, c
         logical :: sx, sy
 
@@ -1015,9 +1068,9 @@ contains
         if (present(sharex)) sx = sharex
         if (present(sharey)) sy = sharey
 
-        if (real(m, dp)*real(n, dp) > 1.0e4_dp) call contract_error("subplots: a grid of more than 10000 axes")
-        call figure()
-        if (m /= 1 .or. n /= 1) call new_axes_grid(m, n)
+        if (real(m, dp)*real(n, dp) > 1.0e4_dp) &
+            call contract_error("subplots: a grid of more than 10000 axes")
+        call new_axes_grid(m, n)
         cur_i = 1
 
         do i = 1, n_ax
@@ -1032,13 +1085,16 @@ contains
                 ax(i)%yticklabels_off = c > 1
             end if
         end do
-    end subroutine make_grid
+    end subroutine make_grid_current
 
     ! Make an axes current: the module-level spelling of matplotlib's sca,
     ! and the way to reach anything that has no binding on the handle.
     subroutine sca(a)
-        type(axes), intent(in) :: a
+        class(axes), intent(in) :: a
 
+        if (a%fig > 0 .and. (a%fig /= cur_fig .or. .not. fig_initialized)) then
+            call figure(num=a%fig)
+        end if
         call ensure_fig()
         if (a%idx >= 1 .and. a%idx <= n_ax) cur_i = a%idx
     end subroutine sca
@@ -1046,9 +1102,242 @@ contains
     subroutine ax_sca(self)
         class(axes), intent(in) :: self
 
+        if (self%fig > 0 .and. (self%fig /= cur_fig .or. .not. fig_initialized)) then
+            call figure(num=self%fig)
+        end if
         call ensure_fig()
         if (self%idx >= 1 .and. self%idx <= n_ax) cur_i = self%idx
     end subroutine ax_sca
+
+    ! ----------------------------------------------------------------------
+    ! OOP figure_t constructor and methods.
+    ! ----------------------------------------------------------------------
+
+    subroutine axes_t_from_axes(lhs, rhs)
+        class(axes_t), intent(out) :: lhs
+        type(axes), intent(in) :: rhs
+
+        lhs%idx = rhs%idx
+        lhs%fig = rhs%fig
+    end subroutine axes_t_from_axes
+
+    function new_figure_t(figsize, dpi, num) result(fig)
+        real(dp), intent(in), optional :: figsize(2), dpi
+        integer, intent(in), optional :: num
+        type(figure_t) :: fig
+
+        call figure(figsize=figsize, dpi=dpi, num=num)
+        fig%num = gcf()
+    end function new_figure_t
+
+    subroutine fig_select(self)
+        class(figure_t), intent(inout) :: self
+
+        if (self%num == 0) then
+            call figure()
+            self%num = cur_fig
+        else if (self%num /= cur_fig .or. .not. fig_initialized) then
+            call figure(num=self%num)
+        end if
+    end subroutine fig_select
+
+    subroutine apply_axes_kwargs(p_title, p_xlabel, p_ylabel, p_xlim, p_ylim, p_grid)
+        character(len=*), intent(in), optional :: p_title, p_xlabel, p_ylabel
+        real(dp), intent(in), optional :: p_xlim(2), p_ylim(2)
+        logical, intent(in), optional :: p_grid
+
+        if (present(p_title)) call title(p_title)
+        if (present(p_xlabel)) call xlabel(p_xlabel)
+        if (present(p_ylabel)) call ylabel(p_ylabel)
+        if (present(p_xlim)) call xlim(p_xlim(1), p_xlim(2))
+        if (present(p_ylim)) call ylim(p_ylim(1), p_ylim(2))
+        if (present(p_grid)) call grid(p_grid)
+    end subroutine apply_axes_kwargs
+
+    function fig_add_subplot(self, nrows, ncols, index, title, xlabel, ylabel, &
+                             xlim, ylim, grid, projection) result(ax_out)
+        class(figure_t), intent(inout) :: self
+        integer, intent(in), optional :: nrows, ncols, index
+        character(len=*), intent(in), optional :: title, xlabel, ylabel, projection
+        real(dp), intent(in), optional :: xlim(2), ylim(2)
+        logical, intent(in), optional :: grid
+        type(axes_t) :: ax_out
+        integer :: nr, nc, idx
+
+        call fig_select(self)
+        nr = 1
+        nc = 1
+        idx = 1
+        if (present(nrows)) nr = nrows
+        if (present(ncols)) nc = ncols
+        if (present(index)) idx = index
+        call subplot(nr, nc, idx)
+
+        if (present(projection)) then
+            select case (lower(trim(projection)))
+            case ("", "rectilinear", "2d")
+            case ("3d")
+                call axes3d()
+            case ("polar")
+                call set_polar()
+            case default
+                call contract_error("add_subplot: unknown projection '"// &
+                                    trim(projection)//"'")
+            end select
+        end if
+
+        call apply_axes_kwargs(title, xlabel, ylabel, xlim, ylim, grid)
+        ax_out%idx = cur_i
+        ax_out%fig = self%num
+    end function fig_add_subplot
+
+    subroutine fig_subplots_one(self, ax)
+        class(figure_t), intent(inout) :: self
+        type(axes_t), intent(out) :: ax
+
+        call fig_select(self)
+        call make_grid_current(1, 1)
+        ax%idx = 1
+        ax%fig = self%num
+    end subroutine fig_subplots_one
+
+    subroutine fig_subplots_row(self, nrows, ncols, axs, sharex, sharey)
+        class(figure_t), intent(inout) :: self
+        integer, intent(in) :: nrows, ncols
+        type(axes_t), allocatable, intent(out) :: axs(:)
+        logical, intent(in), optional :: sharex, sharey
+        integer :: i
+
+        call check_count_arg("subplots", "nrows", nrows)
+        call check_count_arg("subplots", "ncols", ncols)
+
+        call fig_select(self)
+        call make_grid_current(nrows, ncols, sharex, sharey)
+        allocate (axs(nrows*ncols))
+        do i = 1, nrows*ncols
+            axs(i)%idx = i
+            axs(i)%fig = self%num
+        end do
+    end subroutine fig_subplots_row
+
+    subroutine fig_subplots_grid(self, nrows, ncols, axs, sharex, sharey)
+        class(figure_t), intent(inout) :: self
+        integer, intent(in) :: nrows, ncols
+        type(axes_t), allocatable, intent(out) :: axs(:, :)
+        logical, intent(in), optional :: sharex, sharey
+        integer :: r, c
+
+        call check_count_arg("subplots", "nrows", nrows)
+        call check_count_arg("subplots", "ncols", ncols)
+
+        call fig_select(self)
+        call make_grid_current(nrows, ncols, sharex, sharey)
+        allocate (axs(nrows, ncols))
+        do r = 1, nrows
+            do c = 1, ncols
+                axs(r, c)%idx = (r - 1)*ncols + c
+                axs(r, c)%fig = self%num
+            end do
+        end do
+    end subroutine fig_subplots_grid
+
+    subroutine fig_set_suptitle(self, s, fontsize, fontweight, fontstyle)
+        class(figure_t), intent(inout) :: self
+        character(len=*), intent(in) :: s
+        real(dp), intent(in), optional :: fontsize
+        character(len=*), intent(in), optional :: fontweight, fontstyle
+
+        call fig_select(self)
+        call suptitle(s, fontsize=fontsize, fontweight=fontweight, fontstyle=fontstyle)
+    end subroutine fig_set_suptitle
+
+    subroutine fig_tight_layout(self, pad)
+        class(figure_t), intent(inout) :: self
+        real(dp), intent(in), optional :: pad
+
+        call fig_select(self)
+        call tight_layout(pad=pad)
+    end subroutine fig_tight_layout
+
+    subroutine fig_constrained_layout(self, on)
+        class(figure_t), intent(inout) :: self
+        logical, intent(in), optional :: on
+
+        call fig_select(self)
+        call constrained_layout(on=on)
+    end subroutine fig_constrained_layout
+
+    subroutine fig_subplots_adjust(self, left, right, bottom, top, wspace, hspace)
+        class(figure_t), intent(inout) :: self
+        real(dp), intent(in), optional :: left, right, bottom, top, wspace, hspace
+
+        call fig_select(self)
+        call subplots_adjust(left=left, right=right, bottom=bottom, &
+                             top=top, wspace=wspace, hspace=hspace)
+    end subroutine fig_subplots_adjust
+
+    subroutine fig_save(self, filename, transparent, facecolor, dpi, bbox_inches, &
+                        pad_inches, status)
+        class(figure_t), intent(in) :: self
+        character(len=*), intent(in) :: filename
+        logical, intent(in), optional :: transparent
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        real(dp), intent(in), optional :: dpi, pad_inches
+        type(status_t), intent(out), optional :: status
+
+        if (self%num <= 0) &
+            call contract_error("figure_t%save: figure is not initialized or has been closed")
+        if (self%num /= cur_fig .or. .not. fig_initialized) then
+            call figure(num=self%num)
+        end if
+        call savefig(filename, transparent=transparent, facecolor=facecolor, &
+                     dpi=dpi, bbox_inches=bbox_inches, pad_inches=pad_inches, &
+                     status=status)
+    end subroutine fig_save
+
+    subroutine fig_show(self, status)
+        class(figure_t), intent(in) :: self
+        type(status_t), intent(out), optional :: status
+
+        if (self%num <= 0) &
+            call contract_error("figure_t%show: figure is not initialized or has been closed")
+        if (self%num /= cur_fig .or. .not. fig_initialized) then
+            call figure(num=self%num)
+        end if
+        call show(status=status)
+    end subroutine fig_show
+
+    subroutine fig_capture(self, frame, facecolor, transparent, bbox_inches, pad_inches)
+        class(figure_t), intent(in) :: self
+        type(frame_t), intent(out) :: frame
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches
+
+        if (self%num <= 0) &
+            call contract_error("figure_t%capture: figure is not initialized or has been closed")
+        if (self%num /= cur_fig .or. .not. fig_initialized) then
+            call figure(num=self%num)
+        end if
+        call capture_figure(frame, facecolor=facecolor, transparent=transparent, &
+                            bbox_inches=bbox_inches, pad_inches=pad_inches)
+    end subroutine fig_capture
+
+    subroutine fig_clf(self)
+        class(figure_t), intent(inout) :: self
+
+        call fig_select(self)
+        call clf()
+    end subroutine fig_clf
+
+    subroutine fig_close(self)
+        class(figure_t), intent(inout) :: self
+
+        if (self%num > 0) then
+            call close(num=self%num)
+            self%num = 0
+        end if
+    end subroutine fig_close
 
     subroutine ax_plot(self, x, y, fmt, label, lw, color, marker, linestyle, &
                        alpha, markersize, markerfacecolor, markeredgecolor, &
@@ -2407,6 +2696,7 @@ contains
         call ax_sca(self)
         call twinx()
         t%idx = cur_i
+        t%fig = self%fig
     end function ax_twinx
 
     function ax_twiny(self) result(t)
@@ -2415,6 +2705,7 @@ contains
         call ax_sca(self)
         call twiny()
         t%idx = cur_i
+        t%fig = self%fig
     end function ax_twiny
 
     subroutine suptitle(s, fontsize, fontweight, fontstyle)
@@ -3465,7 +3756,7 @@ contains
 
     ! Claim the next series slot, doubling the array when it is full.
     subroutine push_series(a, is)
-        type(axes_t), intent(inout) :: a
+        type(axes_state_t), intent(inout) :: a
         integer, intent(out) :: is
         type(series_t), allocatable :: tmp(:)
         integer :: cap, i
@@ -3484,7 +3775,7 @@ contains
     end subroutine push_series
 
     subroutine push_text(a, it)
-        type(axes_t), intent(inout) :: a
+        type(axes_state_t), intent(inout) :: a
         integer, intent(out) :: it
         type(text_t), allocatable :: tmp(:)
         integer :: cap, i
@@ -3503,7 +3794,7 @@ contains
     end subroutine push_text
 
     subroutine push_textbox(a, it)
-        type(axes_t), intent(inout) :: a
+        type(axes_state_t), intent(inout) :: a
         integer, intent(out) :: it
         type(textbox_t), allocatable :: tmp(:)
         integer :: cap, i

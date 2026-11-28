@@ -607,6 +607,7 @@ module fplotlib_state
         real(dp) :: left, right, bottom, top, wspace, hspace
         character(len=256) :: suptitle
         real(dp) :: d_title, d_label, d_tick, d_legend, suptitle_size
+        integer :: suptitle_w = 0, suptitle_sl = 0
         type(axes_t), allocatable :: ax(:)
         integer :: n_ax, cur_i, grid_m, grid_n
         logical :: sparse, constrained
