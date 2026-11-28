@@ -49,8 +49,9 @@ module fplotlib_mathtext
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_bbox, glyph_italic, &
                                glyph_variants, glyph_assembly, glyph_ssty, &
                                glyph_math_kern, glyph_top_accent, glyph_dotless, &
-                               math_const, math_percent, FACE_MATH, FACE_REGULAR
-    use fplotlib_glyphs_data, only: MIN_CONNECTOR_OVERLAP, FACE_EM, &
+                               math_const, math_percent, math_min_connector_overlap, &
+                               FACE_MATH, FACE_REGULAR
+    use fplotlib_glyphs_data, only: &
                                MC_SCRIPT_PERCENT_SCALE_DOWN, &
                                MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN, MC_AXIS_HEIGHT, &
                                MC_DISPLAY_OPERATOR_MIN_HEIGHT, MC_ACCENT_BASE_HEIGHT, &
@@ -3067,7 +3068,7 @@ contains
         integer, allocatable :: seq(:)
 
         call glyph_assembly(g, vertical, n, parts, st, en, fu, ex, ic)
-        minov = real(MIN_CONNECTOR_OVERLAP, dp)/real(FACE_EM(FACE_MATH), dp)
+        minov = math_min_connector_overlap()
         reps = -1
         no_ext = .true.
         do

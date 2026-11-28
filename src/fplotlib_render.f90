@@ -112,7 +112,10 @@ module fplotlib_render
     public :: BASE_ALPHABETIC, BASE_MIDDLE, BASE_TOP, BASE_BOTTOM
     public :: WEIGHT_NORMAL, WEIGHT_BOLD, SLANT_ROMAN, SLANT_ITALIC
     public :: MAX_DASH, MAX_COORD, MAX_PEN_PER_DASH
-    public :: frame_decimals
+    public :: frame_decimals, renderer_set_max_gid
+
+    ! Maximum valid glyph ID (updated when external fonts are loaded/reset).
+    integer :: max_gid_limit = NGLYPH
 
     ! Path verbs. A path is x/y vertex arrays plus one verb per vertex group:
     ! MOVE and LINE consume one vertex, CUBIC consumes three (two controls and
@@ -810,7 +813,7 @@ contains
         if (min(size(run%gid), size(run%x), size(run%y), size(run%size)) < n) then
             call contract_error("glyphs: run arrays are shorter than the glyph count")
         end if
-        if (any(run%gid(1:n) < 0) .or. any(run%gid(1:n) > NGLYPH)) then
+        if (any(run%gid(1:n) < 0) .or. any(run%gid(1:n) > max_gid_limit)) then
             call contract_error("glyphs: invalid glyph ID")
         end if
         call check_finite(run%x(1:n), "glyphs: nonfinite or out-of-range glyph position")
@@ -833,5 +836,10 @@ contains
             end if
         end if
     end subroutine check_glyphs
+
+    subroutine renderer_set_max_gid(n)
+        integer, intent(in) :: n
+        max_gid_limit = max(NGLYPH, n)
+    end subroutine renderer_set_max_gid
 
 end module fplotlib_render

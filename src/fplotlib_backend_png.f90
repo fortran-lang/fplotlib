@@ -22,7 +22,7 @@ module fplotlib_backend_png
     use fplotlib_render
     use fplotlib_raster
     use fplotlib_png, only: png_encode
-    use fplotlib_glyphs, only: glyph_outline, NGLYPH
+    use fplotlib_glyphs, only: glyph_outline, glyph_count, glyph_generation
     implicit none
     private
 
@@ -59,6 +59,7 @@ module fplotlib_backend_png
         integer :: pw = 0, ph = 0
         character(len=:), allocatable :: rgb
         type(cached_outline_t), allocatable :: glyph_cache(:)
+        integer :: font_gen = -1
     contains
         procedure :: open_canvas_impl => png_open_canvas
         procedure :: close_canvas_impl => png_close_canvas
@@ -453,12 +454,16 @@ contains
         pp%filled = .true.
         pp%clip = shifted_clip(self, paint%clip)
 
-        if (.not. allocated(self%glyph_cache)) allocate (self%glyph_cache(NGLYPH))
+        if (.not. allocated(self%glyph_cache) .or. self%font_gen /= glyph_generation()) then
+            if (allocated(self%glyph_cache)) deallocate (self%glyph_cache)
+            allocate (self%glyph_cache(glyph_count()))
+            self%font_gen = glyph_generation()
+        end if
 
         call pb_reset(self%pb)
         do i = 1, run%n
             gid = run%gid(i)
-            if (gid < 1 .or. gid > NGLYPH) cycle
+            if (gid < 1 .or. gid > size(self%glyph_cache)) cycle
             if (.not. self%glyph_cache(gid)%valid) then
                 call glyph_outline(gid, self%glyph_cache(gid)%gv, self%glyph_cache(gid)%nv, &
                                    self%glyph_cache(gid)%px, self%glyph_cache(gid)%py, &

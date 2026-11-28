@@ -90,7 +90,8 @@
 module fplotlib_glyphs
     use iso_fortran_env, only: int16, int64
     use fplotlib_style, only: dp
-    use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
+    use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE, &
+                               renderer_set_max_gid
     use fplotlib_glyphs_data, only: NFACE, NGLYPH, NCONT, NPT, NCOMP, NCMAP, &
                                  NKERN, FACE_NG, FACE_EM, FACE_ASC, FACE_DESC, &
                                  FACE_XH, FACE_CAP, FACE_CUBIC, FACE_PRED, &
@@ -99,13 +100,18 @@ module fplotlib_glyphs
                                  blob_text, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
                                  FACE_OSCALE, FACE_XREF, FACE_RESID, &
-                                 NPART, NMKH, NMKV, MATH_CONSTANT
+                                 NPART, NMKH, NMKV, MATH_CONSTANT, &
+                                 MIN_CONNECTOR_OVERLAP
+    use fplotlib_status, only: status_t, STATUS_OK
+    use fplotlib_ttf, only: ext_face_t, ext_face_load, ext_face_free, ext_face_copy
     implicit none
     private
 
-    public :: NFACE, NGLYPH
+    public :: NFACE, NGLYPH, glyph_count, glyph_generation
+    public :: glyphs_load_face, glyphs_reset_fonts
     public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH
-    public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
+    public :: math_const, math_percent, math_min_connector_overlap, &
+              glyph_italic, glyph_top_accent, &
               glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
               glyph_ssty, glyph_dotless
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
@@ -183,7 +189,85 @@ module fplotlib_glyphs
     integer :: BPOS
     integer :: nmkh_, nmkv_, nvar_, nasm_, npart_
 
+    ! Externally loaded runtime faces (TTF/OTF), overlaid per face index.
+    ! Built-in gids stay 1..NGLYPH; external face k owns gids
+    ! ext_base(k) + 1 .. ext_base(k) + ext_faces(k)%ng.
+    type(ext_face_t) :: ext_faces(NFACE)
+    integer :: ext_base(NFACE) = 0
+    integer :: ext_total = 0
+    integer :: font_gen = 0
+
 contains
+
+    ! --- external font management ------------------------------------
+
+    pure integer function glyph_count()
+        glyph_count = NGLYPH + ext_total
+    end function glyph_count
+
+    pure integer function glyph_generation()
+        glyph_generation = font_gen
+    end function glyph_generation
+
+    subroutine glyphs_load_face(path, faces, nfaces, status)
+        character(len=*), intent(in) :: path
+        integer, intent(in) :: faces(:), nfaces
+        type(status_t), intent(out) :: status
+        type(ext_face_t) :: tmp
+        integer :: i, f
+
+        call ext_face_load(path, tmp, status)
+        if (.not. status%ok()) return
+        do i = 1, nfaces
+            f = faces(i)
+            if (f >= 1 .and. f <= NFACE) then
+                call ext_face_copy(tmp, ext_faces(f))
+            end if
+        end do
+        call ext_face_free(tmp)
+        call recompute_ext_bases()
+    end subroutine glyphs_load_face
+
+    subroutine glyphs_reset_fonts()
+        integer :: k
+        do k = 1, NFACE
+            call ext_face_free(ext_faces(k))
+        end do
+        call recompute_ext_bases()
+    end subroutine glyphs_reset_fonts
+
+    subroutine recompute_ext_bases()
+        integer :: k, cur
+        cur = NGLYPH
+        do k = 1, NFACE
+            if (ext_faces(k)%loaded) then
+                ext_base(k) = cur
+                cur = cur + ext_faces(k)%ng
+            else
+                ext_base(k) = 0
+            end if
+        end do
+        ext_total = cur - NGLYPH
+        font_gen = font_gen + 1
+        call renderer_set_max_gid(NGLYPH + ext_total)
+    end subroutine recompute_ext_bases
+
+    subroutine find_ext(gid, f, lg)
+        integer, intent(in) :: gid
+        integer, intent(out) :: f, lg
+        integer :: k
+        f = 0
+        lg = 0
+        if (gid <= NGLYPH .or. gid > NGLYPH + ext_total) return
+        do k = 1, NFACE
+            if (.not. ext_faces(k)%loaded) cycle
+            if (gid > ext_base(k) .and. gid <= ext_base(k) + ext_faces(k)%ng) then
+                f = k
+                lg = gid - ext_base(k)
+                return
+            end if
+        end do
+    end subroutine find_ext
 
     ! --- the gid interface -------------------------------------------
 
@@ -194,6 +278,22 @@ contains
         call ensure_loaded()
         gid = 0
         if (face < 1 .or. face > NFACE) return
+        if (ext_faces(face)%loaded) then
+            lo = 1
+            hi = ext_faces(face)%ncmap
+            do while (lo <= hi)
+                mid = (lo + hi)/2
+                if (ext_faces(face)%cmcp(mid) == cp) then
+                    gid = ext_base(face) + ext_faces(face)%cmg(mid)
+                    return
+                else if (ext_faces(face)%cmcp(mid) < cp) then
+                    lo = mid + 1
+                else
+                    hi = mid - 1
+                end if
+            end do
+            return
+        end if
         lo = CMB(face)
         hi = CMB(face + 1) - 1
         do while (lo <= hi)
@@ -211,19 +311,30 @@ contains
 
     integer function glyph_face(gid)
         integer, intent(in) :: gid
+        integer :: f, lg
         call ensure_loaded()
         glyph_face = 0
-        if (gid >= 1 .and. gid <= NGLYPH) glyph_face = GFACE(gid)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            glyph_face = GFACE(gid)
+        else
+            call find_ext(gid, f, lg)
+            glyph_face = f
+        end if
     end function glyph_face
 
     ! Advance width in ems.
     function glyph_adv(gid) result(a)
         integer, intent(in) :: gid
         real(dp) :: a
+        integer :: f, lg
         call ensure_loaded()
         a = 0.0_dp
-        if (gid < 1 .or. gid > NGLYPH) return
-        a = real(GADV(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            a = real(GADV(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) a = real(ext_faces(f)%adv(lg), dp)/real(ext_faces(f)%em, dp)
+        end if
     end function glyph_adv
 
     ! The ink box in ems, y up from the baseline; all zero for a glyph
@@ -232,17 +343,28 @@ contains
         integer, intent(in) :: gid
         real(dp), intent(out) :: x0, y0, x1, y1
         real(dp) :: s
+        integer :: f, lg
         call ensure_loaded()
         x0 = 0.0_dp
         y0 = 0.0_dp
         x1 = 0.0_dp
         y1 = 0.0_dp
-        if (gid < 1 .or. gid > NGLYPH) return
-        s = 1.0_dp/real(FACE_EM(GFACE(gid)), dp)
-        x0 = GBOX(1, gid)*s
-        y0 = GBOX(2, gid)*s
-        x1 = GBOX(3, gid)*s
-        y1 = GBOX(4, gid)*s
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            s = 1.0_dp/real(FACE_EM(GFACE(gid)), dp)
+            x0 = GBOX(1, gid)*s
+            y0 = GBOX(2, gid)*s
+            x1 = GBOX(3, gid)*s
+            y1 = GBOX(4, gid)*s
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                s = 1.0_dp/real(ext_faces(f)%em, dp)
+                x0 = ext_faces(f)%bbox(1, lg)*s
+                y0 = ext_faces(f)%bbox(2, lg)*s
+                x1 = ext_faces(f)%bbox(3, lg)*s
+                y1 = ext_faces(f)%bbox(4, lg)*s
+            end if
+        end if
     end subroutine glyph_bbox
 
     ! The outline in ems, y up, as verbs and points: one point per move
@@ -253,23 +375,38 @@ contains
         integer, intent(out) :: nv
         real(dp), allocatable, intent(out) :: x(:), y(:)
         integer, intent(out) :: np
+        integer :: f, lg
         call ensure_loaded()
-        if (gid < 1 .or. gid > NGLYPH) then
-            nv = 0
-            np = 0
-            allocate (v(0), x(0), y(0))
-            return
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            call outline_of(gid, 1.0_dp/real(FACE_EM(GFACE(gid)), dp), v, nv, x, y, np)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                call ext_outline_of(ext_faces(f), lg, 1.0_dp/real(ext_faces(f)%em, dp), &
+                                    v, nv, x, y, np)
+            else
+                nv = 0
+                np = 0
+                allocate (v(0), x(0), y(0))
+            end if
         end if
-        call outline_of(gid, 1.0_dp/real(FACE_EM(GFACE(gid)), dp), v, nv, x, y, np)
     end subroutine glyph_outline
 
     ! Whether a glyph draws anything at all; a space does not.
     logical function glyph_inked(gid)
         integer, intent(in) :: gid
+        integer :: f, lg
         call ensure_loaded()
         glyph_inked = .false.
-        if (gid < 1 .or. gid > NGLYPH) return
-        glyph_inked = OBEG(gid + 1) > OBEG(gid) .or. PBEG(gid + 1) > PBEG(gid)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            glyph_inked = OBEG(gid + 1) > OBEG(gid) .or. PBEG(gid + 1) > PBEG(gid)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                glyph_inked = ext_faces(f)%obeg(lg + 1) > ext_faces(f)%obeg(lg) .or. &
+                              ext_faces(f)%pbeg(lg + 1) > ext_faces(f)%pbeg(lg)
+            end if
+        end if
     end function glyph_inked
 
     ! The pair kerning between two glyphs of a face, in ems. A face that
@@ -277,10 +414,32 @@ contains
     function glyph_kern(face, g1, g2) result(k)
         integer, intent(in) :: face, g1, g2
         real(dp) :: k
-        integer :: l, r, src, i1, i2
+        integer :: l, r, src, i1, i2, lo, hi, mid, f1, f2, l1, l2
+        integer(int64) :: key
         call ensure_loaded()
         k = 0.0_dp
         if (face < 1 .or. face > NFACE) return
+        if (ext_faces(face)%loaded) then
+            if (ext_faces(face)%nkern <= 0) return
+            call find_ext(g1, f1, l1)
+            call find_ext(g2, f2, l2)
+            if (f1 /= face .or. f2 /= face) return
+            key = int(l1, int64)*65536_int64 + int(l2, int64)
+            lo = 1
+            hi = ext_faces(face)%nkern
+            do while (lo <= hi)
+                mid = (lo + hi)/2
+                if (ext_faces(face)%kern_key(mid) == key) then
+                    k = real(ext_faces(face)%kern_val(mid), dp)/real(ext_faces(face)%em, dp)
+                    return
+                else if (ext_faces(face)%kern_key(mid) < key) then
+                    lo = mid + 1
+                else
+                    hi = mid - 1
+                end if
+            end do
+            return
+        end if
         if (g1 < 1 .or. g1 > NGLYPH .or. g2 < 1 .or. g2 > NGLYPH) return
         if (GFACE(g1) /= face .or. GFACE(g2) /= face) return
         src = FACE_KERN(face)
@@ -297,9 +456,15 @@ contains
     ! The code point a glyph stands for, 0 for one that has none.
     integer function glyph_char(gid)
         integer, intent(in) :: gid
+        integer :: f, lg
         call ensure_loaded()
         glyph_char = 0
-        if (gid >= 1 .and. gid <= NGLYPH) glyph_char = GCHAR(gid)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            glyph_char = GCHAR(gid)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) glyph_char = ext_faces(f)%gchar(lg)
+        end if
     end function glyph_char
 
     ! The character a base and one combining mark compose to, 0 if none.
@@ -319,22 +484,38 @@ contains
     ! in ems.
     pure elemental real(dp) function face_ascent(face)
         integer, intent(in) :: face
-        face_ascent = real(FACE_ASC(face), dp)/real(FACE_EM(face), dp)
+        if (ext_faces(face)%loaded) then
+            face_ascent = real(ext_faces(face)%asc, dp)/real(ext_faces(face)%em, dp)
+        else
+            face_ascent = real(FACE_ASC(face), dp)/real(FACE_EM(face), dp)
+        end if
     end function face_ascent
 
     pure elemental real(dp) function face_descent(face)
         integer, intent(in) :: face
-        face_descent = real(FACE_DESC(face), dp)/real(FACE_EM(face), dp)
+        if (ext_faces(face)%loaded) then
+            face_descent = real(ext_faces(face)%desc, dp)/real(ext_faces(face)%em, dp)
+        else
+            face_descent = real(FACE_DESC(face), dp)/real(FACE_EM(face), dp)
+        end if
     end function face_descent
 
     pure elemental real(dp) function face_xheight(face)
         integer, intent(in) :: face
-        face_xheight = real(FACE_XH(face), dp)/real(FACE_EM(face), dp)
+        if (ext_faces(face)%loaded) then
+            face_xheight = real(ext_faces(face)%xh, dp)/real(ext_faces(face)%em, dp)
+        else
+            face_xheight = real(FACE_XH(face), dp)/real(FACE_EM(face), dp)
+        end if
     end function face_xheight
 
     pure elemental real(dp) function face_capheight(face)
         integer, intent(in) :: face
-        face_capheight = real(FACE_CAP(face), dp)/real(FACE_EM(face), dp)
+        if (ext_faces(face)%loaded) then
+            face_capheight = real(ext_faces(face)%cap, dp)/real(ext_faces(face)%em, dp)
+        else
+            face_capheight = real(FACE_CAP(face), dp)/real(FACE_EM(face), dp)
+        end if
     end function face_capheight
 
     ! --- the MATH table ----------------------------------------------
@@ -343,22 +524,50 @@ contains
     ! math_percent instead.
     pure elemental real(dp) function math_const(i)
         integer, intent(in) :: i
-        math_const = real(MATH_CONSTANT(i), dp)/real(FACE_EM(FACE_MATH), dp)
+        if (ext_faces(FACE_MATH)%loaded .and. ext_faces(FACE_MATH)%has_math) then
+            math_const = real(ext_faces(FACE_MATH)%math_const(i), dp) &
+                         /real(ext_faces(FACE_MATH)%em, dp)
+        else
+            math_const = real(MATH_CONSTANT(i), dp)/real(FACE_EM(FACE_MATH), dp)
+        end if
     end function math_const
 
     pure elemental real(dp) function math_percent(i)
         integer, intent(in) :: i
-        math_percent = real(MATH_CONSTANT(i), dp)
+        if (ext_faces(FACE_MATH)%loaded .and. ext_faces(FACE_MATH)%has_math) then
+            math_percent = real(ext_faces(FACE_MATH)%math_const(i), dp)
+        else
+            math_percent = real(MATH_CONSTANT(i), dp)
+        end if
     end function math_percent
+
+    pure real(dp) function math_min_connector_overlap()
+        if (ext_faces(FACE_MATH)%loaded .and. ext_faces(FACE_MATH)%has_math) then
+            math_min_connector_overlap = real(ext_faces(FACE_MATH)%min_connector_overlap, dp) &
+                                         /real(ext_faces(FACE_MATH)%em, dp)
+        else
+            math_min_connector_overlap = real(MIN_CONNECTOR_OVERLAP, dp) &
+                                         /real(FACE_EM(FACE_MATH), dp)
+        end if
+    end function math_min_connector_overlap
 
     ! The italic correction of a glyph, in ems.
     function glyph_italic(gid) result(v)
         integer, intent(in) :: gid
         real(dp) :: v
+        integer :: f, lg
         call ensure_loaded()
         v = 0.0_dp
-        if (gid < 1 .or. gid > NGLYPH) return
-        v = real(GITAL(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            v = real(GITAL(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (ext_faces(f)%has_math) then
+                    v = real(ext_faces(f)%gital(lg), dp)/real(ext_faces(f)%em, dp)
+                end if
+            end if
+        end if
     end function glyph_italic
 
     ! Where an accent over a glyph is centred, in ems from its origin: the
@@ -366,13 +575,24 @@ contains
     function glyph_top_accent(gid) result(v)
         integer, intent(in) :: gid
         real(dp) :: v
+        integer :: f, lg
         call ensure_loaded()
         v = 0.0_dp
-        if (gid < 1 .or. gid > NGLYPH) return
-        if (FACE_HAS_MATH(GFACE(gid))) then
-            v = real(GACC(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            if (FACE_HAS_MATH(GFACE(gid))) then
+                v = real(GACC(gid), dp)/real(FACE_EM(GFACE(gid)), dp)
+            else
+                v = 0.5_dp*glyph_adv(gid)
+            end if
         else
-            v = 0.5_dp*glyph_adv(gid)
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (ext_faces(f)%has_math) then
+                    v = real(ext_faces(f)%gacc(lg), dp)/real(ext_faces(f)%em, dp)
+                else
+                    v = 0.5_dp*glyph_adv(gid)
+                end if
+            end if
         end if
     end function glyph_top_accent
 
@@ -383,26 +603,50 @@ contains
         integer, intent(in) :: gid, corner
         real(dp), intent(in) :: height
         real(dp) :: v, em
-        integer :: n, i
+        integer :: n, i, f, lg
         call ensure_loaded()
         v = 0.0_dp
-        if (gid < 1 .or. gid > NGLYPH) return
-        n = MKN(corner, gid)
-        if (n < 0) return
-        em = real(FACE_EM(GFACE(gid)), dp)
-        i = 0
-        do while (i < n)
-            if (height*em < real(MKH(MKH0(corner, gid) + i), dp)) exit
-            i = i + 1
-        end do
-        v = real(MKV(MKV0(corner, gid) + i), dp)/em
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            n = MKN(corner, gid)
+            if (n < 0) return
+            em = real(FACE_EM(GFACE(gid)), dp)
+            i = 0
+            do while (i < n)
+                if (height*em < real(MKH(MKH0(corner, gid) + i), dp)) exit
+                i = i + 1
+            end do
+            v = real(MKV(MKV0(corner, gid) + i), dp)/em
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (.not. ext_faces(f)%has_math) return
+                n = ext_faces(f)%mkn(corner, lg)
+                if (n < 0) return
+                em = real(ext_faces(f)%em, dp)
+                i = 0
+                do while (i < n)
+                    if (height*em < real(ext_faces(f)%mkh( &
+                                         ext_faces(f)%mkh0(corner, lg) + i), dp)) exit
+                    i = i + 1
+                end do
+                v = real(ext_faces(f)%mkv(ext_faces(f)%mkv0(corner, lg) + i), dp)/em
+            end if
+        end if
     end function glyph_math_kern
 
     logical function glyph_extended(gid)
         integer, intent(in) :: gid
+        integer :: f, lg
         call ensure_loaded()
         glyph_extended = .false.
-        if (gid >= 1 .and. gid <= NGLYPH) glyph_extended = GEXT(gid)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            glyph_extended = GEXT(gid)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (ext_faces(f)%has_math) glyph_extended = ext_faces(f)%gext(lg)
+            end if
+        end if
     end function glyph_extended
 
     ! The size variants of a glyph along one direction, smallest first,
@@ -414,17 +658,28 @@ contains
         integer, intent(out) :: n
         integer, allocatable, intent(out) :: gids(:)
         real(dp), allocatable, intent(out) :: adv(:)
-        integer :: d, k
+        integer :: d, k, f, lg
         call ensure_loaded()
         n = 0
+        d = merge(1, 2, vertical)
         if (gid >= 1 .and. gid <= NGLYPH) then
-            d = merge(1, 2, vertical)
             n = CVN(d, gid)
+            allocate (gids(n), adv(n))
+            do k = 1, n
+                gids(k) = VARG(CV0(d, gid) + k - 1)
+                adv(k) = real(VARA(CV0(d, gid) + k - 1), dp)/real(FACE_EM(GFACE(gid)), dp)
+            end do
+            return
+        end if
+        call find_ext(gid, f, lg)
+        if (f > 0) then
+            if (ext_faces(f)%has_math) n = ext_faces(f)%cvn(d, lg)
         end if
         allocate (gids(n), adv(n))
         do k = 1, n
-            gids(k) = VARG(CV0(d, gid) + k - 1)
-            adv(k) = real(VARA(CV0(d, gid) + k - 1), dp)/real(FACE_EM(GFACE(gid)), dp)
+            gids(k) = ext_base(f) + ext_faces(f)%varg(ext_faces(f)%cv0(d, lg) + k - 1)
+            adv(k) = real(ext_faces(f)%vara(ext_faces(f)%cv0(d, lg) + k - 1), dp) &
+                     /real(ext_faces(f)%em, dp)
         end do
     end subroutine glyph_variants
 
@@ -441,28 +696,48 @@ contains
         real(dp), allocatable, intent(out) :: starts(:), ends(:), fulls(:)
         logical, allocatable, intent(out) :: exts(:)
         real(dp), intent(out) :: italic
-        integer :: d, a, k, p
+        integer :: d, a, k, p, f, lg
         real(dp) :: em
         call ensure_loaded()
         n = 0
         italic = 0.0_dp
         a = 0
+        d = merge(1, 2, vertical)
         if (gid >= 1 .and. gid <= NGLYPH) then
-            d = merge(1, 2, vertical)
             a = CASM(d, gid)
             if (a > 0) n = ASMN(a)
+            allocate (parts(n), starts(n), ends(n), fulls(n), exts(n))
+            if (a == 0) return
+            em = real(FACE_EM(GFACE(gid)), dp)
+            italic = real(ASMI(a), dp)/em
+            do k = 1, n
+                p = ASMP0(a) + k - 1
+                parts(k) = PARTG(p)
+                starts(k) = real(PARTST(p), dp)/em
+                ends(k) = real(PARTEN(p), dp)/em
+                fulls(k) = real(PARTF(p), dp)/em
+                exts(k) = PARTX(p)
+            end do
+            return
+        end if
+        call find_ext(gid, f, lg)
+        if (f > 0) then
+            if (ext_faces(f)%has_math) then
+                a = ext_faces(f)%casm(d, lg)
+                if (a > 0) n = ext_faces(f)%asmn(a)
+            end if
         end if
         allocate (parts(n), starts(n), ends(n), fulls(n), exts(n))
         if (a == 0) return
-        em = real(FACE_EM(GFACE(gid)), dp)
-        italic = real(ASMI(a), dp)/em
+        em = real(ext_faces(f)%em, dp)
+        italic = real(ext_faces(f)%asmi(a), dp)/em
         do k = 1, n
-            p = ASMP0(a) + k - 1
-            parts(k) = PARTG(p)
-            starts(k) = real(PARTST(p), dp)/em
-            ends(k) = real(PARTEN(p), dp)/em
-            fulls(k) = real(PARTF(p), dp)/em
-            exts(k) = PARTX(p)
+            p = ext_faces(f)%asmp0(a) + k - 1
+            parts(k) = ext_base(f) + ext_faces(f)%partg(p)
+            starts(k) = real(ext_faces(f)%partst(p), dp)/em
+            ends(k) = real(ext_faces(f)%parten(p), dp)/em
+            fulls(k) = real(ext_faces(f)%partf(p), dp)/em
+            exts(k) = ext_faces(f)%partx(p)
         end do
     end subroutine glyph_assembly
 
@@ -470,19 +745,40 @@ contains
     ! the glyph itself when it has none.
     integer function glyph_ssty(gid, level)
         integer, intent(in) :: gid, level
+        integer :: f, lg
         call ensure_loaded()
         glyph_ssty = gid
-        if (gid < 1 .or. gid > NGLYPH .or. level < 1 .or. level > 2) return
-        if (SSTY(level, gid) > 0) glyph_ssty = SSTY(level, gid)
+        if (level < 1 .or. level > 2) return
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            if (SSTY(level, gid) > 0) glyph_ssty = SSTY(level, gid)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (ext_faces(f)%has_math) then
+                    if (ext_faces(f)%ssty(level, lg) > 0) &
+                        glyph_ssty = ext_base(f) + ext_faces(f)%ssty(level, lg)
+                end if
+            end if
+        end if
     end function glyph_ssty
 
     ! The dotless form of a glyph, for under an accent; itself if none.
     integer function glyph_dotless(gid)
         integer, intent(in) :: gid
+        integer :: f, lg
         call ensure_loaded()
         glyph_dotless = gid
-        if (gid < 1 .or. gid > NGLYPH) return
-        if (DTLS(gid) > 0) glyph_dotless = DTLS(gid)
+        if (gid >= 1 .and. gid <= NGLYPH) then
+            if (DTLS(gid) > 0) glyph_dotless = DTLS(gid)
+        else
+            call find_ext(gid, f, lg)
+            if (f > 0) then
+                if (ext_faces(f)%has_math) then
+                    if (ext_faces(f)%dtls(lg) > 0) &
+                        glyph_dotless = ext_base(f) + ext_faces(f)%dtls(lg)
+                end if
+            end if
+        end if
     end function glyph_dotless
 
     ! --- stored contours to the path the backends fill ---------------
@@ -692,6 +988,221 @@ contains
         nv = nv + 1
         v(nv) = VERB_CLOSE
     end subroutine add_quad
+
+    ! --- external face contours to path ------------------------------
+
+    subroutine ext_outline_of(ef, lg, s, v, nv, x, y, np)
+        type(ext_face_t), intent(in) :: ef
+        integer, intent(in) :: lg
+        real(dp), intent(in) :: s
+        integer, allocatable, intent(out) :: v(:)
+        integer, intent(out) :: nv
+        real(dp), allocatable, intent(out) :: x(:), y(:)
+        integer, intent(out) :: np
+        integer, allocatable :: tv(:)
+        real(dp), allocatable :: tx(:), ty(:)
+        real(dp) :: ident(6)
+        integer :: nc, npts
+
+        nc = 0
+        npts = 0
+        call count_ext_glyph(ef, lg, nc, npts, 0)
+        allocate (tv(npts + 2*nc), tx(3*npts + nc), ty(3*npts + nc))
+        nv = 0
+        np = 0
+        ident = [1.0_dp, 0.0_dp, 0.0_dp, 1.0_dp, 0.0_dp, 0.0_dp]
+        call add_ext_glyph(ef, lg, ident, tv, nv, tx, ty, np, 0)
+        allocate (v(nv), x(np), y(np))
+        if (nv > 0) v = tv(1:nv)
+        if (np > 0) then
+            x = tx(1:np)*s
+            y = ty(1:np)*s
+        end if
+    end subroutine ext_outline_of
+
+    recursive subroutine count_ext_glyph(ef, lg, nc, npts, depth)
+        type(ext_face_t), intent(in) :: ef
+        integer, intent(in) :: lg, depth
+        integer, intent(inout) :: nc, npts
+        integer :: k
+        if (depth > 16 .or. lg < 1 .or. lg > ef%ng) return
+        nc = nc + ef%obeg(lg + 1) - ef%obeg(lg)
+        npts = npts + ef%cbeg(ef%obeg(lg + 1)) - ef%cbeg(ef%obeg(lg))
+        do k = ef%pbeg(lg), ef%pbeg(lg + 1) - 1
+            call count_ext_glyph(ef, ef%pg(k), nc, npts, depth + 1)
+        end do
+    end subroutine count_ext_glyph
+
+    recursive subroutine add_ext_glyph(ef, lg, mat, v, nv, x, y, np, depth)
+        type(ext_face_t), intent(in) :: ef
+        integer, intent(in) :: lg, depth
+        real(dp), intent(in) :: mat(6)
+        integer, intent(inout) :: v(:), nv
+        real(dp), intent(inout) :: x(:), y(:)
+        integer, intent(inout) :: np
+        integer :: ci, k, n0, i
+        real(dp) :: m2(6), cm(6), px, py
+
+        if (depth > 16 .or. lg < 1 .or. lg > ef%ng) return
+        n0 = np
+        do ci = ef%obeg(lg), ef%obeg(lg + 1) - 1
+            if (ef%cubic) then
+                call add_ext_cubic(ef, ef%cbeg(ci), ef%cbeg(ci + 1) - ef%cbeg(ci), &
+                                   v, nv, x, y, np)
+            else
+                call add_ext_quad(ef, ef%cbeg(ci), ef%cbeg(ci + 1) - ef%cbeg(ci), &
+                                  v, nv, x, y, np)
+            end if
+        end do
+        do i = n0 + 1, np
+            px = x(i)
+            py = y(i)
+            x(i) = mat(1)*px + mat(3)*py + mat(5)
+            y(i) = mat(2)*px + mat(4)*py + mat(6)
+        end do
+        do k = ef%pbeg(lg), ef%pbeg(lg + 1) - 1
+            cm = ef%pmat(:, k)
+            m2(1) = mat(1)*cm(1) + mat(3)*cm(2)
+            m2(2) = mat(2)*cm(1) + mat(4)*cm(2)
+            m2(3) = mat(1)*cm(3) + mat(3)*cm(4)
+            m2(4) = mat(2)*cm(3) + mat(4)*cm(4)
+            m2(5) = mat(1)*cm(5) + mat(3)*cm(6) + mat(5)
+            m2(6) = mat(2)*cm(5) + mat(4)*cm(6) + mat(6)
+            call add_ext_glyph(ef, ef%pg(k), m2, v, nv, x, y, np, depth + 1)
+        end do
+    end subroutine add_ext_glyph
+
+    subroutine add_ext_cubic(ef, b, n, v, nv, x, y, np)
+        type(ext_face_t), intent(in) :: ef
+        integer, intent(in) :: b, n
+        integer, intent(inout) :: v(:), nv
+        real(dp), intent(inout) :: x(:), y(:)
+        integer, intent(inout) :: np
+        integer :: j, k
+        if (n <= 0) return
+        nv = nv + 1
+        v(nv) = VERB_MOVE
+        np = np + 1
+        x(np) = real(ef%qx(b), dp)
+        y(np) = real(ef%qy(b), dp)
+        j = 1
+        do while (j < n)
+            if (ef%qon(b + j)) then
+                nv = nv + 1
+                v(nv) = VERB_LINE
+                np = np + 1
+                x(np) = real(ef%qx(b + j), dp)
+                y(np) = real(ef%qy(b + j), dp)
+                j = j + 1
+            else
+                nv = nv + 1
+                v(nv) = VERB_CUBIC
+                do k = 0, 2
+                    np = np + 1
+                    x(np) = real(ef%qx(b + mod(j + k, n)), dp)
+                    y(np) = real(ef%qy(b + mod(j + k, n)), dp)
+                end do
+                j = j + 3
+            end if
+        end do
+        nv = nv + 1
+        v(nv) = VERB_CLOSE
+    end subroutine add_ext_cubic
+
+    subroutine add_ext_quad(ef, b, n, v, nv, x, y, np)
+        type(ext_face_t), intent(in) :: ef
+        integer, intent(in) :: b, n
+        integer, intent(inout) :: v(:), nv
+        real(dp), intent(inout) :: x(:), y(:)
+        integer, intent(inout) :: np
+        real(dp) :: sx(n + 2), sy(n + 2)
+        logical :: son(n + 2)
+        integer :: first, j, k, m, jn
+        real(dp) :: cx, cy, ex, ey
+        if (n <= 0) return
+
+        first = 0
+        do j = 1, n
+            if (ef%qon(b + j - 1)) then
+                first = j
+                exit
+            end if
+        end do
+
+        if (first == 0) then
+            sx(1) = 0.5_dp*(real(ef%qx(b), dp) + real(ef%qx(b + n - 1), dp))
+            sy(1) = 0.5_dp*(real(ef%qy(b), dp) + real(ef%qy(b + n - 1), dp))
+            do j = 1, n
+                sx(j + 1) = real(ef%qx(b + j - 1), dp)
+                sy(j + 1) = real(ef%qy(b + j - 1), dp)
+                son(j + 1) = .false.
+            end do
+            m = n + 1
+        else
+            sx(1) = real(ef%qx(b + first - 1), dp)
+            sy(1) = real(ef%qy(b + first - 1), dp)
+            do j = 1, n - 1
+                k = b + mod(first - 1 + j, n)
+                sx(j + 1) = real(ef%qx(k), dp)
+                sy(j + 1) = real(ef%qy(k), dp)
+                son(j + 1) = ef%qon(k)
+            end do
+            m = n
+        end if
+        son(1) = .true.
+        sx(m + 1) = sx(1)
+        sy(m + 1) = sy(1)
+        son(m + 1) = .true.
+
+        nv = nv + 1
+        v(nv) = VERB_MOVE
+        np = np + 1
+        x(np) = sx(1)
+        y(np) = sy(1)
+        cx = sx(1)
+        cy = sy(1)
+
+        j = 2
+        do while (j <= m + 1)
+            if (son(j)) then
+                if (j < m + 1) then
+                    nv = nv + 1
+                    v(nv) = VERB_LINE
+                    np = np + 1
+                    x(np) = sx(j)
+                    y(np) = sy(j)
+                end if
+                cx = sx(j)
+                cy = sy(j)
+                j = j + 1
+            else
+                if (son(j + 1)) then
+                    ex = sx(j + 1)
+                    ey = sy(j + 1)
+                    jn = j + 2
+                else
+                    ex = 0.5_dp*(sx(j) + sx(j + 1))
+                    ey = 0.5_dp*(sy(j) + sy(j + 1))
+                    jn = j + 1
+                end if
+                nv = nv + 1
+                v(nv) = VERB_CUBIC
+                x(np + 1) = cx + (2.0_dp/3.0_dp)*(sx(j) - cx)
+                y(np + 1) = cy + (2.0_dp/3.0_dp)*(sy(j) - cy)
+                x(np + 2) = ex + (2.0_dp/3.0_dp)*(sx(j) - ex)
+                y(np + 2) = ey + (2.0_dp/3.0_dp)*(sy(j) - ey)
+                x(np + 3) = ex
+                y(np + 3) = ey
+                np = np + 3
+                cx = ex
+                cy = ey
+                j = jn
+            end if
+        end do
+
+        nv = nv + 1
+        v(nv) = VERB_CLOSE
+    end subroutine add_ext_quad
 
     ! --- unpacking the blob ------------------------------------------
 

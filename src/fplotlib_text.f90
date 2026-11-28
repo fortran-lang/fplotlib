@@ -24,7 +24,7 @@ module fplotlib_text
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC, NGLYPH, NFACE, glyph_face
+                               FACE_ITALIC, glyph_count, NFACE, glyph_face
     implicit none
     private
 
@@ -191,7 +191,7 @@ contains
         gx = x
         gy = y
         gs = fs
-        if (g < 0 .or. g > NGLYPH) call contract_error("text: invalid glyph ID")
+        if (g < 0 .or. g > glyph_count()) call contract_error("text: invalid glyph ID")
         if (.not. ieee_is_finite(gx) .or. .not. ieee_is_finite(gy)) then
             call contract_error("text: nonfinite glyph position")
         end if

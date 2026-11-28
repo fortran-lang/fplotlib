@@ -28,3 +28,8 @@ main = "typeset.f90"
 name = "test_plots"
 source-dir = "tests"
 main = "test_plots.f90"
+
+[[test]]
+name = "test_external_font"
+source-dir = "tests"
+main = "test_external_font.f90"

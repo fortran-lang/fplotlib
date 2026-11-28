@@ -21,6 +21,8 @@ module fplotlib
     use fplotlib_state, axes_state_t => axes_t, fig_state_t => figure_t
     use fplotlib_artist, axes_state_t_a => axes_t, fig_state_t_a => figure_t
     use fplotlib_draw, axes_state_t_d => axes_t, fig_state_t_d => figure_t
+    use fplotlib_glyphs, only: glyphs_load_face, glyphs_reset_fonts, &
+                               FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH
     use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
     use fplotlib_io, only: file_ext, write_bytes, read_bytes, dir_name
     use, intrinsic :: iso_fortran_env, only: error_unit
@@ -86,6 +88,7 @@ module fplotlib
     public :: close, gcf
     public :: axes, axes_t, figure_t, subplots, sca
     public :: style_use, rc
+    public :: load_font, reset_fonts
     public :: typeset, typeset_file, frame_t, md_figure_t, capture_figure, named_figure
     public :: report_t, document_asset_t, new_report, markdown, include_figure, &
               include_table, save, render_report
@@ -598,6 +601,62 @@ contains
         end if
         if (present(color_cycle)) call set_cycle(color_cycle)
     end subroutine rc
+
+    ! Load an external TrueType (.ttf) or OpenType (.otf) font file at run time.
+    ! face defaults to "regular" and accepts "regular" ("normal"), "bold",
+    ! "italic", "math", "text" (regular+bold+italic), or "all" (all four faces).
+    subroutine load_font(path, face, status)
+        character(len=*), intent(in) :: path
+        character(len=*), intent(in), optional :: face
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: fkey
+        integer :: targets(4), nt
+        type(status_t) :: local
+
+        if (present(face)) then
+            fkey = lower(trim(face))
+        else
+            fkey = "regular"
+        end if
+
+        select case (fkey)
+        case ("regular", "normal")
+            nt = 1
+            targets(1) = FACE_REGULAR
+        case ("bold")
+            nt = 1
+            targets(1) = FACE_BOLD
+        case ("italic")
+            nt = 1
+            targets(1) = FACE_ITALIC
+        case ("math")
+            nt = 1
+            targets(1) = FACE_MATH
+        case ("text")
+            nt = 3
+            targets(1:3) = [FACE_REGULAR, FACE_BOLD, FACE_ITALIC]
+        case ("all")
+            nt = 4
+            targets(1:4) = [FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH]
+        case default
+            call contract_error("load_font: unknown face '"//trim(fkey)// &
+                                "' (expected regular, bold, italic, math, text, or all)")
+            return
+        end select
+
+        call glyphs_load_face(path, targets, nt, local)
+        if (.not. local%ok()) then
+            call fail_run("load_font", local%code, trim(local%message), status)
+            return
+        end if
+        if (present(status)) status = status_t()
+    end subroutine load_font
+
+    ! Restore the built-in embedded fonts (Lato + Lete Sans Math) and release
+    ! all externally loaded font data.
+    subroutine reset_fonts()
+        call glyphs_reset_fonts()
+    end subroutine reset_fonts
 
     ! A second axes over the current one, sharing its x axis and putting its
     ! own y axis on the right. It becomes the current axes.
