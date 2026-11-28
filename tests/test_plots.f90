@@ -153,6 +153,7 @@ program test_plots
     use test_hyph, only: hyph_check
     use test_typeset, only: para_ref_check
     use test_markdown, only: markdown_check
+    use test_cmap, only: cmap_check
     implicit none
     integer :: fig1, nmath, ndelim, nface, nedge, nmissing, ncontract, npara
     integer :: nglyph
@@ -160,6 +161,7 @@ program test_plots
     integer :: nframe
     integer :: nhyph
     integer :: nmd
+    integer :: ncmap
     character(len=16) :: carg
     type(axes), allocatable :: axs(:, :)
     type(axes) :: a1, a2, a3
@@ -1766,6 +1768,8 @@ program test_plots
     call hyph_check(nhyph)
     ! Markdown documents, read back from their pages; see test_markdown.f90.
     call markdown_check(nmd)
+    ! Fabio Crameri Scientific Colour Maps; see test_cmap.f90.
+    call cmap_check(ncmap)
 
     ! Every PNG and GIF frame against its stored fingerprint; see
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
@@ -1782,6 +1786,7 @@ program test_plots
     if (nframe > 0) error stop "owned frames failed"
     if (nhyph > 0) error stop "hyphenation failed"
     if (nmd > 0) error stop "markdown documents failed"
+    if (ncmap > 0) error stop "colormap checks failed"
 
 contains
 
