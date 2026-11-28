@@ -56,7 +56,7 @@ module fplotlib_raster
     public :: canvas_begin_frame, canvas_end_frame
     public :: pb_reset, pb_move, pb_line, pb_cubic, pb_close, pb_poly
     public :: pb_should_snap, pb_snap
-    public :: fill_path_buf, stroke_path_buf, blit_image
+    public :: fill_path_buf, fill_rect, stroke_path_buf, blit_image
     public :: clip_to_box, clip_segment
     public :: full_walk
 
@@ -94,6 +94,7 @@ module fplotlib_raster
         real(dp) :: scale = 1.0_dp      ! pixels per point
         real(dp), allocatable :: px(:, :, :)   ! (4, w, h), premultiplied
         real(dp), allocatable :: acc(:, :)     ! (0:w, h) area deltas
+        integer :: acc_x0 = 1, acc_x1 = 0      ! columns touched in acc
         ! Geometry and stroke outlines stay in local pixels until filling.
         ! Ancestor clips are frozen in device pixels when their frames open.
         real(dp) :: matrix(6) = IDENTITY
@@ -518,6 +519,7 @@ contains
             d = dy*dir
             xa = min(x, xn)
             xb = max(x, xn)
+            if (xb >= real(cv%w, dp)) cv%acc_x1 = cv%w
             if (xa >= 0.0_dp .and. xb <= real(cv%w, dp)) then
                 call deposit(cv, y, xa, xb, d)
             else
@@ -555,6 +557,8 @@ contains
         i1 = int(x1cl)
         if (i0 > cv%w) i0 = cv%w
         if (i1 > cv%w) i1 = cv%w
+        if (i0 < cv%acc_x0) cv%acc_x0 = i0
+        if (i1 > cv%acc_x1) cv%acc_x1 = i1
 
         if (i1 <= i0 + 1) then
             ! Narrower than a pixel: split the area between two columns.
@@ -600,6 +604,7 @@ contains
         type(clip_t), intent(in) :: clip
         logical, intent(in), optional :: evenodd
         integer :: s, i, b, n, y, x, cx0, cx1, cy0, cy1, y0b, y1b, m, j, ylo, yhi
+        integer :: x0b, x1b
         real(dp) :: run, cov, sa, sr, sg, sb_, ia
         real(dp), allocatable :: cx(:), cy(:), mask(:, :)
         logical :: scoped, odd, masked, empty
@@ -625,6 +630,8 @@ contains
         end if
         y0b = cv%h + 1
         y1b = 0
+        cv%acc_x0 = cv%w + 1
+        cv%acc_x1 = -1
         if (scoped) then
             ! In a transformed or clipped frame: mapped to the canvas, cut
             ! to the frames' clips, and only then accumulated; or, for an
@@ -652,7 +659,7 @@ contains
                 call acc_edge(cv, pb%x(b + n - 1), pb%y(b + n - 1), pb%x(b), pb%y(b), y0b, y1b)
             end do
         end if
-        if (y1b < y0b) return
+        if (y1b < y0b .or. cv%acc_x1 < cv%acc_x0) return
 
         if (scoped) then
             cx0 = 1; cx1 = cv%w
@@ -663,13 +670,19 @@ contains
         sr = real(rgb(1), dp)/255.0_dp
         sg = real(rgb(2), dp)/255.0_dp
         sb_ = real(rgb(3), dp)/255.0_dp
+        x0b = max(1, cv%acc_x0 + 1)
+        x1b = min(cv%w, cv%acc_x1 + 1)
 
         do y = y0b, y1b
+            if (y < cy0 .or. y > cy1) then
+                cv%acc(x0b - 1:min(cv%w, cv%acc_x1), y) = 0.0_dp
+                cycle
+            end if
             run = 0.0_dp
-            do x = 1, cv%w
+            do x = x0b, x1b
                 run = run + cv%acc(x - 1, y)
                 cv%acc(x - 1, y) = 0.0_dp
-                if (y < cy0 .or. y > cy1 .or. x < cx0 .or. x > cx1) cycle
+                if (x < cx0 .or. x > cx1) cycle
                 if (odd) then
                     ! |run| folded into [0, 1], worked out past 1 only:
                     ! a pixel at a winding of 0 or 1 is as nonzero has it.
@@ -696,9 +709,62 @@ contains
                 cv%px(3, x, y) = sb_*sa + cv%px(3, x, y)*ia
                 cv%px(4, x, y) = sa + cv%px(4, x, y)*ia
             end do
-            cv%acc(cv%w, y) = 0.0_dp
+            if (cv%acc_x1 >= cv%w) cv%acc(cv%w, y) = 0.0_dp
         end do
     end subroutine fill_path_buf
+
+    ! Direct fill for a snapped axis-aligned rectangle when there is no
+    ! frame transform or frame clip. Bit-identical to pb_snap + fill_path_buf
+    ! without building a path or touching cv%acc.
+    subroutine fill_rect(cv, x0, y0, x1, y1, rgb, alpha, clip)
+        type(canvas_t), intent(inout) :: cv
+        real(dp), intent(in) :: x0, y0, x1, y1, alpha
+        integer, intent(in) :: rgb(3)
+        type(clip_t), intent(in) :: clip
+        real(dp) :: sx0, sy0, sx1, sy1, sr, sg, sb_, ia
+        integer :: cx0, cx1, cy0, cy1, ix0, ix1, iy0, iy1, x, y
+
+        if (alpha <= 0.0_dp) return
+        sx0 = floor(anint(x0*65536.0_dp)/65536.0_dp + 0.5_dp)
+        sx1 = floor(anint(x1*65536.0_dp)/65536.0_dp + 0.5_dp)
+        sy0 = floor(anint(y0*65536.0_dp)/65536.0_dp + 0.5_dp)
+        sy1 = floor(anint(y1*65536.0_dp)/65536.0_dp + 0.5_dp)
+        if (sx0 == sx1 .or. sy0 == sy1) return
+
+        call clip_box(cv, clip, cx0, cx1, cy0, cy1)
+        ix0 = max(cx0, int(max(0.0_dp, min(real(cv%w, dp), min(sx0, sx1)))) + 1)
+        ix1 = min(cx1, int(max(0.0_dp, min(real(cv%w, dp), max(sx0, sx1)))))
+        iy0 = max(cy0, int(max(0.0_dp, min(real(cv%h, dp), min(sy0, sy1)))) + 1)
+        iy1 = min(cy1, int(max(0.0_dp, min(real(cv%h, dp), max(sy0, sy1)))))
+        if (ix0 > ix1 .or. iy0 > iy1) return
+
+        sr = real(rgb(1), dp)/255.0_dp
+        sg = real(rgb(2), dp)/255.0_dp
+        sb_ = real(rgb(3), dp)/255.0_dp
+        if (alpha >= 1.0_dp) then
+            do y = iy0, iy1
+                do x = ix0, ix1
+                    cv%px(1, x, y) = sr
+                    cv%px(2, x, y) = sg
+                    cv%px(3, x, y) = sb_
+                    cv%px(4, x, y) = 1.0_dp
+                end do
+            end do
+        else
+            ia = 1.0_dp - alpha
+            sr = sr*alpha
+            sg = sg*alpha
+            sb_ = sb_*alpha
+            do y = iy0, iy1
+                do x = ix0, ix1
+                    cv%px(1, x, y) = sr + cv%px(1, x, y)*ia
+                    cv%px(2, x, y) = sg + cv%px(2, x, y)*ia
+                    cv%px(3, x, y) = sb_ + cv%px(3, x, y)*ia
+                    cv%px(4, x, y) = alpha + cv%px(4, x, y)*ia
+                end do
+            end do
+        end if
+    end subroutine fill_rect
 
     ! The polygon x, y (closed implicitly) cut to the box [x0, x1] by
     ! [y0, y1], one side at a time (Sutherland and Hodgman). Inside the
@@ -1998,8 +2064,9 @@ contains
         integer, intent(in) :: nx, ny
         integer, intent(in) :: rgba(4, nx, ny)
         type(clip_t), intent(in) :: clip
-        integer :: px0, px1, py0, py1, ix, iy, sx, sy, cx0, cx1, cy0, cy1
-        real(dp) :: sa, ia, u, v
+        integer :: px0, px1, py0, py1, ix, iy, sx, sy, cx0, cx1, cy0, cy1, a
+        integer, allocatable :: sx_lut(:)
+        real(dp) :: sa, ia, u, v, inv255, inv_scale
 
         if (nx < 1 .or. ny < 1 .or. w <= 0.0_dp .or. h <= 0.0_dp .or. alpha <= 0.0_dp) return
         if (.not. cv%identity_transform .or. cv%n_clip > 0) then
@@ -2011,21 +2078,49 @@ contains
         py0 = max(cy0, ipix(y*cv%scale, cv%h) + 1)
         px1 = min(cx1, ipix((x + w)*cv%scale, cv%w))
         py1 = min(cy1, ipix((y + h)*cv%scale, cv%h))
+        if (px0 > px1 .or. py0 > py1) return
+
+        inv255 = 1.0_dp/255.0_dp
+        inv_scale = 1.0_dp/cv%scale
+        allocate (sx_lut(px0:px1))
+        do ix = px0, px1
+            u = (real(ix, dp) - 0.5_dp)*inv_scale - x
+            sx_lut(ix) = min(nx, max(1, int(max(-1.0_dp, min(1.0_dp, u/w))*real(nx, dp)) + 1))
+        end do
 
         do iy = py0, py1
-            v = (real(iy, dp) - 0.5_dp)/cv%scale - y
+            v = (real(iy, dp) - 0.5_dp)*inv_scale - y
             sy = min(ny, max(1, int(max(-1.0_dp, min(1.0_dp, v/h))*real(ny, dp)) + 1))
-            do ix = px0, px1
-                u = (real(ix, dp) - 0.5_dp)/cv%scale - x
-                sx = min(nx, max(1, int(max(-1.0_dp, min(1.0_dp, u/w))*real(nx, dp)) + 1))
-                sa = alpha*real(rgba(4, sx, sy), dp)/255.0_dp
-                if (sa <= 0.0_dp) cycle
-                ia = 1.0_dp - sa
-                cv%px(1, ix, iy) = real(rgba(1, sx, sy), dp)/255.0_dp*sa + cv%px(1, ix, iy)*ia
-                cv%px(2, ix, iy) = real(rgba(2, sx, sy), dp)/255.0_dp*sa + cv%px(2, ix, iy)*ia
-                cv%px(3, ix, iy) = real(rgba(3, sx, sy), dp)/255.0_dp*sa + cv%px(3, ix, iy)*ia
-                cv%px(4, ix, iy) = sa + cv%px(4, ix, iy)*ia
-            end do
+            if (alpha >= 1.0_dp) then
+                do ix = px0, px1
+                    sx = sx_lut(ix)
+                    a = rgba(4, sx, sy)
+                    if (a == 255) then
+                        cv%px(1, ix, iy) = real(rgba(1, sx, sy), dp)*inv255
+                        cv%px(2, ix, iy) = real(rgba(2, sx, sy), dp)*inv255
+                        cv%px(3, ix, iy) = real(rgba(3, sx, sy), dp)*inv255
+                        cv%px(4, ix, iy) = 1.0_dp
+                    else if (a > 0) then
+                        sa = real(a, dp)*inv255
+                        ia = 1.0_dp - sa
+                        cv%px(1, ix, iy) = real(rgba(1, sx, sy), dp)*inv255*sa + cv%px(1, ix, iy)*ia
+                        cv%px(2, ix, iy) = real(rgba(2, sx, sy), dp)*inv255*sa + cv%px(2, ix, iy)*ia
+                        cv%px(3, ix, iy) = real(rgba(3, sx, sy), dp)*inv255*sa + cv%px(3, ix, iy)*ia
+                        cv%px(4, ix, iy) = sa + cv%px(4, ix, iy)*ia
+                    end if
+                end do
+            else
+                do ix = px0, px1
+                    sx = sx_lut(ix)
+                    sa = alpha*real(rgba(4, sx, sy), dp)*inv255
+                    if (sa <= 0.0_dp) cycle
+                    ia = 1.0_dp - sa
+                    cv%px(1, ix, iy) = real(rgba(1, sx, sy), dp)*inv255*sa + cv%px(1, ix, iy)*ia
+                    cv%px(2, ix, iy) = real(rgba(2, sx, sy), dp)*inv255*sa + cv%px(2, ix, iy)*ia
+                    cv%px(3, ix, iy) = real(rgba(3, sx, sy), dp)*inv255*sa + cv%px(3, ix, iy)*ia
+                    cv%px(4, ix, iy) = sa + cv%px(4, ix, iy)*ia
+                end do
+            end if
         end do
     end subroutine blit_image
 

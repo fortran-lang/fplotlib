@@ -21,9 +21,9 @@ def timed(cmd, cwd=None):
     return time.perf_counter() - t
 
 
-def py_run(script, ext, cwd):
+def py_run(script, args, cwd):
     """Run time of main() alone, as reported by the script after its imports."""
-    r = subprocess.run([sys.executable, str(script), ext], cwd=cwd, check=True,
+    r = subprocess.run([sys.executable, str(script), *args], cwd=cwd, check=True,
                        capture_output=True, text=True)
     for line in r.stdout.splitlines():
         if line.startswith("RUN_SECONDS"):
@@ -145,11 +145,25 @@ def main():
         rows.append((f"Import {name} script", "Python imports (matplotlib, numpy)", t))
         for ext in exts:
             tf = median(lambda: timed([str(exe), ext], cwd=work), a.repeats)
-            tp = median(lambda: py_run(HERE / f"{name}.py", ext, work), a.repeats)
+            tp = median(lambda: py_run(HERE / f"{name}.py", [ext], work), a.repeats)
             check(work / f"{name}_f.{ext}")
             check(work / f"{name}_py.{ext}")
             rows.append((f"Run {name} -> {ext}", "fplotlib", tf))
             rows.append((f"Run {name} -> {ext}", "matplotlib (excl. imports)", tp))
+
+    for name in ("imshow", "pcolormesh", "contourf"):
+        exe = work / f"{name}_f"
+        cmd = ["gfortran", *FFLAGS, "-I", str(mod), str(HERE / f"{name}.f90"),
+               str(lib), "-o", str(exe)]
+        timed(cmd)
+        for n in (64, 256, 512):
+            ext = "png"
+            tf = median(lambda: timed([str(exe), ext, str(n)], cwd=work), a.repeats)
+            tp = median(lambda: py_run(HERE / f"{name}.py", [ext, str(n)], work), a.repeats)
+            check(work / f"{name}_f.{ext}")
+            check(work / f"{name}_py.{ext}")
+            rows.append((f"Run {name} {n}x{n} -> {ext}", "fplotlib", tf))
+            rows.append((f"Run {name} {n}x{n} -> {ext}", "matplotlib (excl. imports)", tp))
 
     print(f"{'Benchmark':32} {'Variant':36} Time (s)")
     for b, v, t in rows:
