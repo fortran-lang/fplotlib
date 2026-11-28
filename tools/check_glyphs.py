@@ -55,7 +55,7 @@ def main():
             assert close(float(p[2]), d["italic"]), (g, "italic")
             assert close(float(p[3]), d["accent"]), (g, "accent")
             assert (p[4] == "T") == d["ext"], (g, "extended")
-            assert int(p[5]) == d["ssty"] and int(p[6]) == d["ssty"], (g, "ssty")
+            assert [int(p[5]), int(p[6])] == d["ssty"], (g, "ssty")
             assert int(p[7]) == d["dtls"], (g, "dtls")
         elif tag == "K":
             g = int(p[1])

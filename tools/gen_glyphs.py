@@ -259,8 +259,10 @@ def ssty_kept(cp):
 
     Only letters, digits and primes do, in the alphabets that are written
     in scripts: math italic Latin and Greek, upright Latin and Greek, and
-    the digits. Each keeps its first (script) alternate only; scriptscript
-    uses it too. Symbols, and \mathbf, \mathsf, \mathbb and \mathcal
+    the digits. Each keeps its script and its scriptscript alternate: the
+    second is drawn for the smaller size (wider, with more room), and
+    stored as the difference from the first. Symbols, and \mathbf,
+    \mathsf, \mathbb and \mathcal
     letters, are scaled down from their full-size glyphs instead.
     """
     return (0x30 <= cp <= 0x39 or 0x41 <= cp <= 0x5A or 0x61 <= cp <= 0x7A
@@ -677,15 +679,18 @@ def load_math_face(path, cv=None):
                 if asm:
                     extra.update(p[0] for p in asm[1])
     # The letters, digits and primes ssty_kept names bring their script
-    # alternate along, and so do their dotless forms.
+    # and scriptscript alternates along, and so do their dotless forms.
     scripted = {face.cmap[cp] for cp in face.cmap if ssty_kept(cp)}
     scripted |= {dtls[g] for g in scripted if g in dtls}
     face_ssty = {}
     for g in sorted(scripted):
         alts = ssty.get(g)
         if alts:
-            face_ssty[g] = alts[0]
-            extra.add(alts[0])
+            if not isinstance(alts, list):
+                alts = [alts]
+            pair = (alts[0], alts[1] if len(alts) > 1 else alts[0])
+            face_ssty[g] = pair
+            extra.update(pair)
     extra -= set(order)
     names = order + sorted(extra, key=gid_of)
 
@@ -774,10 +779,10 @@ def reduced_math_font(path):
             lookup = gsub.LookupList.Lookup[li]
             for st in lookup.SubTable:
                 if lookup.LookupType == 3:
-                    st.alternates = {a: [keep[a], keep[a]]
+                    st.alternates = {a: list(keep[a])
                                      for a in st.alternates if a in keep}
                 elif lookup.LookupType == 1:
-                    st.mapping = {a: keep[a] for a in st.mapping if a in keep}
+                    st.mapping = {a: keep[a][0] for a in st.mapping if a in keep}
     mv = font["MATH"].table.MathVariants
     vert = face.math["vert"]
     for g, c in zip(mv.VertGlyphCoverage.glyphs, mv.VertGlyphConstruction):
@@ -1471,7 +1476,8 @@ def plan_residuals(face):
     point, as the glyph it is stored from, which must come before it, and
     the difference must be the cheaper to store (by a rough count)."""
     m = face.math
-    pairs = [(alt, base) for base, alt in m["ssty"].items()]
+    pairs = [(a1, base) for base, (a1, _) in m["ssty"].items()]
+    pairs += [(a2, a1) for a1, a2 in m["ssty"].values() if a2 != a1]
     for key in ("vert", "horiz"):
         for gname, (var, _) in m[key].items():
             names = [gname] + [v for v, _ in var if v != gname]
@@ -1694,7 +1700,7 @@ def math_tables(face):
                           None if asm is None else
                           (asm[0], [(ix[p[0]],) + tuple(p[1:]) for p in asm[1]])))
         cons.append(table)
-    ssty = sorted((ix[a], ix[b]) for a, b in m["ssty"].items())
+    ssty = sorted((ix[a], ix[b1], ix[b2]) for a, (b1, b2) in m["ssty"].items())
     dtls = sorted((ix[a], ix[b]) for a, b in m["dtls"].items())
     return per, cons, ssty, dtls
 
@@ -1743,9 +1749,10 @@ def encode_math(w, face, lbits):
                     w.delta(D_ASM, full)
                     w.flag(B_PARTX, ext)
     w.gamma(G_PAIRS, len(ssty) + 1)
-    for a, b in ssty:
+    for a, b1, b2 in ssty:
         w.raw(a, lbits)
-        w.raw(b, lbits)
+        w.raw(b1, lbits)
+        w.raw(b2, lbits)
     w.gamma(G_PAIRS, len(dtls) + 1)
     for a, b in dtls:
         w.raw(a, lbits)
@@ -1795,7 +1802,7 @@ def decode_math(r, glyphs, lbits):
                 asm = (ital, parts)
             table.append((g, var, asm))
         cons.append(table)
-    ssty = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma(G_PAIRS) - 1)]
+    ssty = [(r.raw(lbits), r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma(G_PAIRS) - 1)]
     dtls = [(r.raw(lbits), r.raw(lbits)) for _ in range(r.gamma(G_PAIRS) - 1)]
     return per, cons, ssty, dtls
 
@@ -2081,7 +2088,7 @@ def expectation(faces):
             d = {"italic": m["italic"].get(n, 0) / mf.em,
                  "accent": m["accent"].get(n, g.adv // 2) / mf.em,
                  "ext": n in m["extended"],
-                 "ssty": gid(m["ssty"][n]) if n in m["ssty"] else gid(n),
+                 "ssty": [gid(a) for a in m["ssty"][n]] if n in m["ssty"] else [gid(n)] * 2,
                  "dtls": gid(m["dtls"][n]) if n in m["dtls"] else gid(n),
                  "kern": m["kern"].get(n), "em": mf.em, "cons": []}
             for key in ("vert", "horiz"):

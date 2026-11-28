@@ -79,8 +79,9 @@
 !     advance as a running delta) and a bit for an assembly, followed by
 !     its italic correction and parts (count, then glyph, start and end
 !     connector lengths, full advance and an extender bit); then the
-!     script-size alternates as pairs of indices (the glyph and the one
-!     both script styles use), and the dotless forms as pairs.
+!     script-size alternates as triples of indices (the glyph, its script
+!     alternate and its scriptscript alternate), and the dotless forms as
+!     pairs.
 !
 ! A face is TrueType (quadratic) or CFF (cubic), FACE_CUBIC says which.
 ! A quadratic contour may start anywhere and may leave an on-curve point
@@ -1138,7 +1139,7 @@ contains
         do k = 1, n
             a = base + get_raw(lbits) + 1
             SSTY(1, a) = base + get_raw(lbits) + 1
-            SSTY(2, a) = SSTY(1, a)
+            SSTY(2, a) = base + get_raw(lbits) + 1
         end do
         n = get_gamma(G_PAIRS) - 1
         do k = 1, n
