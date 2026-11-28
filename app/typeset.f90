@@ -9,10 +9,9 @@ program typeset_cli
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     implicit none
 
-    integer :: nargs, i, nin, arglen, ios
-    character(len=1024) :: arg
-    character(len=1024), allocatable :: inputs(:)
-    character(len=:), allocatable :: out_file, first_in
+    integer :: nargs, i, nin, arglen, max_len, ios
+    character(len=:), allocatable :: arg, out_file, first_in
+    character(len=:), allocatable :: inputs(:)
     real(dp) :: dpi_val
     logical :: has_dpi, end_opts
     type(status_t) :: st
@@ -23,7 +22,13 @@ program typeset_cli
         stop 1
     end if
 
-    allocate (inputs(nargs))
+    max_len = 1
+    do i = 1, nargs
+        call get_command_argument(i, length=arglen)
+        if (arglen > max_len) max_len = arglen
+    end do
+
+    allocate (character(len=max_len) :: inputs(nargs))
     nin = 0
     out_file = ""
     dpi_val = 150.0_dp
@@ -32,59 +37,46 @@ program typeset_cli
 
     i = 1
     do while (i <= nargs)
-        call get_command_argument(i, arg, length=arglen)
-        if (arglen > len(arg)) then
-            write (error_unit, "(a)") "typeset: argument is too long"
-            stop 1
-        end if
-        if (.not. end_opts .and. (trim(arg) == "-h" .or. trim(arg) == "--help")) then
+        call get_arg(i, arg)
+        if (.not. end_opts .and. (arg == "-h" .or. arg == "--help")) then
             call print_usage(output_unit)
             stop 0
-        else if (.not. end_opts .and. trim(arg) == "--") then
+        else if (.not. end_opts .and. arg == "--") then
             end_opts = .true.
-        else if (.not. end_opts .and. (trim(arg) == "-o" .or. trim(arg) == "--output")) then
+        else if (.not. end_opts .and. (arg == "-o" .or. arg == "--output")) then
             if (i + 1 > nargs) then
-                write (error_unit, "(a)") "typeset: "//trim(arg)//" requires an output file"
+                write (error_unit, "(a)") "typeset: "//arg//" requires an output file"
                 stop 1
             end if
             i = i + 1
-            call get_command_argument(i, arg, length=arglen)
-            if (arglen > len(arg)) then
-                write (error_unit, "(a)") "typeset: output filename is too long"
-                stop 1
-            end if
-            out_file = trim(arg)
-        else if (.not. end_opts .and. trim(arg) == "--dpi") then
+            call get_arg(i, out_file)
+        else if (.not. end_opts .and. arg == "--dpi") then
             if (i + 1 > nargs) then
                 write (error_unit, "(a)") "typeset: --dpi requires a number"
                 stop 1
             end if
             i = i + 1
-            call get_command_argument(i, arg, length=arglen)
-            if (arglen > len(arg)) then
-                write (error_unit, "(a)") "typeset: --dpi value is too long"
-                stop 1
-            end if
-            read (arg(1:arglen), *, iostat=ios) dpi_val
+            call get_arg(i, arg)
+            read (arg, *, iostat=ios) dpi_val
             if (ios /= 0) then
-                write (error_unit, "(a)") "typeset: invalid --dpi value: "//trim(arg)
+                write (error_unit, "(a)") "typeset: invalid --dpi value: "//arg
                 stop 1
             else if (.not. ieee_is_finite(dpi_val) .or. dpi_val <= 0.0_dp) then
-                write (error_unit, "(a)") "typeset: invalid --dpi value: "//trim(arg)
+                write (error_unit, "(a)") "typeset: invalid --dpi value: "//arg
                 stop 1
             end if
             has_dpi = .true.
-        else if (.not. end_opts .and. arglen > 0) then
+        else if (.not. end_opts .and. len(arg) > 0) then
             if (arg(1:1) == "-") then
-                write (error_unit, "(a)") "typeset: unknown option: "//trim(arg)
+                write (error_unit, "(a)") "typeset: unknown option: "//arg
                 call print_usage(error_unit)
                 stop 1
             end if
             nin = nin + 1
-            inputs(nin) = trim(arg)
+            inputs(nin) = arg
         else
             nin = nin + 1
-            inputs(nin) = trim(arg)
+            inputs(nin) = arg
         end if
         i = i + 1
     end do
@@ -119,6 +111,20 @@ program typeset_cli
     end if
 
 contains
+
+    subroutine get_arg(idx, arg)
+        integer, intent(in) :: idx
+        character(len=:), allocatable, intent(out) :: arg
+        integer :: arglen
+
+        call get_command_argument(idx, length=arglen)
+        if (arglen > 0) then
+            allocate (character(len=arglen) :: arg)
+            call get_command_argument(idx, arg)
+        else
+            arg = ""
+        end if
+    end subroutine get_arg
 
     subroutine print_usage(u)
         integer, intent(in) :: u
