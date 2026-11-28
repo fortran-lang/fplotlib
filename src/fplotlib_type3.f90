@@ -22,7 +22,7 @@ module fplotlib_type3
     use fplotlib_render, only: VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                             builder_get, fmt_num
-    use fplotlib_glyphs, only: NGLYPH, NFACE, glyph_face, glyph_adv, glyph_bbox, &
+    use fplotlib_glyphs, only: glyph_count, NFACE, glyph_face, glyph_adv, glyph_bbox, &
                                glyph_outline, glyph_char, FACE_MATH
     implicit none
     private
@@ -48,7 +48,7 @@ contains
         type(t3set_t), intent(inout) :: t
         if (allocated(t%font_of)) deallocate (t%font_of, t%code_of)
         if (allocated(t%face)) deallocate (t%face, t%n, t%gids)
-        allocate (t%font_of(NGLYPH), t%code_of(NGLYPH))
+        allocate (t%font_of(glyph_count()), t%code_of(glyph_count()))
         allocate (t%face(4), t%n(4), t%gids(0:255, 4))
         t%font_of = 0
         t%code_of = 0

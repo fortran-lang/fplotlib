@@ -17,7 +17,7 @@ module fplotlib_backend_svg
     use fplotlib_svg, only: svg_builder, builder_init, builder_append, &
                          builder_get, fmt_num, matrix_decimals, xml_escape_to
     use fplotlib_png, only: png_encode
-    use fplotlib_glyphs, only: NGLYPH, glyph_outline, glyph_inked
+    use fplotlib_glyphs, only: glyph_count, glyph_outline, glyph_inked
     implicit none
     private
 
@@ -262,7 +262,7 @@ contains
 
         call builder_init(self%b)
         if (allocated(self%glyph_defined)) deallocate (self%glyph_defined)
-        allocate (self%glyph_defined(NGLYPH))
+        allocate (self%glyph_defined(glyph_count()))
         self%glyph_defined = .false.
         call put(self, '<?xml version="1.0" encoding="utf-8" standalone="no"?>')
         call put_eol(self)
@@ -484,7 +484,7 @@ contains
         opened = .false.
         do i = 1, run%n
             g = run%gid(i)
-            if (g < 1 .or. g > NGLYPH) cycle
+            if (g < 1 .or. g > size(self%glyph_defined)) cycle
             if (self%glyph_defined(g)) cycle
             self%glyph_defined(g) = .true.
             call glyph_outline(g, gv, nv, gx, gy, np)
