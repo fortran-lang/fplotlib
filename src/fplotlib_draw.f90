@@ -33,6 +33,13 @@ module fplotlib_draw
     implicit none
     public
 
+    ! Growable path buffer for batching filled contour polygons per level.
+    type, private :: contour_buf_t
+        real(dp), allocatable :: x(:), y(:)
+        integer, allocatable :: v(:)
+        integer :: np = 0, nv = 0
+    end type contour_buf_t
+
 contains
 
     subroutine ensure_fig()
@@ -617,9 +624,66 @@ contains
             c(1:3) = nint(255.0_dp*a%img_rgb(i, j, 1:3))
             if (size(a%img_rgb, 3) >= 4) c(4) = nint(255.0_dp*a%img_rgb(i, j, 4))
         else
-            c(1:3) = hex_rgb(img_color(a, a%img(i, j)))
+            call img_val_rgb(a, a%img(i, j), c(1:3))
         end if
     end subroutine img_rgba
+
+    ! Direct RGB colour of one scalar value, avoiding hex format/parse.
+    pure subroutine img_val_rgb(a, v, rgb)
+        type(axes_t), intent(in) :: a
+        real(dp), intent(in) :: v
+        integer, intent(out) :: rgb(3)
+        real(dp) :: t
+
+        if (.not. finite(v)) then
+            if (len_trim(a%cmap_bad) > 0) then
+                rgb = hex_rgb(a%cmap_bad)
+            else
+                call map_rgb(a, 0.0_dp, rgb)
+            end if
+            return
+        end if
+        if (v < a%img_vmin .and. len_trim(a%cmap_under) > 0) then
+            rgb = hex_rgb(a%cmap_under)
+            return
+        end if
+        if (v > a%img_vmax .and. len_trim(a%cmap_over) > 0) then
+            rgb = hex_rgb(a%cmap_over)
+            return
+        end if
+        t = cmap_t(a, v)
+        if (.not. allocated(a%cmap_list)) then
+            call cmap_rgb(a%img_cmap, t, rgb(1), rgb(2), rgb(3))
+            return
+        end if
+        call map_rgb(a, t, rgb)
+    end subroutine img_val_rgb
+
+    pure subroutine map_rgb(a, t, rgb)
+        type(axes_t), intent(in) :: a
+        real(dp), intent(in) :: t
+        integer, intent(out) :: rgb(3)
+        real(dp) :: u, f
+        integer :: n, i0, a3(3), b3(3), k
+
+        if (.not. allocated(a%cmap_list)) then
+            call cmap_rgb(a%img_cmap, t, rgb(1), rgb(2), rgb(3))
+            return
+        end if
+        n = size(a%cmap_list)
+        if (n == 1) then
+            rgb = hex_rgb(a%cmap_list(1))
+            return
+        end if
+        u = max(0.0_dp, min(1.0_dp, t))*real(n - 1, dp)
+        i0 = min(n - 2, int(u))
+        f = u - real(i0, dp)
+        a3 = hex_rgb(a%cmap_list(i0 + 1))
+        b3 = hex_rgb(a%cmap_list(i0 + 2))
+        do k = 1, 3
+            rgb(k) = max(0, min(255, nint(real(a3(k), dp) + f*real(b3(k) - a3(k), dp))))
+        end do
+    end subroutine map_rgb
 
     ! Linear-interpolated quantile of an already sorted sample, matching the
     ! default of numpy.percentile.
@@ -2555,55 +2619,168 @@ contains
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
         type(scale_t), intent(in) :: xsc, ysc
-        integer :: nr, nc, i, j, k, tri, nq, ns, nlev, v
-        real(dp) :: dx, dy, gx(2), gy(2)
-        real(dp) :: tx(3), ty(3), tv(3)
-        real(dp) :: qx(MAX_POLY), qy(MAX_POLY)
-        real(dp) :: sx(2), sy(2)
-        real(dp) :: px(MAX_POLY), py(MAX_POLY)
-        real(dp) :: lo, hi, t
+        integer :: nr, nc, i, j, k, tri, nq, nlev, v, run_j0
+        real(dp) :: dx, dy, gx(2), gy(2), tx(3), ty(3), tv(3)
+        real(dp) :: qx(MAX_POLY), qy(MAX_POLY), px(MAX_POLY), py(MAX_POLY)
+        real(dp) :: lo, hi, t, z00, z01, z10, z11, cmin, cmax, tmin, tmax
+        real(dp), allocatable :: px_grid(:), py_grid(:)
+        type(contour_buf_t) :: cb
+        type(paint_t) :: p
+        logical :: lin, in_run
 
         nr = size(a%cz, 1)
         nc = size(a%cz, 2)
         nlev = size(a%clev)
-        dx = (a%cont_ext(2) - a%cont_ext(1)) / real(nc - 1, dp)
-        dy = (a%cont_ext(4) - a%cont_ext(3)) / real(nr - 1, dp)
+        dx = (a%cont_ext(2) - a%cont_ext(1))/real(nc - 1, dp)
+        dy = (a%cont_ext(4) - a%cont_ext(3))/real(nr - 1, dp)
 
         if (.not. a%cont_filled) then
             call append_contour_lines(b, a, xmin, xmax, ymin, ymax, &
                                       ax_l, ax_w, ax_b, ax_h, xsc, ysc)
             return
         end if
+        if (nlev < 2) return
 
-        do i = 1, nr - 1
-            gy(1) = a%cont_ext(3) + real(i - 1, dp) * dy
-            gy(2) = gy(1) + dy
-            do j = 1, nc - 1
-                gx(1) = a%cont_ext(1) + real(j - 1, dp) * dx
-                gx(2) = gx(1) + dx
+        lin = (xsc%kind == SCALE_LINEAR .and. ysc%kind == SCALE_LINEAR)
+        allocate (px_grid(nc), py_grid(nr))
+        do j = 1, nc
+            px_grid(j) = map_x(a%cont_ext(1) + real(j - 1, dp)*dx, &
+                               xmin, xmax, ax_l, ax_w, xsc)
+        end do
+        do i = 1, nr
+            py_grid(i) = map_y(a%cont_ext(3) + real(i - 1, dp)*dy, &
+                               ymin, ymax, ax_b, ax_h, ysc)
+        end do
 
-                do tri = 1, 2
-                    call cell_triangle(a%cz, i, j, gx, gy, tri, tx, ty, tv)
+        ! Paint bands in ascending painter's order: band k covers
+        ! [lev(k), lev(nlev)], so band k+1 composites directly onto band k
+        ! with zero background bleed along level boundaries and no per-cell
+        ! stroking. Contiguous interior cells merge into horizontal runs.
+        hi = a%clev(nlev)
+        p%filled = .true.
+        p%stroked = .false.
+        p%fill_alpha = 1.0_dp
+        p%clip = g_clip
 
-                    if (a%cont_filled) then
-                        do k = 1, nlev - 1
-                            lo = a%clev(k)
-                            hi = a%clev(k + 1)
+        do k = 1, nlev - 1
+            lo = a%clev(k)
+            cb%np = 0
+            cb%nv = 0
+            do i = 1, nr - 1
+                in_run = .false.
+                run_j0 = 0
+                do j = 1, nc - 1
+                    z00 = a%cz(i, j)
+                    z01 = a%cz(i, j + 1)
+                    z10 = a%cz(i + 1, j)
+                    z11 = a%cz(i + 1, j + 1)
+                    cmin = min(z00, z01, z10, z11)
+                    cmax = max(z00, z01, z10, z11)
+
+                    if (cmin >= lo .and. cmax <= hi) then
+                        if (.not. in_run) then
+                            in_run = .true.
+                            run_j0 = j
+                        end if
+                        cycle
+                    end if
+
+                    if (in_run) then
+                        px(1:4) = [px_grid(run_j0), px_grid(j), px_grid(j), px_grid(run_j0)]
+                        py(1:4) = [py_grid(i), py_grid(i), py_grid(i + 1), py_grid(i + 1)]
+                        call cbuf_poly(cb, px, py, 4)
+                        in_run = .false.
+                    end if
+                    if (cmax < lo .or. cmin > hi) cycle
+
+                    if (lin) then
+                        gx(1) = px_grid(j); gx(2) = px_grid(j + 1)
+                        gy(1) = py_grid(i); gy(2) = py_grid(i + 1)
+                    else
+                        gx(1) = a%cont_ext(1) + real(j - 1, dp)*dx
+                        gx(2) = gx(1) + dx
+                        gy(1) = a%cont_ext(3) + real(i - 1, dp)*dy
+                        gy(2) = gy(1) + dy
+                    end if
+
+                    do tri = 1, 2
+                        call cell_triangle(a%cz, i, j, gx, gy, tri, tx, ty, tv)
+                        tmin = min(tv(1), tv(2), tv(3))
+                        tmax = max(tv(1), tv(2), tv(3))
+                        if (tmax < lo .or. tmin > hi) cycle
+                        if (tmin >= lo .and. tmax <= hi) then
+                            if (lin) then
+                                call cbuf_poly(cb, tx, ty, 3)
+                            else
+                                do v = 1, 3
+                                    px(v) = map_x(tx(v), xmin, xmax, ax_l, ax_w, xsc)
+                                    py(v) = map_y(ty(v), ymin, ymax, ax_b, ax_h, ysc)
+                                end do
+                                call cbuf_poly(cb, px, py, 3)
+                            end if
+                        else
                             call tri_band(tx, ty, tv, lo, hi, qx, qy, nq)
                             if (nq < 3) cycle
-                            do v = 1, nq
-                                px(v) = map_x(qx(v), xmin, xmax, ax_l, ax_w, xsc)
-                                py(v) = map_y(qy(v), ymin, ymax, ax_b, ax_h, ysc)
-                            end do
-                            t = (real(k, dp) - 0.5_dp) / real(nlev - 1, dp)
-                            call append_polygon(b, px, py, nq, &
-                                                cmap_color(a%cont_cmap, t), 1.0_dp, seal=.true.)
-                        end do
-                    end if
+                            if (lin) then
+                                call cbuf_poly(cb, qx, qy, nq)
+                            else
+                                do v = 1, nq
+                                    px(v) = map_x(qx(v), xmin, xmax, ax_l, ax_w, xsc)
+                                    py(v) = map_y(qy(v), ymin, ymax, ax_b, ax_h, ysc)
+                                end do
+                                call cbuf_poly(cb, px, py, nq)
+                            end if
+                        end if
+                    end do
                 end do
+                if (in_run) then
+                    px(1:4) = [px_grid(run_j0), px_grid(nc), px_grid(nc), px_grid(run_j0)]
+                    py(1:4) = [py_grid(i), py_grid(i), py_grid(i + 1), py_grid(i + 1)]
+                    call cbuf_poly(cb, px, py, 4)
+                end if
             end do
+            if (cb%nv == 0) cycle
+            t = (real(k, dp) - 0.5_dp)/real(nlev - 1, dp)
+            call cmap_rgb(a%cont_cmap, t, p%fill_rgb(1), p%fill_rgb(2), p%fill_rgb(3))
+            call put_path(b, cb%x(1:cb%np), cb%y(1:cb%np), cb%v(1:cb%nv), cb%nv, p)
         end do
     end subroutine append_contour
+
+    subroutine cbuf_poly(cb, px, py, n)
+        type(contour_buf_t), intent(inout) :: cb
+        real(dp), intent(in) :: px(:), py(:)
+        integer, intent(in) :: n
+        real(dp), allocatable :: tx(:), ty(:)
+        integer, allocatable :: tv(:)
+        integer :: cap, i
+
+        if (.not. allocated(cb%x)) then
+            allocate (cb%x(256), cb%y(256), cb%v(320))
+        end if
+        if (cb%np + n > size(cb%x)) then
+            cap = max(2*size(cb%x), cb%np + n)
+            allocate (tx(cap), ty(cap))
+            tx(1:cb%np) = cb%x(1:cb%np); ty(1:cb%np) = cb%y(1:cb%np)
+            call move_alloc(tx, cb%x); call move_alloc(ty, cb%y)
+        end if
+        if (cb%nv + n + 1 > size(cb%v)) then
+            cap = max(2*size(cb%v), cb%nv + n + 1)
+            allocate (tv(cap))
+            tv(1:cb%nv) = cb%v(1:cb%nv)
+            call move_alloc(tv, cb%v)
+        end if
+        do i = 1, n
+            cb%x(cb%np + i) = px(i)
+            cb%y(cb%np + i) = py(i)
+        end do
+        cb%v(cb%nv + 1) = VERB_MOVE
+        do i = 2, n
+            cb%v(cb%nv + i) = VERB_LINE
+        end do
+        cb%v(cb%nv + n + 1) = VERB_CLOSE
+        cb%np = cb%np + n
+        cb%nv = cb%nv + n + 1
+    end subroutine cbuf_poly
 
     ! The two triangles of cell (i, j), sharing the diagonal.
     pure subroutine cell_triangle(z, i, j, gx, gy, tri, tx, ty, tv)
@@ -2675,16 +2852,28 @@ contains
         fy = fill_factor(abs(py1 - py0), nr)
 
         allocate (rgba(4, nc*fx, nr*fy))
-        do i = 1, nr*fy
-            si = (i - 1)/fy + 1
-            if (flip_y) si = nr - si + 1
-            do j = 1, nc*fx
-                sj = (j - 1)/fx + 1
-                if (flip_x) sj = nc - sj + 1
-                call img_rgba(a, si, sj, c)
-                rgba(1:4, j, i) = c
+        if (fx == 1 .and. fy == 1) then
+            do i = 1, nr
+                si = merge(nr - i + 1, i, flip_y)
+                do j = 1, nc
+                    sj = merge(nc - j + 1, j, flip_x)
+                    call img_rgba(a, si, sj, c)
+                    rgba(1:4, j, i) = c
+                end do
             end do
-        end do
+        else
+            do i = 1, nr
+                si = merge(nr - i + 1, i, flip_y)
+                do j = 1, nc
+                    sj = merge(nc - j + 1, j, flip_x)
+                    call img_rgba(a, si, sj, c)
+                    rgba(1:4, (j - 1)*fx + 1:j*fx, (i - 1)*fy + 1) = spread(c, 2, fx)
+                end do
+                do j = 2, fy
+                    rgba(:, :, (i - 1)*fy + j) = rgba(:, :, (i - 1)*fy + 1)
+                end do
+            end do
+        end if
 
         p%clip = g_clip
         call put_image(b, min(px0, px1), min(py0, py1), abs(px1 - px0), &
@@ -2731,7 +2920,7 @@ contains
                                      + fu*a%img(i0 + 1, j1 + 1)) &
                       + fv*((1.0_dp - fu)*a%img(i1 + 1, j0 + 1) &
                             + fu*a%img(i1 + 1, j1 + 1))
-                rgba(1:3, j, i) = hex_rgb(img_color(a, val))
+                call img_val_rgb(a, val, rgba(1:3, j, i))
                 rgba(4, j, i) = 255
             end do
         end do
@@ -2767,38 +2956,52 @@ contains
         type(axes_t), intent(in) :: a
         real(dp), intent(in) :: xmin, xmax, ymin, ymax, ax_l, ax_w, ax_b, ax_h
         type(scale_t), intent(in) :: xsc, ysc
-        integer :: nr, nc, i, j
-        real(dp) :: xe0, xe1, ye0, ye1, px0, px1, py0, py1, t, dxc, dyc
+        real(dp), parameter :: BLEED = 0.05_dp
+        integer :: nr, nc, i, j, c(4)
+        real(dp) :: xe0, ye0, ye1, py0, py1, dxc, dyc, ry0, rh
+        real(dp), allocatable :: px(:)
+        type(paint_t) :: p
 
         nr = size(a%img, 1)
         nc = size(a%img, 2)
-        dxc = (a%img_ext(2) - a%img_ext(1)) / real(nc, dp)
-        dyc = (a%img_ext(4) - a%img_ext(3)) / real(nr, dp)
+        dxc = (a%img_ext(2) - a%img_ext(1))/real(nc, dp)
+        dyc = (a%img_ext(4) - a%img_ext(3))/real(nr, dp)
+
+        allocate (px(nc + 1))
+        do j = 1, nc + 1
+            if (a%has_mesh) then
+                xe0 = a%mesh_x(j)
+            else
+                xe0 = a%img_ext(1) + real(j - 1, dp)*dxc
+            end if
+            px(j) = map_x(xe0, xmin, xmax, ax_l, ax_w, xsc)
+        end do
+
+        p%filled = .true.
+        p%stroked = .false.
+        p%fill_alpha = 1.0_dp
+        p%clip = g_clip
 
         do i = 1, nr
             if (a%has_mesh) then
                 ye0 = a%mesh_y(i)
                 ye1 = a%mesh_y(i + 1)
             else
-                ye0 = a%img_ext(3) + real(i - 1, dp) * dyc
+                ye0 = a%img_ext(3) + real(i - 1, dp)*dyc
                 ye1 = ye0 + dyc
             end if
             py0 = map_y(ye0, ymin, ymax, ax_b, ax_h, ysc)
             py1 = map_y(ye1, ymin, ymax, ax_b, ax_h, ysc)
+            ry0 = min(py0, py1) - BLEED
+            rh = abs(py1 - py0) + 2.0_dp*BLEED
             do j = 1, nc
-                if (a%has_mesh) then
-                    xe0 = a%mesh_x(j)
-                    xe1 = a%mesh_x(j + 1)
-                else
-                    xe0 = a%img_ext(1) + real(j - 1, dp) * dxc
-                    xe1 = xe0 + dxc
+                if (.not. a%has_rgb) then
+                    if (img_bad_hidden(a, a%img(i, j))) cycle
                 end if
-                px0 = map_x(xe0, xmin, xmax, ax_l, ax_w, xsc)
-                px1 = map_x(xe1, xmin, xmax, ax_l, ax_w, xsc)
-                if (img_bad_hidden(a, a%img(i, j))) cycle
-                call append_cell(b, min(px0, px1), min(py0, py1), &
-                                 abs(px1 - px0), abs(py1 - py0), &
-                                 img_hex(a, i, j))
+                call img_rgba(a, i, j, c)
+                p%fill_rgb = c(1:3)
+                call put_rect(b, min(px(j), px(j + 1)) - BLEED, ry0, &
+                              abs(px(j + 1) - px(j)) + 2.0_dp*BLEED, rh, p)
             end do
         end do
     end subroutine append_image_cells

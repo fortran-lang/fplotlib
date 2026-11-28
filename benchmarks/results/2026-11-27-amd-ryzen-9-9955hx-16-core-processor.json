@@ -1,0 +1,192 @@
+{
+  "date": "2026-11-27",
+  "repeats": 5,
+  "machine": {
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cpu_ghz": 5.06,
+    "os": "Linux",
+    "fortran_compiler": "GNU Fortran (conda-forge gcc 16.2.0-7) 16.2.0",
+    "fortran_flags": "-O3 -march=native",
+    "fpm": "Version:     0.13.0, alpha",
+    "python": "CPython 3.14.7",
+    "matplotlib": "3.11.1",
+    "numpy": "2.5.3"
+  },
+  "results": [
+    {
+      "benchmark": "Compile library",
+      "variant": "fplotlib (fpm build, -O3)",
+      "seconds": 29.028844
+    },
+    {
+      "benchmark": "Compile simple program",
+      "variant": "Fortran compile to binary",
+      "seconds": 0.064452
+    },
+    {
+      "benchmark": "Import simple script",
+      "variant": "Python imports (matplotlib, numpy)",
+      "seconds": 0.293469
+    },
+    {
+      "benchmark": "Run simple -> png",
+      "variant": "fplotlib",
+      "seconds": 0.025221
+    },
+    {
+      "benchmark": "Run simple -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.035166
+    },
+    {
+      "benchmark": "Run simple -> pdf",
+      "variant": "fplotlib",
+      "seconds": 0.009001
+    },
+    {
+      "benchmark": "Run simple -> pdf",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.064866
+    },
+    {
+      "benchmark": "Compile complex program",
+      "variant": "Fortran compile to binary",
+      "seconds": 0.077075
+    },
+    {
+      "benchmark": "Import complex script",
+      "variant": "Python imports (matplotlib, numpy)",
+      "seconds": 0.302321
+    },
+    {
+      "benchmark": "Run complex -> png",
+      "variant": "fplotlib",
+      "seconds": 0.036494
+    },
+    {
+      "benchmark": "Run complex -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.067682
+    },
+    {
+      "benchmark": "Run complex -> pdf",
+      "variant": "fplotlib",
+      "seconds": 0.040098
+    },
+    {
+      "benchmark": "Run complex -> pdf",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.105929
+    },
+    {
+      "benchmark": "Compile animation program",
+      "variant": "Fortran compile to binary",
+      "seconds": 0.065105
+    },
+    {
+      "benchmark": "Import animation script",
+      "variant": "Python imports (matplotlib, numpy)",
+      "seconds": 0.296198
+    },
+    {
+      "benchmark": "Run animation -> gif",
+      "variant": "fplotlib",
+      "seconds": 0.335149
+    },
+    {
+      "benchmark": "Run animation -> gif",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 1.909643
+    },
+    {
+      "benchmark": "Run imshow 64x64 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.025551
+    },
+    {
+      "benchmark": "Run imshow 64x64 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.0558
+    },
+    {
+      "benchmark": "Run imshow 256x256 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.040666
+    },
+    {
+      "benchmark": "Run imshow 256x256 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.072745
+    },
+    {
+      "benchmark": "Run imshow 512x512 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.051039
+    },
+    {
+      "benchmark": "Run imshow 512x512 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.085344
+    },
+    {
+      "benchmark": "Run pcolormesh 64x64 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.02453
+    },
+    {
+      "benchmark": "Run pcolormesh 64x64 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.054062
+    },
+    {
+      "benchmark": "Run pcolormesh 256x256 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.040378
+    },
+    {
+      "benchmark": "Run pcolormesh 256x256 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.083375
+    },
+    {
+      "benchmark": "Run pcolormesh 512x512 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.059543
+    },
+    {
+      "benchmark": "Run pcolormesh 512x512 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.158913
+    },
+    {
+      "benchmark": "Run contourf 64x64 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.027577
+    },
+    {
+      "benchmark": "Run contourf 64x64 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.05581
+    },
+    {
+      "benchmark": "Run contourf 256x256 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.028121
+    },
+    {
+      "benchmark": "Run contourf 256x256 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.059397
+    },
+    {
+      "benchmark": "Run contourf 512x512 -> png",
+      "variant": "fplotlib",
+      "seconds": 0.0323
+    },
+    {
+      "benchmark": "Run contourf 512x512 -> png",
+      "variant": "matplotlib (excl. imports)",
+      "seconds": 0.072175
+    }
+  ]
+}

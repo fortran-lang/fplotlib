@@ -18,6 +18,8 @@ Measured items:
 - **Animation**: a 40-frame, 240-point travelling wave saved as a GIF
   (`clf`/`plot`/`add_frame`/`save_animation` versus Matplotlib
   `FuncAnimation` with `PillowWriter`).
+- **2D colormaps**: `imshow`, `pcolormesh`, and `contourf` with a colorbar and
+  title saved as PNG across 64×64, 256×256, and 512×512 grids.
 
 ## Results
 

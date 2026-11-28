@@ -336,6 +336,14 @@ contains
         x0 = tx(self, x); y0 = ty(self, y)
         x1 = tx(self, x + w); y1 = ty(self, y + h)
 
+        if (r <= 0.0_dp .and. paint%filled .and. .not. paint%stroked .and. &
+            self%cv%identity_transform .and. self%cv%n_clip == 0 .and. &
+            max(abs(x0), abs(x1), abs(y0), abs(y1)) < 1.0e9_dp) then
+            call fill_rect(self%cv, x0, y0, x1, y1, paint%fill_rgb, &
+                           paint%fill_alpha, shifted_clip(self, paint%clip))
+            return
+        end if
+
         call pb_reset(self%pb)
         if (r <= 0.0_dp) then
             call pb_move(self%pb, x0, y0)

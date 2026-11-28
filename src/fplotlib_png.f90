@@ -83,16 +83,13 @@ contains
     subroutine put_bits(buf, code, nb)
         type(bitbuf_t), intent(inout) :: buf
         integer, intent(in) :: code, nb
-        integer :: i
 
-        do i = 0, nb - 1
-            if (btest(code, i)) buf%acc = ibset(buf%acc, buf%nbits)
-            buf%nbits = buf%nbits + 1
-            if (buf%nbits == 8) then
-                call push(buf, buf%acc)
-                buf%acc = 0
-                buf%nbits = 0
-            end if
+        buf%acc = ior(buf%acc, ishft(code, buf%nbits))
+        buf%nbits = buf%nbits + nb
+        do while (buf%nbits >= 8)
+            call push(buf, buf%acc)
+            buf%acc = ishft(buf%acc, -8)
+            buf%nbits = buf%nbits - 8
         end do
     end subroutine put_bits
 
@@ -101,11 +98,13 @@ contains
     subroutine put_code(buf, code, nb)
         type(bitbuf_t), intent(inout) :: buf
         integer, intent(in) :: code, nb
-        integer :: i
+        integer :: i, r
 
-        do i = nb - 1, 0, -1
-            call put_bits(buf, merge(1, 0, btest(code, i)), 1)
+        r = 0
+        do i = 0, nb - 1
+            if (btest(code, nb - 1 - i)) r = ibset(r, i)
         end do
+        call put_bits(buf, r, nb)
     end subroutine put_code
 
     subroutine flush_bits(buf)
@@ -272,13 +271,20 @@ contains
 
     function adler32(buf, n) result(a)
         integer, intent(in) :: buf(:), n
-        integer :: a, s1, s2, i
+        integer :: a, s1, s2, i, iend
 
         s1 = 1
         s2 = 0
-        do i = 1, n
-            s1 = mod(s1 + buf(i), 65521)
-            s2 = mod(s2 + s1, 65521)
+        i = 1
+        do while (i <= n)
+            iend = min(n, i + 2047)
+            do while (i <= iend)
+                s1 = s1 + buf(i)
+                s2 = s2 + s1
+                i = i + 1
+            end do
+            s1 = mod(s1, 65521)
+            s2 = mod(s2, 65521)
         end do
         ! s2 reaches past 32767, so the sum is formed in 64 bits and given
         ! the same 32 bits a wrapping multiply would, without the overflow.
@@ -444,24 +450,64 @@ contains
             bscore = huge(0)
             do f = 0, 4
                 score = 0
-                do i = 1, stride
-                    a_ = 0
-                    if (i > bpp) a_ = cur(i - bpp)
-                    b_ = up(i)
-                    c_ = 0
-                    if (i > bpp) c_ = up(i - bpp)
-                    select case (f)
-                    case (0); v = cur(i)
-                    case (1); v = cur(i) - a_
-                    case (2); v = cur(i) - b_
-                    case (3); v = cur(i) - (a_ + b_)/2
-                    case default; v = cur(i) - paeth(a_, b_, c_)
-                    end select
-                    v = iand(v, 255)
-                    try(i) = v
-                    if (v > 127) v = v - 256
-                    score = score + abs(v)
-                end do
+                select case (f)
+                case (0)
+                    do i = 1, stride
+                        v = cur(i)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                case (1)
+                    do i = 1, min(bpp, stride)
+                        v = cur(i)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                    do i = bpp + 1, stride
+                        v = iand(cur(i) - cur(i - bpp), 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                case (2)
+                    do i = 1, stride
+                        v = iand(cur(i) - up(i), 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                case (3)
+                    do i = 1, min(bpp, stride)
+                        v = iand(cur(i) - up(i)/2, 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                    do i = bpp + 1, stride
+                        v = iand(cur(i) - (cur(i - bpp) + up(i))/2, 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                case default
+                    do i = 1, min(bpp, stride)
+                        v = iand(cur(i) - paeth(0, up(i), 0), 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                    do i = bpp + 1, stride
+                        a_ = cur(i - bpp)
+                        b_ = up(i)
+                        c_ = up(i - bpp)
+                        v = iand(cur(i) - paeth(a_, b_, c_), 255)
+                        try(i) = v
+                        if (v > 127) v = v - 256
+                        score = score + abs(v)
+                    end do
+                end select
                 if (score < bscore) then
                     bscore = score
                     bf = f
