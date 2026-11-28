@@ -1741,6 +1741,7 @@ program test_plots
     call textbox_case()
     call plot_kwargs_case()
     call oop_figure_check()
+    call sixel_case()
 
     print *, "All test plots written."
 
@@ -1988,6 +1989,138 @@ contains
             error stop "plot_kwargs_case: single-call ax%plot differs from multi-call"
         deallocate (svg_s, svg_ref)
     end subroutine plot_kwargs_case
+
+    subroutine sixel_case()
+        use fplotlib_sixel, only: sixel_encode
+        use fplotlib_io, only: read_bytes
+        use fplotlib_status, only: status_t
+        character(len=1), parameter :: ESC = achar(27), BS = achar(92)
+        character(len=:), allocatable :: six, disk, oop1, oop2, tight_s, pix
+        real(dp) :: sx(20), sy(20)
+        type(figure_t) :: fig
+        type(axes_t) :: fax
+        type(status_t) :: st
+        integer :: i, k, n, nbands, ncr, nrle
+
+        ! 1) Direct encoder unit test: 10x12 two-colour horizontal split
+        allocate (character(len=3*10*12) :: pix)
+        k = 0
+        do i = 1, 10*12
+            if (i <= 10*6) then
+                pix(k + 1:k + 3) = achar(255)//achar(0)//achar(0)
+            else
+                pix(k + 1:k + 3) = achar(0)//achar(0)//achar(255)
+            end if
+            k = k + 3
+        end do
+        six = sixel_encode(10, 12, pix)
+        if (index(six, ESC//"P0;1q""1;1;10;12") /= 1) &
+            error stop "sixel_case: invalid header/raster attrs on synthetic 10x12"
+        n = len(six)
+        if (n < 2) error stop "sixel_case: synthetic sixel too short"
+        if (six(n - 1:n) /= ESC//BS) &
+            error stop "sixel_case: missing ESC \ terminator on synthetic 10x12"
+        if (index(six, ";2;100;0;0") == 0 .or. index(six, ";2;0;0;100") == 0) &
+            error stop "sixel_case: missing RGB palette definitions on synthetic 10x12"
+        if (index(six, "!10~") == 0) &
+            error stop "sixel_case: missing RLE compression on synthetic 10x12"
+        if (index(six, "-") == 0) &
+            error stop "sixel_case: missing band newline '-' on synthetic 10x12"
+        deallocate (pix)
+
+        ! 2) Multi-colour single band + partial final band (4x7)
+        allocate (character(len=3*4*7) :: pix)
+        k = 0
+        do i = 1, 4*7
+            if (i <= 4) then
+                pix(k + 1:k + 3) = achar(255)//achar(0)//achar(0)
+            else if (i <= 24) then
+                pix(k + 1:k + 3) = achar(0)//achar(255)//achar(0)
+            else
+                pix(k + 1:k + 3) = achar(0)//achar(0)//achar(255)
+            end if
+            k = k + 3
+        end do
+        six = sixel_encode(4, 7, pix)
+        if (index(six, ESC//"P0;1q""1;1;4;7") /= 1) &
+            error stop "sixel_case: invalid header on synthetic 4x7"
+        if (index(six, "$") == 0) &
+            error stop "sixel_case: missing carriage return '$' between band colours"
+        if (index(six, "!4@") == 0) &
+            error stop "sixel_case: missing partial-band RLE '!4@' on synthetic 4x7"
+        deallocate (pix)
+
+        ! 3) Empty edge case
+        six = sixel_encode(0, 0, "")
+        if (six /= ESC//"P0;1q""1;1;0;0"//ESC//BS) &
+            error stop "sixel_case: unexpected empty sixel encoding"
+
+        ! 4) High-level plot -> render_sixel + savefig(.six)
+        do i = 1, 20
+            sx(i) = real(i - 1, dp)*6.283185307179586_dp/19.0_dp
+            sy(i) = sin(sx(i))
+        end do
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call plot(sx, sy, "C0-", lw=2.0_dp, label="sin(x)")
+        call plot(sx, cos(sx), "C3--", lw=2.0_dp, label="cos(x)")
+        call title("Sixel backend")
+        call legend()
+        six = render_sixel(dpi=50.0_dp)
+        call savefig("tests/out/sixel_test.six", dpi=50.0_dp)
+        call read_bytes("tests/out/sixel_test.six", disk, st)
+        if (.not. st%ok()) error stop "sixel_case: failed to read tests/out/sixel_test.six"
+        if (disk /= six) error stop "sixel_case: savefig(.six) differs from render_sixel()"
+        if (index(six, ESC//"P0;1q""1;1;320;240") /= 1) &
+            error stop "sixel_case: invalid header or dimensions for 320x240 plot"
+        n = len(six)
+        if (n < 500) error stop "sixel_case: rendered plot sixel unexpectedly short"
+        if (six(n - 1:n) /= ESC//BS) &
+            error stop "sixel_case: missing ESC \ terminator on plot"
+        if (index(six, "#0;2;") == 0 .or. index(six, "#1;2;") == 0) &
+            error stop "sixel_case: missing palette definitions on plot"
+        nbands = 0
+        ncr = 0
+        nrle = 0
+        do i = 1, n
+            if (six(i:i) == "-") nbands = nbands + 1
+            if (six(i:i) == "$") ncr = ncr + 1
+            if (six(i:i) == "!") nrle = nrle + 1
+        end do
+        if (nbands /= 39) error stop "sixel_case: expected 39 band newlines for height 240"
+        if (ncr < 10) error stop "sixel_case: expected multi-colour pixel bands"
+        if (nrle < 10) error stop "sixel_case: expected RLE compression in plot output"
+
+        ! Tight bounding box via render_sixel
+        tight_s = render_sixel(dpi=50.0_dp, bbox_inches="tight")
+        if (index(tight_s, ESC//"P0;1q""1;1;") /= 1) &
+            error stop "sixel_case: invalid tight-bbox sixel header"
+        if (tight_s(len(tight_s) - 1:len(tight_s)) /= ESC//BS) &
+            error stop "sixel_case: missing tight-bbox sixel terminator"
+
+        ! 5) OOP figure_t%save(.sixel) and figure_t%savefig(.six)
+        fig = figure_t(figsize=[4.0_dp, 3.0_dp], dpi=50.0_dp)
+        fax = fig%add_subplot(title="OOP Sixel", grid=.true.)
+        call fax%plot(sx, sy, "C1-", lw=1.5_dp)
+        call fig%save("tests/out/sixel_oop.sixel")
+        call fig%savefig("tests/out/sixel_oop2.six")
+        call read_bytes("tests/out/sixel_oop.sixel", oop1, st)
+        if (.not. st%ok()) error stop "sixel_case: failed to read sixel_oop.sixel"
+        call read_bytes("tests/out/sixel_oop2.six", oop2, st)
+        if (.not. st%ok()) error stop "sixel_case: failed to read sixel_oop2.six"
+        if (oop1 /= oop2) error stop "sixel_case: fig%save(.sixel) /= fig%savefig(.six)"
+        if (index(oop1, ESC//"P0;1q""1;1;200;150") /= 1) &
+            error stop "sixel_case: invalid OOP figure sixel dimensions"
+        if (oop1(len(oop1) - 1:len(oop1)) /= ESC//BS) &
+            error stop "sixel_case: missing OOP figure sixel terminator"
+
+        ! Type-check and link show_sixel / fig%show_sixel without printing ESC to logs
+        if (.false.) then
+            call show_sixel(dpi=50.0_dp, status=st)
+            call fig%show_sixel(dpi=50.0_dp, status=st)
+        end if
+        call fig%close()
+    end subroutine sixel_case
 
     recursive subroutine doc_directive(doc, d, ctx, handled)
         use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, &
