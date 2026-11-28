@@ -16,57 +16,50 @@ program plot_invitation
                                  md_color, md_base_size, md_meta
     use fplotlib_typeset, only: ts_vkeep, ts_end_par, ts_glue_t
     implicit none
+    character, parameter :: NL = achar(10)
 
-    call typeset([character(len=100) :: &
-        "---", &
-        "paper: 5in x 7in", &
-        "margin: 0.55in", &
-        "fontsize: 12pt", &
-        "align: center", &
-        "parskip: 8pt", &
-        "pagecolor: ""#fbf3e4""", &
-        "color: ""#3b2b23""", &
-        "pagenumbers: false", &
-        "valign: center", &
-        "---", &
-        "", &
-        ":::{div}", &
-        ":size: large", &
-        ":italic: true", &
-        ":color: #9a6a3a", &
-        "You are warmly invited to", &
-        ":::", &
-        "", &
-        ":::{div}", &
-        ":size: Huge", &
-        ":weight: bold", &
-        ":color: #8b1a1a", &
-        "Ada’s Fortieth\ ", &
-        "Birthday Party", &
-        ":::", &
-        "", &
-        ":::{div}", &
-        ":color: #c08a3e", &
-        "$\star \quad \star \quad \star$", &
-        ":::", &
-        "", &
-        "**Saturday, the fourteenth of November**\ ", &
-        "from seven o’clock in the evening", &
-        "", &
-        "The Old Observatory\ ", &
-        "42 Starlight Avenue, Los Alamos", &
-        "", &
-        "---", &
-        "", &
-        "Dinner, music and dancing under the stars, and a very short talk on why", &
-        "$e^{i\pi} + 1 = 0$ is the most beautiful equation there is.", &
-        "", &
-        ":::{div}", &
-        ":size: small", &
-        ":color: #9a6a3a", &
-        "*Kindly reply by the first of November*\ ", &
-        "ada@example.org", &
-        ":::"], &
+    call typeset( &
+        "---"//NL// &
+        "paper: 5in x 7in"//NL// &
+        "margin: 0.55in"//NL// &
+        "fontsize: 12pt"//NL// &
+        "align: center"//NL// &
+        "parskip: 8pt"//NL// &
+        "pagecolor: ""#fbf3e4"""//NL// &
+        "color: ""#3b2b23"""//NL// &
+        "pagenumbers: false"//NL// &
+        "valign: center"//NL// &
+        "---"//NL//NL// &
+        ":::{div}"//NL// &
+        ":size: large"//NL// &
+        ":italic: true"//NL// &
+        ":color: #9a6a3a"//NL// &
+        "You are warmly invited to"//NL// &
+        ":::"//NL//NL// &
+        ":::{div}"//NL// &
+        ":size: Huge"//NL// &
+        ":weight: bold"//NL// &
+        ":color: #8b1a1a"//NL// &
+        "Ada’s Fortieth  "//NL// &
+        "Birthday Party"//NL// &
+        ":::"//NL//NL// &
+        ":::{div}"//NL// &
+        ":color: #c08a3e"//NL// &
+        "$\star \quad \star \quad \star$"//NL// &
+        ":::"//NL//NL// &
+        "**Saturday, the fourteenth of November**  "//NL// &
+        "from seven o’clock in the evening"//NL//NL// &
+        "The Old Observatory  "//NL// &
+        "42 Starlight Avenue, Los Alamos"//NL//NL// &
+        "---"//NL//NL// &
+        "Dinner, music and dancing under the stars, and a very short talk on why"//NL// &
+        "$e^{i\pi} + 1 = 0$ is the most beautiful equation there is."//NL//NL// &
+        ":::{div}"//NL// &
+        ":size: small"//NL// &
+        ":color: #9a6a3a"//NL// &
+        "*Kindly reply by the first of November*  "//NL// &
+        "ada@example.org"//NL// &
+        ":::"//NL, &
         "invitation.svg", on_directive=invitation_directive, on_body=invitation_body)
 
 contains

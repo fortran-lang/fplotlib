@@ -20,90 +20,82 @@ program plot_book_chapter
                                 ts_end_par, ts_penalty, ts_vskip, ts_nobreak_next, &
                                 ts_glue_t, ALIGN_LEFT
     implicit none
+    character, parameter :: NL = achar(10)
 
-    call typeset([character(len=100) :: &
-        "---", &
-        "chapters: true", &
-        "runningheads: true", &
-        "flushbottom: true", &
-        "paper: a5", &
-        "fontsize: 10pt", &
-        "margin: 1.8cm", &
-        "margin-top: 2.2cm", &
-        "numbersections: true", &
-        "---", &
-        "", &
-        "# The Shape of a Paragraph", &
-        "", &
-        "> *Typography exists to honor content.*\ ", &
-        "> --- Robert Bringhurst", &
-        "", &
-        "When Donald Knuth received the galley proofs of the second edition of his book on", &
-        "algorithms in 1977, he was dismayed. The publisher had replaced its hot-metal type,", &
-        "set by hand, with an early phototypesetting system, and the pages looked wrong to him:", &
-        "the spacing was uneven, the mathematics poorly arranged. He decided to write a program", &
-        "that would set his books as well as the best printers of the past had done, and", &
-        "expected the work to take him a few months. It took him ten years, and the result,", &
-        "TeX, is still in daily use.", &
-        "", &
-        "This chapter describes three of the ideas that make TeX’s pages look the way they do:", &
-        "how it decides where to break the lines of a paragraph, where to hyphenate a word,", &
-        "and where to end a page.", &
-        "", &
-        "## Boxes, glue and penalties", &
-        "", &
-        "TeX sees a paragraph as a sequence of *boxes*, which are the characters and anything", &
-        "else of a fixed size, separated by *glue*, which is space that may stretch or shrink,", &
-        "and *penalties*, which mark the places where a line may be broken and say how", &
-        "undesirable a break there would be. A line is good when its glue has to stretch or", &
-        "shrink little to fill the measure; TeX measures this by the *badness*", &
-        "$$ b = 100\,r^3, $$ (eq:badness)", &
-        "where $r$ is the ratio of the stretching or shrinking needed to the amount available.", &
-        "A line whose glue is stretched to its full stretchability has a badness of 100, and", &
-        "TeX’s default tolerance of 200 allows a little more than that.", &
-        "", &
-        "Each line is then given a number of *demerits*, which grows with its badness and with", &
-        "the penalty $p$ of the break at its end,", &
-        "$$ d = (l + b)^2 + p^2, $$ (eq:demerits)", &
-        "$l$ being a small penalty for every line, so that a paragraph of fewer lines is", &
-        "preferred. Further demerits are added when two consecutive lines end with hyphens, or", &
-        "when a very loose line follows a very tight one.", &
-        "", &
-        "## The best breaks", &
-        "", &
-        "Most programs break a paragraph one line at a time: they put as many words as fit on", &
-        "the first line, and then go on to the next. Knuth and Plass instead considered the", &
-        "paragraph as a whole. Among all the ways of breaking it into lines, their algorithm", &
-        "finds the one whose total demerits, the sum of {eq}`eq:demerits` over all its lines, are", &
-        "the smallest. A decision taken early in the paragraph can therefore make the spacing", &
-        "of a line near its end better, and a single long word does not spoil the lines before", &
-        "it.", &
-        "", &
-        "The number of ways of breaking a paragraph grows exponentially with its length, but", &
-        "the algorithm need not look at most of them. It walks through the paragraph once and", &
-        "keeps, at each possible break, only the best way of reaching it: the best way of", &
-        "breaking what comes before a break does not depend on what comes after it. This is", &
-        "dynamic programming, and it makes the work grow only in proportion to the length of", &
-        "the paragraph.", &
-        "", &
-        "## Hyphenation", &
-        "", &
-        "When a paragraph cannot be broken well, TeX tries again, this time allowing words to", &
-        "be hyphenated. It finds the places where a word may be divided with a method devised", &
-        "by Frank Liang, Knuth’s student: a few thousand short patterns, learned from a", &
-        "dictionary, which say whether a hyphen is allowed or forbidden between two letters in", &
-        "a given context. The patterns are small, and they find nearly nine words in ten that", &
-        "a dictionary would hyphenate, with almost no false hyphens.", &
-        "", &
-        "## Pages", &
-        "", &
-        "Pages are made in much the same way as lines. The lines of the paragraphs, the space", &
-        "between them and the penalties for breaking a page between them form a vertical list,", &
-        "and TeX cuts it into pages, choosing for each page the break of least cost: a page", &
-        "that has to be stretched or shrunk a great deal costs much, a break that leaves a", &
-        "single line of a paragraph at the top or bottom of a page, a widow or an orphan, costs", &
-        "a penalty. Unlike the lines of a paragraph, pages are chosen one at a time, since a", &
-        "page has to be output before the next can be begun."], &
+    call typeset( &
+        "---"//NL// &
+        "chapters: true"//NL// &
+        "runningheads: true"//NL// &
+        "flushbottom: true"//NL// &
+        "paper: a5"//NL// &
+        "fontsize: 10pt"//NL// &
+        "margin: 1.8cm"//NL// &
+        "margin-top: 2.2cm"//NL// &
+        "numbersections: true"//NL// &
+        "---"//NL//NL// &
+        "# The Shape of a Paragraph"//NL//NL// &
+        "> *Typography exists to honor content.*\"//NL// &
+        "> --- Robert Bringhurst"//NL//NL// &
+        "When Donald Knuth received the galley proofs of the second edition of his"//NL// &
+        "book on algorithms in 1977, he was dismayed. The publisher had replaced its"//NL// &
+        "hot-metal type, set by hand, with an early phototypesetting system, and the"//NL// &
+        "pages looked wrong to him: the spacing was uneven, the mathematics poorly"//NL// &
+        "arranged. He decided to write a program that would set his books as well as"//NL// &
+        "the best printers of the past had done, and expected the work to take him a"//NL// &
+        "few months. It took him ten years, and the result, TeX, is still in daily"//NL// &
+        "use."//NL//NL// &
+        "This chapter describes three of the ideas that make TeX’s pages look the way"//NL// &
+        "they do: how it decides where to break the lines of a paragraph, where to"//NL// &
+        "hyphenate a word, and where to end a page."//NL//NL// &
+        "## Boxes, glue and penalties"//NL//NL// &
+        "TeX sees a paragraph as a sequence of *boxes*, which are the characters and"//NL// &
+        "anything else of a fixed size, separated by *glue*, which is space that may"//NL// &
+        "stretch or shrink, and *penalties*, which mark the places where a line may"//NL// &
+        "be broken and say how undesirable a break there would be. A line is good"//NL// &
+        "when its glue has to stretch or shrink little to fill the measure; TeX"//NL// &
+        "measures this by the *badness*"//NL// &
+        "$$ b = 100\,r^3, $$ (eq:badness)"//NL// &
+        "where $r$ is the ratio of the stretching or shrinking needed to the amount"//NL// &
+        "available. A line whose glue is stretched to its full stretchability has a"//NL// &
+        "badness of 100, and TeX’s default tolerance of 200 allows a little more than"//NL// &
+        "that."//NL//NL// &
+        "Each line is then given a number of *demerits*, which grows with its badness"//NL// &
+        "and with the penalty $p$ of the break at its end,"//NL// &
+        "$$ d = (l + b)^2 + p^2, $$ (eq:demerits)"//NL// &
+        "$l$ being a small penalty for every line, so that a paragraph of fewer lines"//NL// &
+        "is preferred. Further demerits are added when two consecutive lines end with"//NL// &
+        "hyphens, or when a very loose line follows a very tight one."//NL//NL// &
+        "## The best breaks"//NL//NL// &
+        "Most programs break a paragraph one line at a time: they put as many words"//NL// &
+        "as fit on the first line, and then go on to the next. Knuth and Plass"//NL// &
+        "instead considered the paragraph as a whole. Among all the ways of breaking"//NL// &
+        "it into lines, their algorithm finds the one whose total demerits, the sum"//NL// &
+        "of {eq}`eq:demerits` over all its lines, are the smallest. A decision taken"//NL// &
+        "early in the paragraph can therefore make the spacing of a line near its end"//NL// &
+        "better, and a single long word does not spoil the lines before it."//NL//NL// &
+        "The number of ways of breaking a paragraph grows exponentially with its"//NL// &
+        "length, but the algorithm need not look at most of them. It walks through"//NL// &
+        "the paragraph once and keeps, at each possible break, only the best way of"//NL// &
+        "reaching it: the best way of breaking what comes before a break does not"//NL// &
+        "depend on what comes after it. This is dynamic programming, and it makes the"//NL// &
+        "work grow only in proportion to the length of the paragraph."//NL//NL// &
+        "## Hyphenation"//NL//NL// &
+        "When a paragraph cannot be broken well, TeX tries again, this time allowing"//NL// &
+        "words to be hyphenated. It finds the places where a word may be divided with"//NL// &
+        "a method devised by Frank Liang, Knuth’s student: a few thousand short"//NL// &
+        "patterns, learned from a dictionary, which say whether a hyphen is allowed"//NL// &
+        "or forbidden between two letters in a given context. The patterns are small,"//NL// &
+        "and they find nearly nine words in ten that a dictionary would hyphenate,"//NL// &
+        "with almost no false hyphens."//NL//NL// &
+        "## Pages"//NL//NL// &
+        "Pages are made in much the same way as lines. The lines of the paragraphs,"//NL// &
+        "the space between them and the penalties for breaking a page between them"//NL// &
+        "form a vertical list, and TeX cuts it into pages, choosing for each page the"//NL// &
+        "break of least cost: a page that has to be stretched or shrunk a great deal"//NL// &
+        "costs much, a break that leaves a single line of a paragraph at the top or"//NL// &
+        "bottom of a page, a widow or an orphan, costs a penalty. Unlike the lines of"//NL// &
+        "a paragraph, pages are chosen one at a time, since a page has to be output"//NL// &
+        "before the next can be begun."//NL, &
         "chapter.svg", on_heading=book_heading)
 
 contains
