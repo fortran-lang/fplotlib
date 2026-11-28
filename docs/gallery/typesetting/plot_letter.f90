@@ -15,57 +15,50 @@ program plot_letter
                                  md_length, md_base_size
     use fplotlib_typeset, only: ts_addvspace, ts_vskip, ts_end_par, ts_glue_t, ALIGN_RIGHT
     implicit none
+    character, parameter :: NL = achar(10)
 
-    call typeset([character(len=100) :: &
-        "---", &
-        "paper: letter", &
-        "fontsize: 11pt", &
-        "margin: 1.1in", &
-        "parskip: 6pt", &
-        "pagenumbers: false", &
-        "signature-skip: 1.2cm", &
-        "---", &
-        "", &
-        ":::{sender}", &
-        "Augusta Ada King, Countess of Lovelace\ ", &
-        "12 St James’s Square\ ", &
-        "London", &
-        "", &
-        "10 July 1843", &
-        ":::", &
-        "", &
-        ":::{recipient}", &
-        "Charles Babbage, Esq.\ ", &
-        "1 Dorset Street\ ", &
-        "Marylebone, London", &
-        ":::", &
-        "", &
-        "Dear Mr. Babbage,", &
-        "", &
-        "I send you with this letter the translation of General Menabrea’s memoir on the", &
-        "Analytical Engine, together with the notes I have added to it. They have grown, as", &
-        "you will see, to nearly three times the length of the memoir itself; I hope you will", &
-        "not think them too long, for I could not bring myself to leave out anything that", &
-        "seemed to me to bear upon the real nature of the engine.", &
-        "", &
-        "In the last of them, Note G, I have worked out in full how the engine might compute", &
-        "the numbers of Bernoulli, $B_n$, from the relation", &
-        "$$ \sum_{k=0}^{n} \binom{n+1}{k} B_k = 0, $$", &
-        "step by step, with every variable and every operation set down in a table. I believe", &
-        "it shows better than any general description could that the engine is not a mere", &
-        "calculator of numbers: it may act upon other things besides number, were objects found", &
-        "whose mutual relations could be expressed by those of the abstract science of", &
-        "operations.", &
-        "", &
-        "I should be very glad of your corrections before the proofs go back to Mr. Taylor. I", &
-        "shall be in town until the end of the week, and can call upon you at any hour that", &
-        "suits you.", &
-        "", &
-        ":::{closing}", &
-        "With kind regards, I remain yours most sincerely,", &
-        "", &
-        "A. A. L.", &
-        ":::"], &
+    call typeset( &
+        "---"//NL// &
+        "paper: letter"//NL// &
+        "fontsize: 11pt"//NL// &
+        "margin: 1.1in"//NL// &
+        "parskip: 6pt"//NL// &
+        "pagenumbers: false"//NL// &
+        "signature-skip: 1.2cm"//NL// &
+        "---"//NL//NL// &
+        ":::{sender}"//NL// &
+        "Augusta Ada King, Countess of Lovelace  "//NL// &
+        "12 St James’s Square  "//NL// &
+        "London"//NL//NL// &
+        "10 July 1843"//NL// &
+        ":::"//NL//NL// &
+        ":::{recipient}"//NL// &
+        "Charles Babbage, Esq.  "//NL// &
+        "1 Dorset Street  "//NL// &
+        "Marylebone, London"//NL// &
+        ":::"//NL//NL// &
+        "Dear Mr. Babbage,"//NL//NL// &
+        "I send you with this letter the translation of General Menabrea’s memoir on"//NL// &
+        "the Analytical Engine, together with the notes I have added to it. They have"//NL// &
+        "grown, as you will see, to nearly three times the length of the memoir"//NL// &
+        "itself; I hope you will not think them too long, for I could not bring"//NL// &
+        "myself to leave out anything that seemed to me to bear upon the real nature"//NL// &
+        "of the engine."//NL//NL// &
+        "In the last of them, Note G, I have worked out in full how the engine might"//NL// &
+        "compute the numbers of Bernoulli, $B_n$, from the relation"//NL// &
+        "$$ \sum_{k=0}^{n} \binom{n+1}{k} B_k = 0, $$"//NL// &
+        "step by step, with every variable and every operation set down in a table."//NL// &
+        "I believe it shows better than any general description could that the engine"//NL// &
+        "is not a mere calculator of numbers: it may act upon other things besides"//NL// &
+        "number, were objects found whose mutual relations could be expressed by"//NL// &
+        "those of the abstract science of operations."//NL//NL// &
+        "I should be very glad of your corrections before the proofs go back to"//NL// &
+        "Mr. Taylor. I shall be in town until the end of the week, and can call upon"//NL// &
+        "you at any hour that suits you."//NL//NL// &
+        ":::{closing}"//NL// &
+        "With kind regards, I remain yours most sincerely,"//NL//NL// &
+        "A. A. L."//NL// &
+        ":::"//NL, &
         "letter.svg", on_directive=letter_directive)
 
 contains

@@ -4,5 +4,6 @@ Documents written in a MyST subset of Markdown, with TeX mathematics
 between dollar signs, and set by fplotlib itself with TeX's algorithms:
 paragraphs are broken into lines by Knuth and Plass's method and
 hyphenated with TeX's patterns, pages are cut by TeX's page builder, and
-the spacing is LaTeX's. Each example is one call, `typeset(lines,
-"file.svg")`; a PDF holds every page, the other formats one file per page.
+the spacing is LaTeX's. Each example is one call, `typeset(md, "file.svg")`
+(or `typeset_file("doc.md", "file.svg")` for an external `.md` file); a PDF
+holds every page, the other formats one file per page.

@@ -33,22 +33,22 @@ program plot_hpc_report
         results(i, 4) = exp(-2.0_dp*ALPHA*ts)
     end do
 
-    call markdown([character(len=96) :: &
-        "---", &
-        "title: A Report Directly from Fortran", &
-        "author: Numerical Methods Group", &
-        "paper: letter", &
-        "margin: 0.7in", &
-        "numbersections: true", &
-        "---", &
-        "", &
-        "# A Damped Oscillator", &
-        "", &
-        "A linear oscillator with angular frequency $\omega_0 = 2.0\;\mathrm{rad/s}$ and", &
-        "damping rate $\alpha = 0.15\;\mathrm{s}^{-1}$ follows", &
-        "$y(t) = e^{-\alpha t}\cos(\omega_0 t)$. Both the vector figure and the numerical", &
-        "summary below are generated directly inside the simulation program without", &
-        "intermediate files."])
+    call markdown( &
+        "---"//NL// &
+        "title: A Report Directly from Fortran"//NL// &
+        "author: Numerical Methods Group"//NL// &
+        "paper: letter"//NL// &
+        "margin: 0.7in"//NL// &
+        "numbersections: true"//NL// &
+        "---")
+
+    call markdown("# A Damped Oscillator")
+    call markdown( &
+        "A linear oscillator with angular frequency $\omega_0 = 2.0\;\mathrm{rad/s}$ and "// &
+        "damping rate $\alpha = 0.15\;\mathrm{s}^{-1}$ follows "// &
+        "$y(t) = e^{-\alpha t}\cos(\omega_0 t)$. Both the vector figure and the numerical "// &
+        "summary below are generated directly inside the simulation program without "// &
+        "intermediate files.")
 
     call figure(figsize=[5.6_dp, 2.45_dp])
     call plot(t, y, "C0-", lw=1.8_dp, label="$y(t) = e^{-\alpha t}\cos(\omega_0 t)$")
@@ -77,16 +77,16 @@ program plot_hpc_report
                        caption="Sampled displacement, envelope, and normalized energy.", &
                        label="tab:values")
 
-    call markdown([character(len=96) :: &
-        "## Interpretation", &
-        "", &
-        "As shown in {numref}`fig:motion` and quantified in {numref}`tab:values`, the", &
-        "oscillation amplitude decays monotonically within the exponential envelope. The", &
-        "amplitude half-life is given by", &
-        "$$ t_{1/2} = \frac{\ln 2}{\alpha} \approx 4.62\;\mathrm{s}, $$ (eq:halflife)", &
-        "matching the drop from $1.000$ at $t = 0$ to $0.549$ at $t = 4.0\;\mathrm{s}$ in", &
-        "{numref}`tab:values`. By $t = 8.0\;\mathrm{s}$, the stored energy $E(t)/E_0$ has fallen", &
-        "to less than ten percent of its initial value, consistent with {eq}`eq:halflife`."])
+    call markdown("## Interpretation")
+    call markdown( &
+        "As shown in {numref}`fig:motion` and quantified in {numref}`tab:values`, the "// &
+        "oscillation amplitude decays monotonically within the exponential envelope. The "// &
+        "amplitude half-life is given by"//NL// &
+        "$$ t_{1/2} = \frac{\ln 2}{\alpha} \approx 4.62\;\mathrm{s}, $$ (eq:halflife)"//NL// &
+        "matching the drop from $1.000$ at $t = 0$ to $0.549$ at $t = 4.0\;\mathrm{s}$ in "// &
+        "{numref}`tab:values`. By $t = 8.0\;\mathrm{s}$, the stored energy $E(t)/E_0$ has "// &
+        "fallen to less than ten percent of its initial value, consistent with "// &
+        "{eq}`eq:halflife`.")
 
     call save("hpc_report.svg")
     call save("hpc_report.pdf")
