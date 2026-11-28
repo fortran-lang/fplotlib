@@ -15,8 +15,10 @@
 !   * consecutive glyphs are spaced by their advance widths and the face's
 !     pair kerning.
 !
-! The faces are Lato: regular, bold and italic; bold italic is set in
-! bold.
+! The faces are those of a family: Lato (sans-serif, the default) or STIX
+! Two Text (serif), each in regular, bold and italic; bold italic is set
+! in bold. The family is set_font_family's, for everything laid out after
+! it is chosen.
 module fplotlib_text
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_status, only: contract_error
@@ -24,16 +26,32 @@ module fplotlib_text
     use fplotlib_render, only: glyphrun_t, WEIGHT_BOLD, SLANT_ITALIC
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, &
                                glyph_recompose, FACE_REGULAR, FACE_BOLD, &
-                               FACE_ITALIC, NGLYPH, NFACE, glyph_face
+                               FACE_ITALIC, NGLYPH, NFACE, glyph_face, &
+                               family_face, NFAMILY, FAMILY_SANS
     implicit none
     private
 
     public :: text_face, text_layout, text_width, check_font
+    public :: set_font_family, font_family
     public :: run_add, run_shift, run_reset, run_map, run_copy, code_points
+
+    ! The family text is set in, one of fplotlib_glyphs' FAMILY_*.
+    integer :: cur_family = FAMILY_SANS
 
 contains
 
-    ! The face a weight and a slant ask for.
+    ! Choose the family text and math are set in from now on.
+    subroutine set_font_family(family)
+        integer, intent(in) :: family
+        if (family < 1 .or. family > NFAMILY) call contract_error("text: unknown font family")
+        cur_family = family
+    end subroutine set_font_family
+
+    pure integer function font_family()
+        font_family = cur_family
+    end function font_family
+
+    ! The face a weight and a slant ask for, in the family chosen.
     pure elemental integer function text_face(weight, slant) result(face)
         integer, intent(in) :: weight, slant
         logical :: b, i
@@ -47,6 +65,7 @@ contains
         else
             face = FACE_REGULAR
         end if
+        face = family_face(cur_family, face)
     end function text_face
 
     ! A face of fplotlib_glyphs and a font size in points, finite and not

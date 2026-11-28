@@ -24,7 +24,7 @@ program dump_glyphs
             x0, y0, x1, y1
         write (*, "(a,*(1x,i0))") "V", v(1:nv)
         write (*, "(a,*(1x,es24.16))") "P", (x(i), y(i), i = 1, np)
-        if (glyph_face(g) /= FACE_MATH) cycle
+        if (face_style(glyph_face(g)) /= FACE_MATH) cycle
         write (*, "(a,i0,2(1x,es24.16),1x,l1,1x,i0,1x,i0,1x,i0)") "M ", g, &
             glyph_italic(g), glyph_top_accent(g), glyph_extended(g), &
             glyph_ssty(g, 1), glyph_ssty(g, 2), glyph_dotless(g)
@@ -52,5 +52,8 @@ program dump_glyphs
             if (k /= 0) write (*, "(a,i0,1x,i0,1x,es24.16)") "R ", g, g2, k
         end do
     end do
-    write (*, "(a,*(1x,es24.16))") "X", (math_const(i), i = 1, 56)
+    do f = 1, NFAMILY
+        write (*, "(a,i0,*(1x,es24.16))") "X ", f, &
+            (math_const(i, family_face(f, FACE_MATH)), i = 1, 56)
+    end do
 end program dump_glyphs

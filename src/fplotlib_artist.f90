@@ -12,8 +12,8 @@ module fplotlib_artist
     use fplotlib_raster, only: clip_to_box, clip_segment
     use fplotlib_state
     use fplotlib_mathtext
-    use fplotlib_text, only: text_face, text_layout, text_width, run_shift
-    use fplotlib_glyphs, only: face_ascent, face_descent, FACE_REGULAR
+    use fplotlib_text, only: text_face, text_layout, text_width, run_shift, font_family
+    use fplotlib_glyphs, only: face_ascent, face_descent, FACE_REGULAR, family_face
     implicit none
     public
     ! put_path's own bookkeeping.
@@ -1123,17 +1123,17 @@ contains
     end subroutine append_text
 
     ! The extent of a line of text above and below its baseline, in points:
-    ! the font's ascender and descender, which is what matplotlib sizes a
-    ! line of text by and aligns it with. A line is their sum, 1.2 ems in
-    ! Lato.
+    ! the ascender and descender of the regular face of the family text is
+    ! set in, which is what matplotlib sizes a line of text by and aligns
+    ! it with. A line is their sum, 1.2 ems in Lato.
     pure elemental real(dp) function text_ascent(size)
         real(dp), intent(in) :: size
-        text_ascent = face_ascent(FACE_REGULAR)*size
+        text_ascent = face_ascent(family_face(font_family(), FACE_REGULAR))*size
     end function text_ascent
 
     pure elemental real(dp) function text_descent(size)
         real(dp), intent(in) :: size
-        text_descent = -face_descent(FACE_REGULAR)*size
+        text_descent = -face_descent(family_face(font_family(), FACE_REGULAR))*size
     end function text_descent
 
     ! Where the baseline goes for text centred on y, below it: matplotlib's

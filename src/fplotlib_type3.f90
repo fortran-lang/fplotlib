@@ -114,6 +114,10 @@ contains
         case (2); name = "FplotlibSans-Bold"
         case (3); name = "FplotlibSans-Italic"
         case (FACE_MATH); name = "FplotlibMath"
+        case (6); name = "FplotlibSerif-Bold"
+        case (7); name = "FplotlibSerif-Italic"
+        case (8); name = "FplotlibSerifMath"
+        case (5); name = "FplotlibSerif-Regular"
         case default; name = "FplotlibSans-Regular"
         end select
         k = 0

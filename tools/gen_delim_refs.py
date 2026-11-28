@@ -1,4 +1,4 @@
-"""Regenerate tests/delim_refs.txt: how large Typst makes automatic delimiters.
+"""Regenerate tests/delim_refs*.txt: how large Typst makes automatic delimiters.
 
 fplotlib's matched delimiters grow to fit what they enclose, as Typst's
 do, and by Typst's rule: a delimiter covers its contents from the axis,
@@ -12,12 +12,14 @@ to compare with the delimiters fplotlib chooses. (The rest of the layout
 is TeX's, and is checked against XeTeX by tests/math_refs.txt.)
 
     pixi exec --spec typst --spec pdfminer.six --spec fonttools \\
-        --spec python=3.12 -- python tools/gen_delim_refs.py
+        --spec numpy --spec python=3.12 -- python tools/gen_delim_refs.py \\
+        [--family serif]
 
 The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
---fonts DIR), with Lete Sans Math cut down by reduced_math_font() to the
-script alternates and size variants fplotlib stores, so that Typst chooses
-among the same glyphs.
+--fonts DIR) of one family, Lato and Lete Sans Math (tests/delim_refs.txt)
+or with --family serif STIX Two (tests/delim_refs_serif.txt), the math
+font cut down by reduced_math_font() to the script alternates and size
+variants fplotlib stores, so that Typst chooses among the same glyphs.
 """
 
 import argparse
@@ -31,10 +33,14 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTChar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_glyphs import font_file, reduced_math_font  # noqa: E402
+from gen_glyphs import FAMILIES, font_file, reduced_math_font  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "tests" / "delim_refs.txt"
+OUT = {"sans-serif": ROOT / "tests" / "delim_refs.txt",
+       "serif": ROOT / "tests" / "delim_refs_serif.txt"}
+# The names Typst knows each family's text and math fonts by.
+FONT_NAMES = {"sans-serif": ("Lato", "Lete Sans Math"),
+              "serif": ("STIX Two Text", "STIX Two Math")}
 
 # Each formula as fplotlib is given it, and in Typst's syntax. Typst does
 # not pair | or ‖ by itself, so those pairs are written with lr(), and a
@@ -76,12 +82,21 @@ FORMULAS = [
     (r"$\displaystyle(\frac{\frac{a}{b}}{c})$", "display((frac(frac(a, b), c)))"),
 ]
 
+# Formulas left out of a family's references, and why. In STIX Two the
+# superscript of a text-style integral sits by TeX's baseline drop from
+# the integral's top, higher than Typst puts it, so the two enclose
+# contents of different heights (the layout is TeX's, and XeTeX's
+# agrees); and the nested display fraction is tall enough for an
+# assembly, which this comparison does not cover.
+SKIP = {"sans-serif": set(),
+        "serif": {r"$(\int_0^1 f\,dx)$", r"$\displaystyle(\frac{\frac{a}{b}}{c})$"}}
+
 # The delimiters, as the text Typst gives their glyphs.
 DELIMS = set("()[]{}|‖⟨⟩⌊⌋⌈⌉")
 
 PREAMBLE = """#set page(width: auto, height: auto, margin: 5pt)
-#set text(font: "Lato", size: 10pt)
-#show math.equation: set text(font: "Lete Sans Math")
+#set text(font: "TEXTFONT", size: 10pt)
+#show math.equation: set text(font: "MATHFONT")
 """
 
 
@@ -96,32 +111,39 @@ def walk(o, chars):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
+    ap.add_argument("--family", choices=list(OUT), default="sans-serif",
+                    help="the family to set the formulas in")
     args = ap.parse_args()
+    fam = next(f for f in FAMILIES if f.name == args.family)
+    out = OUT[fam.name]
+    tname, mname = FONT_NAMES[fam.name]
+    formulas = [f for f in FORMULAS if f[0] not in SKIP[fam.name]]
     with tempfile.TemporaryDirectory() as tmp:
-        # Typst gets Lete Sans Math cut down to what fplotlib stores of it.
+        # Typst gets the math font cut down to what fplotlib stores of it.
         fonts = Path(tmp) / "fonts"
         fonts.mkdir()
-        shutil.copy(font_file("Lato-Regular.ttf", args.fonts), fonts / "Lato-Regular.ttf")
-        reduced_math_font(font_file("LeteSansMath.otf", args.fonts)).save(
-            fonts / "LeteSansMath.otf")
+        regular = fam.text[0][0]
+        shutil.copy(font_file(regular, args.fonts), fonts / regular)
+        reduced_math_font(font_file(fam.math, args.fonts)).save(fonts / fam.math)
         typ = Path(tmp) / "refs.typ"
-        typ.write_text(PREAMBLE + "#pagebreak()\n".join(
-            "$%s$\n" % t for _, t in FORMULAS), encoding="utf-8")
+        pre = PREAMBLE.replace("TEXTFONT", tname).replace("MATHFONT", mname)
+        typ.write_text(pre + "#pagebreak()\n".join(
+            "$%s$\n" % t for _, t in formulas), encoding="utf-8")
         subprocess.run(["typst", "compile", "--font-path", str(fonts),
                         "--ignore-system-fonts", str(typ)], check=True)
         pages = list(extract_pages(str(Path(tmp) / "refs.pdf")))
 
-    if len(pages) != len(FORMULAS):
-        raise SystemExit(f"{len(pages)} pages for {len(FORMULAS)} formulas")
+    if len(pages) != len(formulas):
+        raise SystemExit(f"{len(pages)} pages for {len(formulas)} formulas")
     L = [
         "# The delimiters Typst sets in the formulas of tools/gen_delim_refs.py,",
-        "# with Lete Sans Math at 10 pt, from left to right.",
+        f"# with {mname} at 10 pt, from left to right.",
         "# Generated by tools/gen_delim_refs.py; do not edit.",
         "#",
         "# F formula",
         "# D code point, advance width",
     ]
-    for (formula, _), p in zip(FORMULAS, pages):
+    for (formula, _), p in zip(formulas, pages):
         chars = []
         walk(p, chars)
         L.append("F " + formula)
@@ -129,8 +151,8 @@ def main() -> None:
             t = c.get_text()
             if t in DELIMS:
                 L.append("D %d %.4f" % (ord(t), c.adv))
-    OUT.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
-    print(f"wrote {OUT}: {len(FORMULAS)} formulas")
+    out.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+    print(f"wrote {out}: {len(formulas)} formulas")
 
 
 if __name__ == "__main__":

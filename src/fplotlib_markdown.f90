@@ -1270,7 +1270,7 @@ contains
         type(md_heading_t) :: this
 
         text = trim(text0)
-        ex = face_xheight(FACE_REGULAR)*doc%BASE
+        ex = face_xheight(ts_face(doc%engine, FACE_REGULAR))*doc%BASE
         lv = level
         num = ""
         if (doc%CHAPTERS .and. level == 1) then
@@ -1334,7 +1334,7 @@ contains
         st%bold = .true.
         st%size = size
         hang = 0.0_dp
-        if (len(num) > 0) hang = text_width(num, FACE_BOLD, size) + size
+        if (len(num) > 0) hang = text_width(num, ts_face(doc%engine, FACE_BOLD), size) + size
         call ts_begin_par(doc%engine, ALIGN_JUSTIFY, 0.0_dp, left=ctx%left, right=ctx%right, &
                 size=size, &
                           leading=baseline, hang=hang, nobreak=.true.)
@@ -1622,7 +1622,7 @@ contains
         call ts_end_par(doc%engine)
         call ts_addvspace(doc%engine, scale(doc, ts_glue_t(10.0_dp, 3.0_dp, 5.0_dp, 0, 0)))
         call ts_set_parskip(doc%engine, ts_glue_t())
-        sp = text_width(" ", FACE_REGULAR, 0.9_dp*ctx%size)
+        sp = text_width(" ", ts_face(doc%engine, FACE_REGULAR), 0.9_dp*ctx%size)
         do k = 1, n
             s = L(k)%s
             call ts_begin_par(doc%engine, ALIGN_LEFT, 0.0_dp, left=ctx%left + 1.5_dp*doc%BASE, &
@@ -3648,7 +3648,7 @@ contains
                 case ("em")
                     length = size*x
                 case ("ex")
-                    length = face_xheight(FACE_REGULAR)*size*x
+                    length = face_xheight(ts_face(doc%engine, FACE_REGULAR))*size*x
                 case default
                     good = .false.
                 end select

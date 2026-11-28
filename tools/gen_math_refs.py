@@ -1,4 +1,4 @@
-"""Regenerate tests/math_refs.txt: how XeTeX lays out the test formulas.
+"""Regenerate tests/math_refs*.txt: how XeTeX lays out the test formulas.
 
 fplotlib's math layout is TeX's, driven by the MATH table of the same
 font, so XeTeX setting the same formulas with the same font files is the
@@ -9,12 +9,15 @@ read back from the PDF relative to that mark, and written out for
 tests/test_mathref.f90 to compare fplotlib's layout with.
 
     pixi exec --spec tectonic --spec pdfminer.six --spec fonttools \\
-        --spec python=3.12 -- python tools/gen_math_refs.py
+        --spec numpy --spec python=3.12 -- python tools/gen_math_refs.py \\
+        [--family serif]
 
 The fonts are the pinned files tools/gen_glyphs.py fetches (or reads from
---fonts DIR), with Lete Sans Math cut down by reduced_math_font() to the
-script alternates and size variants fplotlib stores, so that XeTeX chooses
-among the same glyphs.
+--fonts DIR) of one family: Lato and Lete Sans Math (tests/math_refs.txt),
+or with --family serif STIX Two Text and STIX Two Math
+(tests/math_refs_serif.txt). The math font is cut down by
+reduced_math_font() to the script alternates and size variants fplotlib
+stores, so that XeTeX chooses among the same glyphs.
 """
 
 import argparse
@@ -30,10 +33,17 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTChar, LTCurve, LTLine, LTRect
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_glyphs import font_file, reduced_math_font  # noqa: E402
+from gen_glyphs import FAMILIES, font_file, reduced_math_font  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "tests" / "math_refs.txt"
+OUT = {"sans-serif": ROOT / "tests" / "math_refs.txt",
+       "serif": ROOT / "tests" / "math_refs_serif.txt"}
+# How fontspec is to find each family's text font, and the features its
+# math font is set with (those tools/gen_glyphs.py bakes in).
+MAIN_FONT = {"sans-serif": "Lato", "serif": "STIXTwoText"}
+MATH_FEATURES = {"sans-serif": "CharacterVariant=11", "serif": ""}
+TEXT_NAME = {"sans-serif": "Lato and Lete Sans Math",
+             "serif": "STIX Two Text and STIX Two Math"}
 
 # The formulas, as fplotlib is given them. Each is set in text style, the
 # way an inline formula in a label is.
@@ -140,6 +150,9 @@ FORMULAS = [
     r"$x \in \mathbb{N},\ y \notin A$",
     r"$\textstyle \sum_i \scriptstyle x_i$",
     r"$\$5$",
+    # Math kerns at the corners of slanted capitals.
+    r"$V_k\,W_j\,Y^2\,\Gamma_1 + A_n$",
+    r"$\oint_C \mathbf{F}\cdot d\mathbf{r}$",
     # Alignments: LaTeX's array (matrices, cases) and amsmath's aligned
     # and gathered.
     r"$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$",
@@ -153,14 +166,22 @@ FORMULAS = [
     r"$\displaystyle \begin{gathered} x = y \\ x + 1 = y + 1 \end{gathered}$",
 ]
 
+# Formulas left out of a family's references, and why. Tectonic's XeTeX
+# never applies the top-right math kern of a nucleus that has both a
+# superscript and a subscript (it tests the subscript field for being
+# empty, inside the branch where it is not); STIX Two Math's T has one.
+# fplotlib applies it, as TeX Live's XeTeX does; T^2 alone checks it.
+SKIP = {"sans-serif": set(),
+        "serif": {r"$T^{2}_{n}$", r"$T^{2}_{1} x$"}}
+
 PREAMBLE = r"""\documentclass{article}
 \usepackage[paperwidth=300bp,paperheight=100bp,margin=20bp]{geometry}
 \usepackage{amsmath}
 \usepackage{fontspec}
 \usepackage{unicode-math}
-\setmainfont{Lato}[Path=FONTS/, Extension=.ttf, UprightFont=*-Regular,
+\setmainfont{MAINFONT}[Path=FONTS/, Extension=.ttf, UprightFont=*-Regular,
   ItalicFont=*-Italic, BoldFont=*-Bold]
-\setmathfont{LeteSansMath.otf}[Path=FONTS/, CharacterVariant=11]
+\setmathfont{MATHFONT}[Path=FONTS/MATHFEATURES]
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
 \makeatletter
@@ -220,32 +241,40 @@ def walk(o, chars, rules):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--fonts", help="the directory holding the pinned font files")
+    ap.add_argument("--family", choices=list(OUT), default="sans-serif",
+                    help="the family to set the formulas in")
     args = ap.parse_args()
+    fam = next(f for f in FAMILIES if f.name == args.family)
+    out = OUT[fam.name]
+    formulas = [f for f in FORMULAS if f not in SKIP[fam.name]]
     with tempfile.TemporaryDirectory() as tmp:
-        # XeTeX gets Lete Sans Math cut down to what fplotlib stores of it.
+        # XeTeX gets the math font cut down to what fplotlib stores of it.
         fonts = Path(tmp) / "fonts"
         fonts.mkdir()
-        for f in ("Lato-Regular.ttf", "Lato-Italic.ttf", "Lato-Bold.ttf"):
+        for f, _ in fam.text:
             shutil.copy(font_file(f, args.fonts), fonts / f)
-        reduced_math_font(font_file("LeteSansMath.otf", args.fonts)).save(
-            fonts / "LeteSansMath.otf")
+        reduced_math_font(font_file(fam.math, args.fonts)).save(fonts / fam.math)
         tex = Path(tmp) / "refs.tex"
-        mc = TTFont(fonts / "LeteSansMath.otf")["MATH"].table.MathConstants
+        mc = TTFont(fonts / fam.math)["MATH"].table.MathConstants
+        feats = MATH_FEATURES[fam.name]
         pre = (PREAMBLE.replace("FONTS", str(fonts))
+               .replace("MAINFONT", MAIN_FONT[fam.name])
+               .replace("MATHFONT", fam.math)
+               .replace("MATHFEATURES", ", " + feats if feats else "")
                .replace("SCRIPTSCRIPT", "%02d" % mc.ScriptScriptPercentScaleDown)
                .replace("SCRIPT", "%02d" % mc.ScriptPercentScaleDown)
                .replace("SPACEAFTER", "%g" % (mc.SpaceAfterScript.Value / 100)))
         tex.write_text(pre
-                       + "".join(page(f) for f in FORMULAS) + r"\end{document}" "\n",
+                       + "".join(page(f) for f in formulas) + r"\end{document}" "\n",
                        encoding="utf-8")
         subprocess.run(["tectonic", "--chatter", "minimal", str(tex)], check=True)
         pages = list(extract_pages(str(Path(tmp) / "refs.pdf")))
 
-    if len(pages) != len(FORMULAS):
-        raise SystemExit(f"{len(pages)} pages for {len(FORMULAS)} formulas")
+    if len(pages) != len(formulas):
+        raise SystemExit(f"{len(pages)} pages for {len(formulas)} formulas")
     L = [
         "# How XeTeX (Tectonic, unicode-math) lays out the formulas of",
-        "# tools/gen_math_refs.py with Lato and Lete Sans Math at 10 bp.",
+        f"# tools/gen_math_refs.py with {TEXT_NAME[fam.name]} at 10 bp.",
         "# Generated by tools/gen_math_refs.py; do not edit.",
         "#",
         "# F formula",
@@ -253,7 +282,7 @@ def main() -> None:
         "# R x0, y0, x1, y1: a rule's box",
         "# All relative to where the formula starts on its baseline.",
     ]
-    for formula, p in zip(FORMULAS, pages):
+    for formula, p in zip(formulas, pages):
         chars, rules = [], []
         walk(p, chars, rules)
         # The mark is the first rule drawn, and the only one this small.
@@ -283,8 +312,8 @@ def main() -> None:
                 y0 -= lw / 2
                 y1 += lw / 2
             L.append("R %.4f %.4f %.4f %.4f" % (x0 - ox, y0 - oy, x1 - ox, y1 - oy))
-    OUT.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
-    print(f"wrote {OUT}: {len(FORMULAS)} formulas")
+    out.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+    print(f"wrote {out}: {len(formulas)} formulas")
 
 
 if __name__ == "__main__":
