@@ -32,16 +32,17 @@ module fplotlib_typeset
     use fplotlib_style, only: dp
     use fplotlib_render, only: renderer_t, paint_t, glyphrun_t, clip_t
     use fplotlib_scene, only: frame_t
-    use fplotlib_text, only: code_points, run_add
+    use fplotlib_text, only: code_points, run_add, font_family
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_kern, glyph_bbox, &
                                face_xheight, FACE_REGULAR, FACE_BOLD, FACE_ITALIC, &
-                               FACE_MATH
+                               FACE_MATH, FAMILY_SANS, family_face, face_family, &
+                               face_style
     use fplotlib_hyph, only: hyph_points
     use fplotlib_mathtext, only: math_formula, mrules_t
     implicit none
     private
 
-    public :: ts_reset, ts_set_page, ts_set_font
+    public :: ts_reset, ts_set_page, ts_set_font, ts_set_family, ts_face
     public :: typeset_context_t
     public :: ts_begin_par, ts_end_par, ts_word, ts_space, ts_math, ts_hard_break
     public :: ts_hfil, ts_kern, ts_nbsp, ts_label, ts_in_par
@@ -87,6 +88,9 @@ module fplotlib_typeset
 
     type :: typeset_context_t
         private
+        ! The font family the document is set in; a face handed in is
+        ! taken as a style (regular, bold, italic) of this family.
+        integer :: FAMILY = FAMILY_SANS
         integer :: CLUB_PENALTY = 150
         ! Horizontal list of the paragraph being built.
         integer :: HN = 0
@@ -169,6 +173,8 @@ contains
         ts%NOBREAK_NEXT = .false.
         ts%CLUB_PENALTY = 150
         ts%MARKS = ""
+        ! A document is set in the family text is set in when it starts.
+        ts%FAMILY = font_family()
         call ts_set_page(ts, 595.2756_dp, 841.8898_dp, 72.0_dp, 72.0_dp, 72.0_dp, 72.0_dp)
         call ts_set_font(ts, 10.0_dp)
         ts%PAGE_NUMBERS = .true.
@@ -177,6 +183,20 @@ contains
         ts%TEXT_COLOR = 0
         ts%PAGE_COLOR = 16777215
     end subroutine ts_reset
+
+    ! Set the document in a family (fplotlib_glyphs' FAMILY_*).
+    subroutine ts_set_family(ts, family)
+        type(typeset_context_t), intent(inout) :: ts
+        integer, intent(in) :: family
+        ts%FAMILY = family
+    end subroutine ts_set_family
+
+    ! The face of the document's family that has the style of face.
+    pure elemental integer function ts_face(ts, face) result(f)
+        type(typeset_context_t), intent(in) :: ts
+        integer, intent(in) :: face
+        f = family_face(ts%FAMILY, face_style(face))
+    end function ts_face
 
     ! The colours of the text and of the page, as 0xRRGGBB.
     subroutine ts_set_colors(ts, text, page)
@@ -319,16 +339,17 @@ contains
     ! Words: s is one word or a piece of one (no spaces), in face at size.
     ! Explicit hyphens in it are places it may break, as TeX's
     ! \exhyphenpenalty allows.
-    subroutine ts_word(ts, s, face, size, color, raise)
+    subroutine ts_word(ts, s, face0, size, color, raise)
         type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: s
-        integer, intent(in) :: face
+        integer, intent(in) :: face0
         real(dp), intent(in) :: size
         integer, intent(in), optional :: color
         real(dp), intent(in), optional :: raise
         integer, allocatable :: cps(:)
-        integer :: n, k, k0, col
+        integer :: n, k, k0, col, face
         real(dp) :: up
+        face = ts_face(ts, face0)
         if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
         col = ts%TEXT_COLOR
         if (present(color)) col = color
@@ -410,18 +431,19 @@ contains
     end subroutine space_factor
 
     ! The glyph a code point is set as in a face: the face's own, else
-    ! the regular face's, else the math font's, else a space.
+    ! the regular face's of its family, else the family's math font's,
+    ! else a space.
     integer function glyph_for(face, cp, gf) result(g)
         integer, intent(in) :: face, cp
         integer, intent(out) :: gf
         gf = face
         g = glyph_cmap(face, cp)
         if (g /= 0) return
-        gf = FACE_REGULAR
-        g = glyph_cmap(FACE_REGULAR, cp)
+        gf = family_face(face_family(face), FACE_REGULAR)
+        g = glyph_cmap(gf, cp)
         if (g /= 0) return
-        gf = FACE_MATH
-        g = glyph_cmap(FACE_MATH, cp)
+        gf = family_face(face_family(face), FACE_MATH)
+        g = glyph_cmap(gf, cp)
         if (g /= 0) return
         gf = face
         g = glyph_cmap(face, 32)
@@ -462,12 +484,13 @@ contains
     ! The space between words, in face at size: XeTeX's glue for an
     ! OpenType font, the width of the space with half of it to stretch and
     ! a third to shrink, adjusted by the space factor.
-    subroutine ts_space(ts, face, size)
+    subroutine ts_space(ts, face0, size)
         type(typeset_context_t), intent(inout) :: ts
-        integer, intent(in) :: face
+        integer, intent(in) :: face0
         real(dp), intent(in) :: size
         real(dp) :: sp
-        integer :: gf
+        integer :: gf, face
+        face = ts_face(ts, face0)
         if (.not. ts%IN_PAR) return
         if (ts%HN == 0) return
         if (ts%HK(ts%HN) == HK_GLUE) return
@@ -543,7 +566,8 @@ contains
             end if
         end if
         if (.not. ts%IN_PAR) call ts_begin_par(ts, ALIGN_JUSTIFY, 0.0_dp)
-        call math_formula(src, size, .false., run, rules, w, h, d)
+        call math_formula(src, size, .false., run, rules, w, h, d, &
+                          face=ts_face(ts, FACE_REGULAR))
         if (present(ok)) ok = math_ok(src, run%n, rules%n, w, h, d)
         call h_new(ts, HK_BOX)
         ts%HW(ts%HN) = w
@@ -589,17 +613,18 @@ contains
     ! A label hung to the left of the paragraph's first line, ending sep
     ! before the text, as a LaTeX \item puts it; a penalty of 0 follows,
     ! as there.
-    subroutine ts_label(ts, s, face, size, sep, color)
+    subroutine ts_label(ts, s, face0, size, sep, color)
         type(typeset_context_t), intent(inout) :: ts
         character(len=*), intent(in) :: s
-        integer, intent(in) :: face
+        integer, intent(in) :: face0
         real(dp), intent(in) :: size, sep
         integer, intent(in), optional :: color
         type(glyphrun_t) :: run
         type(mrules_t) :: rules
         integer, allocatable :: cps(:)
-        integer :: n, k, g, gf, prev, pf, col
+        integer :: n, k, g, gf, prev, pf, col, face
         real(dp) :: pen, w
+        face = ts_face(ts, face0)
         col = ts%TEXT_COLOR
         if (present(color)) col = color
         call code_points(s, cps, n)
@@ -1685,7 +1710,8 @@ contains
         end if
         ts%IN_PAR = .false.
 
-        call math_formula(src, size, .true., run, rules, w, h, d)
+        call math_formula(src, size, .true., run, rules, w, h, d, &
+                          face=ts_face(ts, FACE_REGULAR))
         if (present(ok)) ok = math_ok(src, run%n, rules%n, w, h, d)
         z = ts%HSIZE - lft - rgt
         s = lft
@@ -1696,8 +1722,8 @@ contains
             tw = 0.0_dp
             prev = 0
             do i0 = 1, k
-                g = glyph_for(FACE_REGULAR, cps(i0), gf)
-                if (prev > 0) tw = tw + glyph_kern(FACE_REGULAR, prev, g)*size
+                g = glyph_for(ts_face(ts, FACE_REGULAR), cps(i0), gf)
+                if (prev > 0) tw = tw + glyph_kern(gf, prev, g)*size
                 call run_add(trun, g, tw, 0.0_dp, size)
                 tw = tw + glyph_adv(g)*size
                 prev = g
@@ -2356,25 +2382,25 @@ contains
         end do
         if (ts%PAGE_NUMBERS .and. (.not. ts%HEADINGS .or. ts%PGPLAIN(p))) then
             write (num, "(I0)") p
-            call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, &
+            call draw_string(ts, r, trim(num), ts_face(ts, FACE_REGULAR), ts%FONT_SIZE, &
                              ts%MARGIN_L + 0.5_dp*ts%HSIZE, ts%MARGIN_T + ts%VSIZE + ts%FOOTSKIP, 1)
         else if (ts%HEADINGS) then
             write (num, "(I0)") p
             ! LaTeX's headings: the number at the outer edge, the head in
             ! slanted capitals at the inner one; here, italic.
             if (mod(p, 2) == 0) then
-                call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, ts%MARGIN_L, &
+                call draw_string(ts, r, trim(num), ts_face(ts, FACE_REGULAR), ts%FONT_SIZE, ts%MARGIN_L, &
                                  ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 0)
                 if (ts%PGHEAD1(p) >= ts%PGHEAD0(p)) &
-                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), FACE_ITALIC, &
+                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), ts_face(ts, FACE_ITALIC), &
                                      ts%FONT_SIZE, ts%MARGIN_L + ts%HSIZE, &
                                      ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 2)
             else
-                call draw_string(ts, r, trim(num), FACE_REGULAR, ts%FONT_SIZE, &
+                call draw_string(ts, r, trim(num), ts_face(ts, FACE_REGULAR), ts%FONT_SIZE, &
                         ts%MARGIN_L + ts%HSIZE, &
                                  ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 2)
                 if (ts%PGHEAD1(p) >= ts%PGHEAD0(p)) &
-                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), FACE_ITALIC, &
+                    call draw_string(ts, r, ts%MARKS(ts%PGHEAD0(p):ts%PGHEAD1(p)), ts_face(ts, FACE_ITALIC), &
                                      ts%FONT_SIZE, ts%MARGIN_L, &
                                              ts%MARGIN_T - 2.5_dp*ts%FONT_SIZE, 0)
             end if
@@ -2527,7 +2553,7 @@ contains
         type(typeset_context_t), intent(inout) :: ts
         integer, intent(in) :: i
         ts%HK(i) = 0
-        ts%HFACE(i) = FACE_REGULAR
+        ts%HFACE(i) = ts_face(ts, FACE_REGULAR)
         ts%HCOL(i) = ts%TEXT_COLOR
         ts%HC0(i) = 1
         ts%HC1(i) = 0

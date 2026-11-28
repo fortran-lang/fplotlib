@@ -2,8 +2,12 @@
 
 Every backend draws text from outlines compiled into the library, so the
 outlines, metrics and kerning of the fonts fplotlib uses have to be part of
-it. Text is set in Lato (regular, bold, italic) and math in
-Lete Sans Math, whose OpenType MATH table drives the math layout.
+it. There are two families, each a text font in three faces (regular,
+bold, italic) and the math font drawn to go with it, whose OpenType MATH
+table drives the math layout:
+
+  * sans-serif, the default: Lato, with Lete Sans Math;
+  * serif: STIX Two Text, with STIX Two Math.
 
 The fonts are pinned to exact commits and checked against their SHA-256
 hashes. They are downloaded into a cache directory, or read from a
@@ -76,6 +80,9 @@ LATO_URL = ("https://raw.githubusercontent.com/google/fonts/"
             "15e8fc68b03a0214ace8b52ca0153e1b597345ec/ofl/lato/")
 LETE_URL = ("https://raw.githubusercontent.com/abccsss/LeteSansMath/"
             "5672e4573903c5658fb74d96b4282bfb4ed2404f/")
+# STIX Two 2.13 b171, the latest release.
+STIX_URL = ("https://raw.githubusercontent.com/stipub/stixfonts/"
+            "744a22a4dd626cd14d75728aef34fc8ad7c85db0/")
 
 # The pinned files: where each comes from and the hash it must have.
 SOURCES = {
@@ -86,29 +93,76 @@ SOURCES = {
     "OFL.txt": (LATO_URL, "74ba064d03f1f1c4a952da936c3eb71866c34404916734de3cae73b34357e59e"),
     "LeteSansMath.otf": (LETE_URL, "8e6f7468e12c19668943e71353f8ae0769682547146f11f3471da6f5f9db68b6"),
     "LICENSE.txt": (LETE_URL, "9fe21cbbea717de5a24d757c1564e1f2fde6d8d8cbd975a4f327886b68ed5895"),
+    # The text faces are the TrueType builds, whose accented letters are
+    # composites, the math font the CFF build, as Lete is.
+    "STIXTwoText-Regular.ttf": (STIX_URL + "fonts/static_ttf/",
+                                "0566a1be411c0b2463fad8563b33f1c299442b8882c7fce9ef95e079f43233da"),
+    "STIXTwoText-Bold.ttf": (STIX_URL + "fonts/static_ttf/",
+                             "89adbb9907c40465e061f084598dbebd5a802e30c6e2d38612205b9c87281cae"),
+    "STIXTwoText-Italic.ttf": (STIX_URL + "fonts/static_ttf/",
+                               "5a0ed1c0c1d3d4f83f2d00bcd4a0a991a7b0755beacee0a57b26762327a84c22"),
+    "STIXTwoMath-Regular.otf": (STIX_URL + "fonts/static_otf/",
+                                "3a5f3f26f40d5698b3c62dd085d48d6663696a3f80825aab8b553d5097518e8c"),
+    "STIX-OFL.txt": (STIX_URL, "0c8825913b60d858aacdb33c4ca6660a7d64b0d6464702efbb19313f5765861a"),
 }
+# A file cached under another name than the one it is fetched by.
+REMOTE_NAME = {"STIX-OFL.txt": "OFL.txt"}
 
-# The faces, in the order the library numbers them: regular, bold, italic.
-# Each predicts its advance widths from the face named, which is the same
-# letter drawn another way and usually of a similar width. Bold italic is
-# left out: a label asking for it is set in bold.
-TEXT_FACES = [
-    ("Lato-Regular.ttf", None),
-    ("Lato-Bold.ttf", 0),
-    ("Lato-Italic.ttf", 0),
-]
-# The math face comes after them.
-MATH_FACE = "LeteSansMath.otf"
+class Family:
+    """One family: its text faces and its math face, and how it is stored.
+
+    The faces are numbered family by family, the text faces in the order
+    regular, bold, italic and the math face after them, so that family k
+    (from 0) has faces 4k + 1 to 4k + 4 in the library. Each text face
+    predicts its advance widths from the face named (an index within the
+    family), which is the same letter drawn another way and usually of a
+    similar width. Bold italic is left out: a label asking for it is set
+    in bold.
+
+    kern_shared names, for a face, the face whose kerning it uses as its
+    own, and kern_pred the face its values are stored as differences from;
+    both rely on the glyphs of the faces lining up, a letter at the same
+    index in each. refit stores TrueType outlines as cubics (see
+    LATO_OSCALE). math_cv are GSUB features of the math font baked into
+    its cmap. A code point a text face has no glyph for is drawn with the
+    math face's glyph when math_fallback is set, and is an error otherwise.
+    """
+
+    def __init__(self, name, text, math, kern_shared, kern_pred, refit, math_cv,
+                 math_fallback, licences):
+        self.name = name
+        self.text = text
+        self.math = math
+        self.kern_shared = kern_shared
+        self.kern_pred = kern_pred
+        self.refit = refit
+        self.math_cv = math_cv
+        self.math_fallback = math_fallback
+        self.licences = licences
+
 
 # Kerning is stored in steps of KERN_STEP font units (2.5 units, 0.00125
-# em, at most off). Bold kerns exactly the pairs Regular does, by a median
-# of 3 units more or less, so it uses Regular's kerning (KERN_SHARED); and
+# em, at most off). Lato Bold kerns exactly the pairs Regular does, by a
+# median of 3 units more or less, so it uses Regular's kerning; and
 # Italic's values are stored as the difference from Regular's value for
-# the same pair (KERN_PREDICTED). The glyphs of the three faces line up,
-# a letter at the same index in each, which both rely on.
+# the same pair. STIX Two's faces kern pairs of their own, and store
+# theirs as differences from Regular's.
 KERN_STEP = 5
-KERN_SHARED = {1: 0}
-KERN_PREDICTED = {2: 0}
+
+FAMILIES = [
+    Family("sans-serif",
+           [("Lato-Regular.ttf", None), ("Lato-Bold.ttf", 0), ("Lato-Italic.ttf", 0)],
+           "LeteSansMath.otf", kern_shared={1: 0}, kern_pred={2: 0}, refit=True,
+           # cv11 is the single-story g that matches Lato's italic.
+           math_cv=["cv11"], math_fallback=False,
+           licences=["OFL.txt", "LICENSE.txt"]),
+    Family("serif",
+           [("STIXTwoText-Regular.ttf", None), ("STIXTwoText-Bold.ttf", 0),
+            ("STIXTwoText-Italic.ttf", 0)],
+           "STIXTwoMath-Regular.otf", kern_shared={}, kern_pred={1: 0, 2: 0},
+           refit=False, math_cv=[], math_fallback=True,
+           licences=["STIX-OFL.txt"]),
+]
 
 # Lato's outlines are stored as cubics on a grid of LATO_OSCALE font units
 # (1000 to the em instead of 2000). Lete Sans Math draws its upright, bold
@@ -265,14 +319,15 @@ VERB_MOVE, VERB_LINE, VERB_CUBIC, VERB_CLOSE = 1, 2, 3, 4
 def font_file(name, fontdir):
     """The path of a pinned file, fetched into the cache if need be."""
     url, digest = SOURCES[name]
+    remote = REMOTE_NAME.get(name, name)
     if fontdir is not None:
         path = Path(fontdir) / name
     else:
         path = CACHE / name
         if not path.exists():
             CACHE.mkdir(parents=True, exist_ok=True)
-            print(f"downloading {url}{name}")
-            with urllib.request.urlopen(url + name) as r:
+            print(f"downloading {url}{remote}")
+            with urllib.request.urlopen(url + remote) as r:
                 data = r.read()
             path.write_bytes(data)
     got = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -460,7 +515,10 @@ def pair_kerning(font, names):
     return {k: v for k, v in total.items() if v}
 
 
-def load_text_face(path, pred):
+def load_text_face(path, pred, missing_ok=False):
+    """A TrueType text face. The code points of the repertoire it has no
+    glyph for are an error, or, with missing_ok, are left in face.missing
+    for add_math_fallback to draw."""
     font = TTFont(path)
     cmap = font.getBestCmap()
     glyf = font["glyf"]
@@ -468,10 +526,14 @@ def load_text_face(path, pred):
     glyphset = font.getGlyphSet()
     face = Face(path.stem)
     face.pred = pred
+    face.missing = []
 
     for cp in sorted(TEXT_REPERTOIRE | set(TEXT_FALLBACK)):
         src = TEXT_FALLBACK.get(cp, cp)
         if src not in cmap:
+            if missing_ok:
+                face.missing.append(cp)
+                continue
             raise SystemExit(f"{path.name} has no glyph for U+{src:04X}")
         face.cmap[cp] = cmap[src]
 
@@ -537,14 +599,17 @@ def gsub_single(font, tag):
     return out
 
 
-def load_math_face(path):
-    """Lete Sans Math: its outlines (CFF, so cubic) and its MATH table.
+def load_math_face(path, cv=None):
+    """A math font: its outlines (CFF, so cubic) and its MATH table.
 
-    Three GSUB features are baked in: cv11, the single-story g that
-    matches Lato's italic, goes straight into the cmap; ssty, the script
-    and scriptscript alternates, becomes a table the layout picks from by
+    GSUB features are baked in: those cv names (by default the family's
+    math_cv; for Lete Sans Math cv11, the single-story g that matches
+    Lato's italic) go straight into the cmap; ssty, the script and
+    scriptscript alternates, becomes a table the layout picks from by
     style; dtls, the dotless forms under an accent, becomes another.
     """
+    if cv is None:
+        cv = next(f.math_cv for f in FAMILIES if f.math == path.name)
     font = TTFont(path)
     cmap = font.getBestCmap()
     hmtx = font["hmtx"]
@@ -554,14 +619,17 @@ def load_math_face(path):
     face.cubic = True
     face.pred = None
 
-    cv11 = gsub_single(font, "cv11")
+    cvs = [gsub_single(font, tag) for tag in cv]
     ssty = gsub_single(font, "ssty")
     dtls = gsub_single(font, "dtls")
 
     missing = []
     for cp in sorted(MATH_REPERTOIRE):
         if cp in cmap:
-            face.cmap[cp] = cv11.get(cmap[cp], cmap[cp])
+            name = cmap[cp]
+            for sub in cvs:
+                name = sub.get(name, name)
+            face.cmap[cp] = name
         elif unicodedata.category(chr(cp)) != "Cn":
             # The holes in the math alphabets, whose letters live in the
             # Letterlike Symbols block, are not characters at all.
@@ -688,7 +756,7 @@ def load_math_face(path):
 
 
 def reduced_math_font(path):
-    """Lete Sans Math cut down to what fplotlib stores of it.
+    """A math font cut down to what fplotlib stores of it.
 
     The ssty substitutions are those of the glyphs that keep a script
     alternate, with that alternate for both script levels, and the
@@ -905,6 +973,22 @@ def resolved(face, g, faces=None):
     return out
 
 
+def resolved_path(face, g, faces):
+    """(verbs, points) of a glyph with its components in place, each
+    walked as its own face stores it, cubic or quadratic, the way
+    fplotlib_glyphs does."""
+    if g.comps is None:
+        return contours_to_path(g.contours, face.cubic)
+    verbs, pts = [], []
+    for name, dx, dy, src in g.comps:
+        f = face if src is None else faces[src]
+        k = face.em / f.em
+        v, q = resolved_path(f, f.glyphs[f.index[name]], faces)
+        verbs += v
+        pts += [(x * k + dx, y * k + dy) for x, y in q]
+    return verbs, pts
+
+
 def path_polylines(verbs, pts, n=40):
     """A path as one polyline per contour, each cubic cut into n chords."""
     out, poly, cur, start, i = [], [], None, None, 0
@@ -953,7 +1037,8 @@ def deviation(a, b):
 
 
 def math_counterparts(fi, cp, mface):
-    """The Lete glyphs that may draw text face fi's glyph for cp."""
+    """The Lete glyphs that may draw the glyph for cp of text face fi
+    (0 regular, 1 bold, 2 italic)."""
     m = mface.cmap
     out = [m.get(cp)]
     ch = chr(cp)
@@ -1015,12 +1100,14 @@ def refit_contours(glyphset, name, grid):
     return contours
 
 
-def refit_text_faces(faces, glyphsets):
-    """Lato's outlines as Lete's or refitted with cubics; see LATO_OSCALE."""
-    mi = len(faces) - 1
+def refit_text_faces(faces, glyphsets, mi):
+    """Lato's outlines as Lete's or refitted with cubics; see LATO_OSCALE.
+
+    faces[mi] is the math face, and the text faces of its family are the
+    three before it; glyphsets are theirs, in the same order."""
     mf = faces[mi]
     aliased = refitted = 0
-    for fi, (face, gs) in enumerate(zip(faces[:mi], glyphsets[:mi])):
+    for fi, (face, gs) in enumerate(zip(faces[mi - 3:mi], glyphsets)):
         face.cubic = True
         face.oscale = LATO_OSCALE
         face.xref = mi
@@ -1038,7 +1125,8 @@ def refit_text_faces(faces, glyphsets):
                 continue
             want = pen_path(gs, g.name)
             best = None
-            for mn in (math_counterparts(fi, names[g.name], mf) if g.name in names else []):
+            for mn in (math_counterparts(fi, names[g.name], mf)
+                       if g.name in names else []):
                 mg = mf.glyphs[mf.index[mn]]
                 v, pts = contours_to_path(mg.contours, True)
                 guess = round(g.bbox[0] / k - mg.bbox[0])
@@ -1060,6 +1148,34 @@ def refit_text_faces(faces, glyphsets):
             g.contours = new
             refitted += 1
     print(f"Lato: {aliased} glyphs drawn as Lete's, {refitted} refitted with cubics")
+
+
+def add_math_fallback(faces, mi):
+    """Draw the code points the text faces of a family have no glyph for
+    with the glyph of its math face, faces[mi]: each becomes a composite
+    of that one glyph, at its advance. The math repertoire has every one
+    of them (STIX Two Text has no arrows, and no \u2202 \u220f \u2211
+    \u221a \u221e \u2248 \u2260 \u2264 \u2265)."""
+    mf = faces[mi]
+    for face in faces[mi - 3:mi]:
+        if not face.missing:
+            continue
+        if face.em != mf.em:
+            raise SystemExit(f"{face.tag}: units per em differ from {mf.tag}'s")
+        face.xref = mi
+        for cp in face.missing:
+            src = TEXT_FALLBACK.get(cp, cp)
+            if src not in mf.cmap:
+                raise SystemExit(f"neither {face.tag} nor {mf.tag} has U+{src:04X}")
+            m = mf.glyphs[mf.index[mf.cmap[src]]]
+            g = Glyph(f"math.uni{src:04X}")
+            g.adv = m.adv
+            g.comps = [(m.name, 0, 0, mi)]
+            g.bbox, g.ink = m.bbox, m.ink
+            if g.name not in face.index:
+                face.add(g)
+            face.cmap[cp] = g.name
+        print(f"{face.tag}: {len(face.missing)} code points drawn with {mf.tag}'s glyphs")
 
 
 # --- the bit stream ---------------------------------------------------
@@ -1940,7 +2056,7 @@ def expectation(faces):
     for fi, f in enumerate(faces):
         e = f.em
         for g in f.glyphs:
-            v, pts = contours_to_path(resolved(f, g, faces), f.cubic)
+            v, pts = resolved_path(f, g, faces)
             out["glyphs"].append({
                 "face": fi + 1, "adv": g.adv / e,
                 "bbox": [c / e for c in (g.bbox if g.ink else (0, 0, 0, 0))],
@@ -1952,33 +2068,35 @@ def expectation(faces):
             ia, ib = src.index[a], src.index[b]
             out["kern"].append([base[fi] + ia + 1, base[fi] + ib + 1,
                                 v * KERN_STEP / e])
-    mi = next(i for i, f in enumerate(faces) if f.math is not None)
-    mf = faces[mi]
-    m = mf.math
+    out["em"], out["constants"] = [], []
+    for mi, mf in enumerate(faces):
+        if mf.math is None:
+            continue
+        m = mf.math
 
-    def gid(n):
-        return base[mi] + mf.index[n] + 1
-    for g in mf.glyphs:
-        n = g.name
-        d = {"italic": m["italic"].get(n, 0) / mf.em,
-             "accent": m["accent"].get(n, g.adv // 2) / mf.em,
-             "ext": n in m["extended"],
-             "ssty": gid(m["ssty"][n]) if n in m["ssty"] else gid(n),
-             "dtls": gid(m["dtls"][n]) if n in m["dtls"] else gid(n),
-             "kern": m["kern"].get(n), "cons": []}
-        for key in ("vert", "horiz"):
-            if n in m[key]:
-                var, asm = m[key][n]
-                d["cons"].append([[[gid(vn), a / mf.em] for vn, a in var],
-                                  None if asm is None else
-                                  [asm[0] / mf.em, [[gid(p[0]), p[1] / mf.em, p[2] / mf.em,
-                                                     p[3] / mf.em, bool(p[4])]
-                                                    for p in asm[1]]]])
-            else:
-                d["cons"].append([[], None])
-        out["math"][gid(n)] = d
-    out["em"] = mf.em
-    out["constants"] = [c / mf.em for c in m["constants"]]
+        def gid(n):
+            return base[mi] + mf.index[n] + 1
+        for g in mf.glyphs:
+            n = g.name
+            d = {"italic": m["italic"].get(n, 0) / mf.em,
+                 "accent": m["accent"].get(n, g.adv // 2) / mf.em,
+                 "ext": n in m["extended"],
+                 "ssty": gid(m["ssty"][n]) if n in m["ssty"] else gid(n),
+                 "dtls": gid(m["dtls"][n]) if n in m["dtls"] else gid(n),
+                 "kern": m["kern"].get(n), "em": mf.em, "cons": []}
+            for key in ("vert", "horiz"):
+                if n in m[key]:
+                    var, asm = m[key][n]
+                    d["cons"].append([[[gid(vn), a / mf.em] for vn, a in var],
+                                      None if asm is None else
+                                      [asm[0] / mf.em,
+                                       [[gid(p[0]), p[1] / mf.em, p[2] / mf.em,
+                                         p[3] / mf.em, bool(p[4])] for p in asm[1]]]])
+                else:
+                    d["cons"].append([[], None])
+            out["math"][gid(n)] = d
+        out["em"].append(mf.em)
+        out["constants"].append([c / mf.em for c in m["constants"]])
     return out
 
 
@@ -1991,36 +2109,48 @@ def main() -> None:
     args = ap.parse_args()
 
     faces = []
-    loaded = [load_text_face(font_file(f, args.fonts), pred) + (f,)
-              for f, pred in TEXT_FACES]
-    loaded.append(load_math_face(font_file(MATH_FACE, args.fonts)) + (MATH_FACE,))
-    for face, font, glyphset, fname in loaded:
-        # The stored outline has to draw what the font's own pen draws.
-        for g in face.glyphs:
-            want = pen_path(glyphset, g.name)
-            got = contours_to_path(resolved(face, g), face.cubic)
-            if not same_shape(got, want):
-                raise SystemExit(f"{fname} {g.name}: outline walk disagrees")
-        faces.append(face)
-    font_file("OFL.txt", args.fonts)
-    font_file("LICENSE.txt", args.fonts)
-    mface = faces[-1]
-    refit_text_faces(faces, [gs for _, _, gs, _ in loaded])
-    mface.resid = True
-    plan_residuals(mface)
-    for fi, src in KERN_SHARED.items():
-        faces[fi].kern_from = src
-        if set(faces[fi].kern) != set(faces[src].kern):
-            raise SystemExit(f"{faces[fi].tag} does not kern the pairs {faces[src].tag} does")
-    for fi, src in KERN_PREDICTED.items():
-        faces[fi].kern_pred = src
-    for fi in list(KERN_SHARED) + list(KERN_PREDICTED):
-        src = faces[KERN_SHARED.get(fi, KERN_PREDICTED.get(fi))]
-        for a, b in faces[fi].kern:
-            for n in (a, b):
-                k = faces[fi].index[n]
-                if k >= len(src.glyphs) or src.glyphs[k].name != n:
-                    raise SystemExit(f"{faces[fi].tag} {n} is not where {src.tag} has it")
+    mfaces = []
+    for fam in FAMILIES:
+        b = len(faces)
+        loaded = [load_text_face(font_file(f, args.fonts),
+                                 None if pred is None else b + pred,
+                                 fam.math_fallback) + (f,)
+                  for f, pred in fam.text]
+        loaded.append(load_math_face(font_file(fam.math, args.fonts), fam.math_cv)
+                      + (fam.math,))
+        for face, font, glyphset, fname in loaded:
+            # The stored outline has to draw what the font's own pen draws.
+            for g in face.glyphs:
+                want = pen_path(glyphset, g.name)
+                got = contours_to_path(resolved(face, g), face.cubic)
+                if not same_shape(got, want):
+                    raise SystemExit(f"{fname} {g.name}: outline walk disagrees")
+            faces.append(face)
+        for lic in fam.licences:
+            font_file(lic, args.fonts)
+        mi = len(faces) - 1
+        mfaces.append(faces[mi])
+        if fam.refit:
+            refit_text_faces(faces, [gs for _, _, gs, _ in loaded[:3]], mi)
+        if fam.math_fallback:
+            add_math_fallback(faces, mi)
+        faces[mi].resid = True
+        plan_residuals(faces[mi])
+        for fi, src in fam.kern_shared.items():
+            faces[b + fi].kern_from = b + src
+            if set(faces[b + fi].kern) != set(faces[b + src].kern):
+                raise SystemExit(f"{faces[b + fi].tag} does not kern the pairs "
+                                 f"{faces[b + src].tag} does")
+        for fi, src in fam.kern_pred.items():
+            faces[b + fi].kern_pred = b + src
+        for fi in list(fam.kern_shared) + list(fam.kern_pred):
+            face = faces[b + fi]
+            src = faces[b + fam.kern_shared.get(fi, fam.kern_pred.get(fi))]
+            for a, c in face.kern:
+                for n in (a, c):
+                    k = face.index[n]
+                    if k >= len(src.glyphs) or src.glyphs[k].name != n:
+                        raise SystemExit(f"{face.tag} {n} is not where {src.tag} has it")
     for face in faces:
         face.kernq = {k: round(v / KERN_STEP) for k, v in face.kern.items()
                       if round(v / KERN_STEP)}
@@ -2073,22 +2203,26 @@ def main() -> None:
         "! fplotlib_glyphs_data -- glyph outlines, metrics and kerning, generated",
         "! by tools/gen_glyphs.py. Do not edit.",
         "!",
-        "! The glyph data in this file is derived from two fonts:",
+        "! The glyph data in this file is derived from four fonts:",
         "!",
         "!   * Lato 2.015, copyright (c) 2010-2014 by tyPoland Lukasz Dziedzic",
         "!     (team@latofonts.com) with Reserved Font Name \"Lato\"; licence",
         "!     in LICENSE_LATO;",
         "!   * Lete Sans Math 0.63, copyright (c) Chenjing Bu and Daniel Flipo,",
         "!     built on Fira Math (copyright (c) Xiangdong Zeng) and Lato, and",
-        "!     inheriting Lato's Reserved Font Name; licence in LICENSE_LETE.",
+        "!     inheriting Lato's Reserved Font Name; licence in LICENSE_LETE;",
+        "!   * STIX Two Text and STIX Two Math 2.13, copyright 2001-2021 The",
+        "!     STIX Fonts Project Authors, with Reserved Font Name \"TM Math\";",
+        "!     licence in LICENSE_STIX.",
         "!",
-        "! Both are licensed under the SIL Open Font License, Version 1.1. The",
+        "! All are licensed under the SIL Open Font License, Version 1.1. The",
         "! rest of fplotlib is MIT; this file is OFL-1.1.",
         "!",
         "! One base85 string holds every face: glyph outlines, advance widths",
         "! and ink boxes in integer font units, each face's cmap and its pair",
-        "! kerning, and the math face's MATH table. Lato's outlines are stored",
-        "! as cubics at 1000 units to the em, many of them as Lete Sans Math's.",
+        "! kerning, and each math face's MATH table. Lato's outlines are stored",
+        "! as cubics at 1000 units to the em, many of them as Lete Sans Math's;",
+        "! the few characters STIX Two Text lacks are STIX Two Math's glyphs.",
         "! fplotlib_glyphs unpacks it on first",
         "! use; the format is described there and in the generator.",
         "",
@@ -2097,6 +2231,8 @@ def main() -> None:
         "    public",
         "",
         f"    integer, parameter :: NFACE = {len(faces)}",
+        "    ! The families, each four faces: regular, bold, italic and math.",
+        f"    integer, parameter :: NFAMILY = {len(FAMILIES)}",
         f"    integer, parameter :: NGLYPH = {nglyph}",
         f"    integer, parameter :: NCONT = {ncont}",
         f"    integer, parameter :: NPT = {npt}",
@@ -2138,27 +2274,37 @@ def main() -> None:
                                  for i, f in enumerate(faces)])
     L += int_array("FACE_KPRED", [0 if f.kern_pred is None else f.kern_pred + 1
                                   for f in faces])
-    mp, mcons, mssty, mdtls = math_tables(mface)
+    mts = [math_tables(m) for m in mfaces]
     L += logical_array("FACE_HAS_MATH", [f.math is not None for f in faces])
     L += [
         "",
-        "    ! The math face's MATH table: how many size variants, assemblies,",
-        "    ! assembly parts, math kern heights and math kern values it has,",
-        "    ! the overlap two assembly parts must at least have, and the",
-        "    ! constants, in font units (two of them are percentages).",
-        f"    integer, parameter :: NVAR = {sum(len(v) for t in mcons for _, v, _ in t)}",
-        f"    integer, parameter :: NASM = {sum(1 for t in mcons for _, _, a in t if a)}",
-        f"    integer, parameter :: NPART = {sum(len(a[1]) for t in mcons for _, _, a in t if a)}",
-        f"    integer, parameter :: NMKH = {sum(len(h) for _, _, _, k in mp if k for h, _ in k)}",
-        f"    integer, parameter :: NMKV = {sum(len(v) for _, _, _, k in mp if k for _, v in k)}",
-        f"    integer, parameter :: MIN_CONNECTOR_OVERLAP = {mface.math['overlap']}",
-        f"    integer, parameter :: NMC = {len(MATH_CONSTANTS)}",
+        "    ! The math faces' MATH tables: how many size variants, assemblies,",
+        "    ! assembly parts, math kern heights and math kern values they have",
+        "    ! between them, and per family the overlap two assembly parts must",
+        "    ! at least have and the constants, in font units (two of them are",
+        "    ! percentages).",
+        f"    integer, parameter :: NVAR = "
+        f"{sum(len(v) for _, mc, _, _ in mts for t in mc for _, v, _ in t)}",
+        f"    integer, parameter :: NASM = "
+        f"{sum(1 for _, mc, _, _ in mts for t in mc for _, _, a in t if a)}",
+        f"    integer, parameter :: NPART = "
+        f"{sum(len(a[1]) for _, mc, _, _ in mts for t in mc for _, _, a in t if a)}",
+        f"    integer, parameter :: NMKH = "
+        f"{sum(len(h) for mp, _, _, _ in mts for _, _, _, k in mp if k for h, _ in k)}",
+        f"    integer, parameter :: NMKV = "
+        f"{sum(len(v) for mp, _, _, _ in mts for _, _, _, k in mp if k for _, v in k)}",
     ]
+    L += int_array("MIN_CONNECTOR_OVERLAP", [m.math["overlap"] for m in mfaces])
+    L += [f"    integer, parameter :: NMC = {len(MATH_CONSTANTS)}"]
     for k, name in enumerate(MATH_CONSTANTS):
         snake = "".join("_" + c if c.isupper() and i else c
                         for i, c in enumerate(name)).upper()
         L.append(f"    integer, parameter :: MC_{snake} = {k + 1}")
-    L += int_array("MATH_CONSTANT", mface.math["constants"])
+    L += ["    ! MATH_CONSTANT(i, family) is constant i of a family's math face."]
+    flat = [c for m in mfaces for c in m.math["constants"]]
+    L += int_array("MATH_CONSTANT_", flat)
+    L += [f"    integer, parameter :: MATH_CONSTANT(NMC, NFAMILY) = "
+          f"reshape(MATH_CONSTANT_, [NMC, NFAMILY])"]
     L += [
         "",
         "    ! Canonical composition of a base and one combining mark, for the",

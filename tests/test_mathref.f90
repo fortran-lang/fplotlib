@@ -2,13 +2,15 @@
 !
 ! tests/math_refs.txt holds where XeTeX, setting each formula with the
 ! same Lato and Lete Sans Math files, puts every glyph and every rule
-! (tools/gen_math_refs.py makes it). fplotlib's layout follows the same
+! (tools/gen_math_refs.py makes it), and tests/math_refs_serif.txt the
+! same with STIX Two Text and STIX Two Math. fplotlib's layout follows the same
 ! algorithm with the same MATH constants, so the two have to agree: every
 ! glyph is the same character at the same size, and it and every rule sit
 ! within TOL points of where XeTeX puts them.
 !
-! tests/delim_refs.txt holds the delimiters Typst sets around what they
-! enclose (tools/gen_delim_refs.py makes it). fplotlib grows matched
+! tests/delim_refs.txt (and tests/delim_refs_serif.txt) holds the
+! delimiters Typst sets around what they enclose (tools/gen_delim_refs.py
+! makes it). fplotlib grows matched
 ! delimiters by Typst's rule, so it has to choose the same size variants:
 ! the delimiters, from left to right, have the same advance widths.
 module test_mathref
@@ -16,7 +18,8 @@ module test_mathref
     use fplotlib_render, only: glyphrun_t
     use fplotlib_mathtext, only: math_layout, mrules_t, math_context_t
     use fplotlib_glyphs, only: glyph_char, glyph_cmap, glyph_face, glyph_inked, &
-                               glyph_adv, glyph_bbox, FACE_BOLD, FACE_MATH
+                               glyph_adv, glyph_bbox, FACE_BOLD, FACE_MATH, &
+                               FACE_REGULAR, family_face, FAMILY_SANS, FAMILY_SERIF
     implicit none
     private
 
@@ -34,14 +37,19 @@ module test_mathref
 
 contains
 
-    subroutine math_ref_check(path, nfail)
+    ! The formulas of path, set in family (the sans-serif one by default).
+    subroutine math_ref_check(path, nfail, family)
         character(len=*), intent(in) :: path
         integer, intent(out) :: nfail
+        integer, intent(in), optional :: family
         character(len=512) :: line, formula
         integer :: u, ios, ng, nr, ncase
         integer :: gcp(MAXG)
         real(dp) :: gsz(MAXG), gx(MAXG), gy(MAXG), rb(4, MAXG)
+        integer :: face
 
+        face = FACE_REGULAR
+        if (present(family)) face = family_face(family, FACE_REGULAR)
         nfail = 0
         ncase = 0
         open (newunit=u, file=path, status="old", action="read", iostat=ios)
@@ -60,7 +68,7 @@ contains
             select case (line(1:2))
             case ("F ")
                 if (len_trim(formula) > 0) then
-                    call check_one(trim(formula), ng, gcp, gsz, gx, gy, nr, rb, nfail)
+                    call check_one(trim(formula), face, ng, gcp, gsz, gx, gy, nr, rb, nfail)
                     ncase = ncase + 1
                 end if
                 formula = line(3:)
@@ -76,10 +84,10 @@ contains
         end do
         close (u)
         if (len_trim(formula) > 0) then
-            call check_one(trim(formula), ng, gcp, gsz, gx, gy, nr, rb, nfail)
+            call check_one(trim(formula), face, ng, gcp, gsz, gx, gy, nr, rb, nfail)
             ncase = ncase + 1
         end if
-        print "(a,i0,a,i0,a)", "math refs: ", ncase, " formulas, ", nfail, &
+        print "(a,i0,a,i0,a)", "math refs ("//path//"): ", ncase, " formulas, ", nfail, &
             " differ from XeTeX"
     end subroutine math_ref_check
 
@@ -99,9 +107,9 @@ contains
                           .and. all(rules2%w(1:m) == rules%w(1:m)) .and. all(rules2%h(1:m) == rules%h(1:m))
     end function same_layout
 
-    subroutine check_one(formula, ng, gcp, gsz, gx, gy, nr, rb, nfail)
+    subroutine check_one(formula, face, ng, gcp, gsz, gx, gy, nr, rb, nfail)
         character(len=*), intent(in) :: formula
-        integer, intent(in) :: ng, nr
+        integer, intent(in) :: face, ng, nr
         integer, intent(inout) :: gcp(:)
         real(dp), intent(inout) :: gsz(:), gx(:), gy(:)
         real(dp), intent(in) :: rb(:, :)
@@ -113,8 +121,8 @@ contains
         logical :: bad, used(MAXG)
         real(dp) :: ry(MAXG)
 
-        call math_layout(formula, SIZE, run, rules, w)
-        call math_layout(formula, SIZE, run2, rules2, w2, context=shared)
+        call math_layout(formula, SIZE, run, rules, w, face)
+        call math_layout(formula, SIZE, run2, rules2, w2, face, context=shared)
         if (.not. same_layout(run, rules, w, run2, rules2, w2)) then
             print "(a)", "  "//formula//": a reused context lays it out differently"
             nfail = nfail + 1
@@ -192,14 +200,18 @@ contains
         if (bad) nfail = nfail + 1
     end subroutine check_one
 
-    subroutine delim_ref_check(path, nfail)
+    subroutine delim_ref_check(path, nfail, family)
         character(len=*), intent(in) :: path
         integer, intent(out) :: nfail
+        integer, intent(in), optional :: family
         character(len=512) :: line, formula
         integer :: u, ios, nd, ncase
         integer :: dcp(MAXG)
         real(dp) :: dw(MAXG)
+        integer :: face
 
+        face = FACE_REGULAR
+        if (present(family)) face = family_face(family, FACE_REGULAR)
         nfail = 0
         ncase = 0
         open (newunit=u, file=path, status="old", action="read", iostat=ios)
@@ -217,7 +229,7 @@ contains
             select case (line(1:2))
             case ("F ")
                 if (len_trim(formula) > 0) then
-                    call check_delims(trim(formula), nd, dcp, dw, nfail)
+                    call check_delims(trim(formula), face, nd, dcp, dw, nfail)
                     ncase = ncase + 1
                 end if
                 formula = line(3:)
@@ -229,16 +241,16 @@ contains
         end do
         close (u)
         if (len_trim(formula) > 0) then
-            call check_delims(trim(formula), nd, dcp, dw, nfail)
+            call check_delims(trim(formula), face, nd, dcp, dw, nfail)
             ncase = ncase + 1
         end if
-        print "(a,i0,a,i0,a)", "delimiter refs: ", ncase, " formulas, ", nfail, &
+        print "(a,i0,a,i0,a)", "delimiter refs ("//path//"): ", ncase, " formulas, ", nfail, &
             " differ from Typst"
     end subroutine delim_ref_check
 
-    subroutine check_delims(formula, nd, dcp, dw, nfail)
+    subroutine check_delims(formula, face, nd, dcp, dw, nfail)
         character(len=*), intent(in) :: formula
-        integer, intent(in) :: nd, dcp(:)
+        integer, intent(in) :: face, nd, dcp(:)
         real(dp), intent(in) :: dw(:)
         integer, intent(inout) :: nfail
         type(glyphrun_t) :: run
@@ -247,7 +259,7 @@ contains
         integer :: g(MAXG), k, n
         logical :: bad
 
-        call math_layout(formula, SIZE, run, rules, w)
+        call math_layout(formula, SIZE, run, rules, w, face)
         n = 0
         do k = 1, run%n
             select case (glyph_char(run%gid(k)))
@@ -282,13 +294,21 @@ contains
         type(mrules_t) :: rules
         real(dp) :: w
 
+        integer :: fam, bold, mface
+
         nfail = 0
-        call math_layout("Bold $x$ bold", SIZE, run, rules, w, FACE_BOLD)
-        if (glyph_face(run%gid(1)) /= FACE_BOLD .or. glyph_face(run%gid(6)) /= FACE_MATH &
-            .or. glyph_face(run%gid(run%n)) /= FACE_BOLD) then
-            print "(a)", "  text around math does not keep the label's face"
-            nfail = 1
-        end if
+        do fam = FAMILY_SANS, FAMILY_SERIF
+            bold = family_face(fam, FACE_BOLD)
+            mface = family_face(fam, FACE_MATH)
+            run%n = 0
+            rules%n = 0
+            call math_layout("Bold $x$ bold", SIZE, run, rules, w, bold)
+            if (glyph_face(run%gid(1)) /= bold .or. glyph_face(run%gid(6)) /= mface &
+                .or. glyph_face(run%gid(run%n)) /= bold) then
+                print "(a,i0)", "  text around math does not keep the label's face, family ", fam
+                nfail = nfail + 1
+            end if
+        end do
     end subroutine face_check
 
     ! Regression checks for mathtext edge cases (#73, #74, #75).

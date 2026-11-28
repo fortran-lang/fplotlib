@@ -30,6 +30,8 @@ module fplotlib
     use fplotlib_typeset, only: typeset_context_t, ts_page_count, ts_page_draw, ts_page_size
     use fplotlib_scene, only: frame_t, recording_renderer_t, paged_document_t
     use fplotlib_document, only: save_document
+    use fplotlib_text, only: set_font_family
+    use fplotlib_glyphs, only: family_lookup, FAMILY_SANS
     use fplotlib_report, only: report_t, document_asset_t
     implicit none
     private
@@ -495,6 +497,7 @@ contains
         def_label = 10.0_dp
         def_tick = 10.0_dp
         def_legend = 10.0_dp
+        call set_font_family(FAMILY_SANS)
 
         select case (lower(trim(name)))
         case ("default", "classic")
@@ -554,14 +557,18 @@ contains
     end subroutine style_use
 
     ! Individual rcParams, for the settings a user is most likely to want
-    ! without adopting a whole style.
+    ! without adopting a whole style. fontfamily is matplotlib's
+    ! font.family and mathtext.fontset together: "sans-serif" (the
+    ! default) sets text in Lato and math in Lete Sans Math, "serif" text
+    ! in STIX Two Text and math in STIX Two Math.
     subroutine rc(figsize, dpi, fontsize, linewidth, grid, facecolor, &
-                  axes_facecolor, grid_color, text_color, color_cycle)
+                  axes_facecolor, grid_color, text_color, color_cycle, fontfamily)
         real(dp), intent(in), optional :: figsize(2), dpi, fontsize, linewidth
         logical, intent(in), optional :: grid
         character(len=*), intent(in), optional :: facecolor, axes_facecolor
         character(len=*), intent(in), optional :: grid_color, text_color
         character(len=7), intent(in), optional :: color_cycle(:)
+        character(len=*), intent(in), optional :: fontfamily
 
         ! Arguments checked as tools/gen_arg_checks.py tables them.
         call check_size_arg("rc", "fontsize", fontsize)
@@ -574,6 +581,10 @@ contains
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
                 call contract_error("rc: dpi must be finite and positive")
+        end if
+        if (present(fontfamily)) then
+            if (family_lookup(fontfamily) == 0) &
+                call contract_error("rc: fontfamily must be ""sans-serif"" or ""serif""")
         end if
 
         if (present(figsize)) then
@@ -597,6 +608,7 @@ contains
             rc_spine_color = rc_text_color
         end if
         if (present(color_cycle)) call set_cycle(color_cycle)
+        if (present(fontfamily)) call set_font_family(family_lookup(fontfamily))
     end subroutine rc
 
     ! A second axes over the current one, sharing its x axis and putting its

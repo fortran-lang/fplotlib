@@ -153,8 +153,11 @@ program test_plots
     use test_hyph, only: hyph_check
     use test_typeset, only: para_ref_check
     use test_markdown, only: markdown_check
+    use fplotlib_glyphs, only: FAMILY_SERIF
+    use fplotlib_mathtext, only: math_width
     implicit none
     integer :: fig1, nmath, ndelim, nface, nedge, nmissing, ncontract, npara
+    integer :: nmath_serif, ndelim_serif
     integer :: nglyph
     integer :: nbackend
     integer :: nframe
@@ -1739,6 +1742,7 @@ program test_plots
     ! every format.
     call document_case()
     call textbox_case()
+    call serif_case()
     call plot_kwargs_case()
     call oop_figure_check()
 
@@ -1746,10 +1750,12 @@ program test_plots
 
     ! The math layout against XeTeX's; see test_mathref.f90.
     call math_ref_check("tests/math_refs.txt", nmath)
+    call math_ref_check("tests/math_refs_serif.txt", nmath_serif, FAMILY_SERIF)
     ! The line breaking against XeTeX's; see test_typeset.f90.
     call para_ref_check("tests/para_refs.txt", npara)
     ! The automatic delimiters against Typst's.
     call delim_ref_check("tests/delim_refs.txt", ndelim)
+    call delim_ref_check("tests/delim_refs_serif.txt", ndelim_serif, FAMILY_SERIF)
     call face_check(nface)
     call mathtext_edge_check(nedge)
     ! NaN and infinite values in every plot type; see test_missing.f90.
@@ -1771,8 +1777,10 @@ program test_plots
     ! test_fingerprint.f90. Stops with a failure if any picture changed.
     call fp_finish("tests/fingerprints.txt")
     if (nmath > 0) error stop "math layout differs from XeTeX"
+    if (nmath_serif > 0) error stop "serif math layout differs from XeTeX"
     if (npara > 0) error stop "line breaking differs from XeTeX"
     if (ndelim > 0) error stop "automatic delimiters differ from Typst"
+    if (ndelim_serif > 0) error stop "serif automatic delimiters differ from Typst"
     if (nface > 0) error stop "text around math lost its face"
     if (nedge > 0) error stop "mathtext edge cases failed"
     if (nmissing > 0) error stop "missing data reached the output"
@@ -1878,6 +1886,65 @@ contains
         if (len(eps_s) < 500 .or. index(eps_s, "%!PS-Adobe-") /= 1) &
             error stop "textbox_case: invalid EPS"
     end subroutine textbox_case
+
+    ! The serif family, STIX Two Text with STIX Two Math, for every label,
+    ! the math in them and textboxes, chosen with rc and given up by
+    ! rc again or by a style.
+    subroutine serif_case()
+        character, parameter :: NL = achar(10)
+        character(len=:), allocatable :: pdf_s
+        real(dp) :: tx(40), ty(40), w_sans, w_serif
+        integer :: k
+        do k = 1, 40
+            tx(k) = 4.0_dp*real(k - 1, dp)/39.0_dp
+            ty(k) = exp(-0.5_dp*tx(k))*cos(6.0_dp*tx(k))
+        end do
+        w_sans = str_width_check("Fortran $\int_0^1 f\,dx$")
+        call rc(fontfamily="serif")
+        w_serif = str_width_check("Fortran $\int_0^1 f\,dx$")
+        if (w_serif == w_sans) error stop "serif_case: serif text is as wide as sans-serif"
+
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call plot(tx, ty, "C0-", lw=1.5_dp, label="$e^{-t/2}\cos(6t)$")
+        call plot(tx, exp(-0.5_dp*tx), "C1--", label="envelope $\pm e^{-t/2}$")
+        call xlabel("time $t$ [s]")
+        call ylabel("$\displaystyle\frac{y(t)}{y_0}$")
+        call title("Damped oscillator, $\omega = 6\,\mathrm{s}^{-1}$", fontweight="bold")
+        call text(2.0_dp, 0.6_dp, "italic note: $\sqrt{x^2 + y^2}$", fontstyle="italic")
+        call legend()
+        call save_all("serif_labels")
+        pdf_s = render_pdf()
+        if (index(pdf_s, "/FplotlibSerif-Regular") == 0 .or. index(pdf_s, "/FplotlibSerifMath") == 0) &
+            error stop "serif_case: the PDF does not embed the serif faces"
+        if (index(pdf_s, "/FplotlibSans") > 0 .or. index(pdf_s, "/FplotlibMath") > 0) &
+            error stop "serif_case: the PDF embeds sans-serif faces"
+
+        call clf()
+        call figure(figsize=[6.4_dp, 4.8_dp])
+        call plot(tx, ty, "C0-", lw=1.5_dp)
+        call textbox(0.95_dp, 0.95_dp, "**Card**"//NL//NL//"$$y = e^{-t/2}\cos(\omega t)$$" &
+                     //NL//NL//"- *decay* $\tau = 2\,\mathrm{s}$", width=170.0_dp, &
+                     coords="axes", ha="right", va="top", fontsize=9.0_dp, facecolor="#f8fafc", &
+                     edgecolor="#64748b", pad=6.0_dp, radius=4.0_dp)
+        call save_all("serif_textbox")
+        pdf_s = render_pdf()
+        if (index(pdf_s, "/FplotlibSans") > 0) error stop "serif_case: a textbox is set in sans-serif"
+
+        call rc(fontfamily="sans-serif")
+        if (str_width_check("Fortran $\int_0^1 f\,dx$") /= w_sans) &
+            error stop "serif_case: rc(fontfamily=""sans-serif"") does not go back"
+        call rc(fontfamily="serif")
+        call style_use("default")
+        if (str_width_check("Fortran $\int_0^1 f\,dx$") /= w_sans) &
+            error stop "serif_case: a style does not start from sans-serif"
+    end subroutine serif_case
+
+    ! The width a label is drawn at, as a text with it in a box measures.
+    real(dp) function str_width_check(s) result(w)
+        character(len=*), intent(in) :: s
+        w = math_width(s, 10.0_dp)
+    end function str_width_check
 
     subroutine plot_kwargs_case()
         character(len=:), allocatable :: svg_s, svg_ref, svg_disk

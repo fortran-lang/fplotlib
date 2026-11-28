@@ -3,8 +3,15 @@
 ! The outlines, metrics and kerning of the fonts are compiled in, packed
 ! into one base85 string in fplotlib_glyphs_data (written by
 ! tools/gen_glyphs.py) and unpacked here the first time anything is asked
-! for. Text is Lato, in three faces: regular, bold and italic; math is
-! Lete Sans Math, the fourth face, whose MATH table comes with it.
+! for. There are two families of four faces each, a text font in three
+! faces (regular, bold and italic) and the math font drawn to match it,
+! whose MATH table comes with it:
+!
+!   * FAMILY_SANS, the default: Lato, with Lete Sans Math (faces 1 to 4);
+!   * FAMILY_SERIF: STIX Two Text, with STIX Two Math (faces 5 to 8).
+!
+! FACE_REGULAR, FACE_BOLD, FACE_ITALIC and FACE_MATH are the faces of the
+! sans-serif family, and family_face gives a style's face in any family.
 !
 ! Glyphs are numbered: a glyph id (gid) runs over all the faces, one after
 ! another, and a face's cmap takes a code point to one of its gids. A
@@ -61,7 +68,7 @@
 !     from the adjustment face FACE_KPRED makes between the glyphs at the
 !     same indices as the first glyphs of the two classes, when it names
 !     one;
-!   * for the math face (FACE_HAS_MATH), its MATH table: per glyph a bit
+!   * for a math face (FACE_HAS_MATH), its MATH table: per glyph a bit
 !     and a delta for an italic correction, a bit and a delta from half
 !     the advance for a top accent attachment, a bit for an extended
 !     shape and a bit for math kerns, followed by the four corners (top
@@ -99,24 +106,34 @@ module fplotlib_glyphs
                                  blob_text, BLOB_LEN, FACE_HAS_MATH, NVAR, NASM, &
                                  FACE_KERN, FACE_KPRED, KERN_STEP, &
                                  FACE_OSCALE, FACE_XREF, FACE_RESID, &
-                                 NPART, NMKH, NMKV, MATH_CONSTANT
+                                 NPART, NMKH, NMKV, MATH_CONSTANT, NFAMILY, &
+                                 MIN_CONNECTOR_OVERLAP
     implicit none
     private
 
-    public :: NFACE, NGLYPH
+    public :: NFACE, NGLYPH, NFAMILY
     public :: FACE_REGULAR, FACE_BOLD, FACE_ITALIC, FACE_MATH
-    public :: math_const, math_percent, glyph_italic, glyph_top_accent, &
+    public :: FAMILY_SANS, FAMILY_SERIF
+    public :: family_face, face_family, face_style, family_name, family_lookup
+    public :: math_const, math_percent, math_overlap, glyph_italic, glyph_top_accent, &
               glyph_math_kern, glyph_extended, glyph_variants, glyph_assembly, &
               glyph_ssty, glyph_dotless
     public :: glyph_cmap, glyph_face, glyph_adv, glyph_bbox, glyph_outline, &
               glyph_kern, glyph_char, glyph_recompose, glyph_inked
     public :: face_ascent, face_descent, face_xheight, face_capheight
 
+    ! The faces of the sans-serif family, which are also the styles a
+    ! face of any family has: its place among the family's four.
     integer, parameter :: FACE_REGULAR = 1
     integer, parameter :: FACE_BOLD = 2
     integer, parameter :: FACE_ITALIC = 3
     ! Lete Sans Math, the face with the MATH table.
     integer, parameter :: FACE_MATH = 4
+
+    ! The families: Lato with Lete Sans Math, and STIX Two.
+    integer, parameter :: FAMILY_SANS = 1
+    integer, parameter :: FAMILY_SERIF = 2
+    integer, parameter :: FACES_PER_FAMILY = 4
 
     ! The range coder's adaptation rate, and the contexts it codes with,
     ! as tools/gen_glyphs.py numbers them.
@@ -337,19 +354,89 @@ contains
         face_capheight = real(FACE_CAP(face), dp)/real(FACE_EM(face), dp)
     end function face_capheight
 
+    ! --- families ----------------------------------------------------
+
+    ! The face of a family that has a style (FACE_REGULAR, FACE_BOLD,
+    ! FACE_ITALIC or FACE_MATH).
+    pure elemental integer function family_face(family, style) result(face)
+        integer, intent(in) :: family, style
+        face = (family - 1)*FACES_PER_FAMILY + style
+    end function family_face
+
+    ! The family a face belongs to, and its style within it.
+    pure elemental integer function face_family(face) result(family)
+        integer, intent(in) :: face
+        family = (face - 1)/FACES_PER_FAMILY + 1
+    end function face_family
+
+    pure elemental integer function face_style(face) result(style)
+        integer, intent(in) :: face
+        style = mod(face - 1, FACES_PER_FAMILY) + 1
+    end function face_style
+
+    ! A family's name, as family_lookup knows it.
+    pure function family_name(family) result(name)
+        integer, intent(in) :: family
+        character(len=:), allocatable :: name
+        select case (family)
+        case (FAMILY_SERIF); name = "serif"
+        case default; name = "sans-serif"
+        end select
+    end function family_name
+
+    ! The family a name stands for, 0 for none: matplotlib's generic
+    ! "sans-serif" and "serif", and the fonts by name. Case is ignored.
+    pure integer function family_lookup(name) result(family)
+        character(len=*), intent(in) :: name
+        character(len=len(name)) :: s
+        integer :: i
+        s = name
+        do i = 1, len(s)
+            if (s(i:i) >= "A" .and. s(i:i) <= "Z") s(i:i) = achar(iachar(s(i:i)) + 32)
+        end do
+        select case (trim(adjustl(s)))
+        case ("sans-serif", "sans", "sansserif", "lato")
+            family = FAMILY_SANS
+        case ("serif", "stix", "stix two", "stixtwo", "stix two text", "stixgeneral")
+            family = FAMILY_SERIF
+        case default
+            family = 0
+        end select
+    end function family_lookup
+
     ! --- the MATH table ----------------------------------------------
 
-    ! A MATH constant in ems. The three that are percentages are read with
-    ! math_percent instead.
-    pure elemental real(dp) function math_const(i)
+    ! A MATH constant of the math face of face's family (by default the
+    ! sans-serif one), in ems. The three that are percentages are read
+    ! with math_percent instead.
+    pure elemental real(dp) function math_const(i, face)
         integer, intent(in) :: i
-        math_const = real(MATH_CONSTANT(i), dp)/real(FACE_EM(FACE_MATH), dp)
+        integer, intent(in), optional :: face
+        integer :: fam
+        fam = FAMILY_SANS
+        if (present(face)) fam = face_family(face)
+        math_const = real(MATH_CONSTANT(i, fam), dp) &
+                     /real(FACE_EM(family_face(fam, FACE_MATH)), dp)
     end function math_const
 
-    pure elemental real(dp) function math_percent(i)
+    pure elemental real(dp) function math_percent(i, face)
         integer, intent(in) :: i
-        math_percent = real(MATH_CONSTANT(i), dp)
+        integer, intent(in), optional :: face
+        integer :: fam
+        fam = FAMILY_SANS
+        if (present(face)) fam = face_family(face)
+        math_percent = real(MATH_CONSTANT(i, fam), dp)
     end function math_percent
+
+    ! The overlap two parts of an assembly must at least have, in ems, in
+    ! the math face of face's family.
+    pure elemental real(dp) function math_overlap(face)
+        integer, intent(in) :: face
+        integer :: fam
+        fam = face_family(face)
+        math_overlap = real(MIN_CONNECTOR_OVERLAP(fam), dp) &
+                       /real(FACE_EM(family_face(fam, FACE_MATH)), dp)
+    end function math_overlap
 
     ! The italic correction of a glyph, in ems.
     function glyph_italic(gid) result(v)
@@ -742,7 +829,11 @@ contains
         nvar_ = 0
         nasm_ = 0
         npart_ = 0
-        if (.not. FACE_HAS_MATH(FACE_MATH)) error stop "fplotlib_glyphs: FACE_MATH is not the math face"
+        if (NFACE /= NFAMILY*FACES_PER_FAMILY) error stop "fplotlib_glyphs: families disagree"
+        do f = 1, NFACE
+            if (FACE_HAS_MATH(f) .neqv. face_style(f) == FACE_MATH) &
+                error stop "fplotlib_glyphs: a family's fourth face is not its math face"
+        end do
         do f = 1, NFACE
             base = FBASE(f)
             ng = FACE_NG(f)

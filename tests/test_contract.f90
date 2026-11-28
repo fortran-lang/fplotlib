@@ -22,7 +22,7 @@ module test_contract
 
     public :: contract_case, contract_check
 
-    integer, parameter :: NCASE = 54
+    integer, parameter :: NCASE = 55
 
     ! A target that draws nothing and cannot transform: it leaves the
     ! frame methods to renderer_t's defaults.
@@ -91,13 +91,14 @@ module test_contract
         "fplotlib: add_path: a path must begin with M", &
         "fplotlib: typeset: supported formats are .svg, .pdf, .eps and .png, not .docx", &
         "fplotlib: typeset: dpi must be finite and positive", &
-        "fplotlib: typeset: "]
+        "fplotlib: typeset: ", &
+        "fplotlib: rc: fontfamily must be ""sans-serif"" or ""serif"""]
     ! The exit status each case must end with: 1 for a broken
     ! precondition, 2 for a failure at run time with no status to take it.
     integer, parameter :: CODE(NCASE) = [ &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, &
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, &
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1]
 
 contains
 
@@ -301,6 +302,8 @@ contains
             call typeset("Text.", "tests/out/contract.png", dpi=0.0_dp)
         case (54)
             call typeset("Text.", "tests/out/no-such-dir/contract.pdf")
+        case (55)
+            call rc(fontfamily="Comic Sans")
         end select
     end subroutine contract_case
 

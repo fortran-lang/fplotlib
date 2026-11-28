@@ -43,15 +43,15 @@ module fplotlib_mathtext
     use fplotlib_status, only: contract_error
     use fplotlib_render, only: glyphrun_t, paint_t
     use fplotlib_scene, only: frame_t, recording_renderer_t
-    use fplotlib_text, only: text_layout, run_add, run_map, check_font
+    use fplotlib_text, only: text_layout, run_add, run_map, check_font, font_family
     use fplotlib_mathsym, only: sym_lookup, sym_class, CL_ORD, CL_OP, CL_BIN, &
                                 CL_REL, CL_OPEN, CL_CLOSE, CL_PUNCT, CL_INNER
     use fplotlib_glyphs, only: glyph_cmap, glyph_adv, glyph_bbox, glyph_italic, &
                                glyph_variants, glyph_assembly, glyph_ssty, &
                                glyph_math_kern, glyph_top_accent, glyph_dotless, &
-                               math_const, math_percent, FACE_MATH, FACE_REGULAR
-    use fplotlib_glyphs_data, only: MIN_CONNECTOR_OVERLAP, FACE_EM, &
-                               MC_SCRIPT_PERCENT_SCALE_DOWN, &
+                               math_const, math_percent, math_overlap, FACE_MATH, &
+                               FACE_REGULAR, family_face, face_family
+    use fplotlib_glyphs_data, only: MC_SCRIPT_PERCENT_SCALE_DOWN, &
                                MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN, MC_AXIS_HEIGHT, &
                                MC_DISPLAY_OPERATOR_MIN_HEIGHT, MC_ACCENT_BASE_HEIGHT, &
                                MC_SUBSCRIPT_SHIFT_DOWN, MC_SUBSCRIPT_TOP_MAX, &
@@ -64,9 +64,7 @@ module fplotlib_mathtext
                                MC_SPACE_AFTER_SCRIPT, MC_UPPER_LIMIT_GAP_MIN, &
                                MC_UPPER_LIMIT_BASELINE_RISE_MIN, MC_LOWER_LIMIT_GAP_MIN, &
                                MC_LOWER_LIMIT_BASELINE_DROP_MIN, &
-                               MC_STACK_TOP_SHIFT_UP, MC_STACK_TOP_DISPLAY_STYLE_SHIFT_UP, &
-                               MC_STACK_BOTTOM_SHIFT_DOWN, &
-                               MC_STACK_BOTTOM_DISPLAY_STYLE_SHIFT_DOWN, &
+                               MC_STACK_TOP_SHIFT_UP, &
                                MC_STACK_GAP_MIN, MC_STACK_DISPLAY_STYLE_GAP_MIN, &
                                MC_FRACTION_NUMERATOR_SHIFT_UP, &
                                MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP, &
@@ -82,7 +80,7 @@ module fplotlib_mathtext
                                MC_UNDERBAR_RULE_THICKNESS, MC_UNDERBAR_EXTRA_DESCENDER, &
                                MC_RADICAL_VERTICAL_GAP, &
                                MC_RADICAL_DISPLAY_STYLE_VERTICAL_GAP, &
-                               MC_RADICAL_RULE_THICKNESS, MC_RADICAL_EXTRA_ASCENDER, &
+                               MC_RADICAL_RULE_THICKNESS, &
                                MC_RADICAL_KERN_BEFORE_DEGREE, MC_RADICAL_KERN_AFTER_DEGREE, &
                                MC_RADICAL_DEGREE_BOTTOM_RAISE_PERCENT
     implicit none
@@ -248,6 +246,10 @@ module fplotlib_mathtext
         ! laid out are to have, negative while the group is being measured,
         ! and the size an assembly for them is built to.
         real(dp) :: lr_target = -1.0_dp, lr_full = -1.0_dp
+
+        ! The faces of the family the formula is set in: its math face, and
+        ! the regular text face operator names and \text are set in.
+        integer :: mface = FACE_MATH, rface = FACE_REGULAR
     end type math_context_t
 
 contains
@@ -274,7 +276,8 @@ contains
     ! Lay a string out: its glyphs are appended to run and its rules to
     ! rules, starting at the origin, and width is how far it reaches.
     ! Text outside the dollar signs is copied through as ordinary text, in
-    ! face (the regular one by default), with \$ written as a dollar sign.
+    ! face (by default the regular face of the family text is set in), with
+    ! \$ written as a dollar sign.
     subroutine math_layout(s, size, run, rules, width, face, context)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
@@ -309,8 +312,11 @@ contains
         integer :: i, j, head, k, tf, first_glyph
         real(dp) :: pen, xnew
 
-        tf = FACE_REGULAR
+        tf = family_face(font_family(), FACE_REGULAR)
         if (present(face)) tf = face
+        ! The math is set in the math face of the text's family.
+        state%mface = family_face(face_family(tf), FACE_MATH)
+        state%rface = family_face(face_family(tf), FACE_REGULAR)
         pen = 0.0_dp
         i = 1
         do while (i <= len(s))
@@ -368,7 +374,9 @@ contains
     ! when display is true and text style otherwise. Its glyphs and rules
     ! are appended to run and rules about the origin on its baseline, y
     ! down, and w, h and d are its width, height and depth in points.
-    subroutine math_formula(s, size, display, run, rules, w, h, d, context)
+    ! The formula is set in the family of face, by default the family
+    ! text is set in.
+    subroutine math_formula(s, size, display, run, rules, w, h, d, context, face)
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
         logical, intent(in) :: display
@@ -376,17 +384,21 @@ contains
         type(mrules_t), intent(inout) :: rules
         real(dp), intent(out) :: w, h, d
         type(math_context_t), intent(inout), optional :: context
+        integer, intent(in), optional :: face
         type(math_context_t) :: scratch
+        integer :: tf
 
-        call check_font(FACE_REGULAR, size)
+        tf = family_face(font_family(), FACE_REGULAR)
+        if (present(face)) tf = face
+        call check_font(tf, size)
         if (present(context)) then
-            call math_formula_impl(context, s, size, display, run, rules, w, h, d)
+            call math_formula_impl(context, s, size, display, run, rules, w, h, d, tf)
         else
-            call math_formula_impl(scratch, s, size, display, run, rules, w, h, d)
+            call math_formula_impl(scratch, s, size, display, run, rules, w, h, d, tf)
         end if
     end subroutine math_formula
 
-    subroutine math_formula_impl(state, s, size, display, run, rules, w, h, d)
+    subroutine math_formula_impl(state, s, size, display, run, rules, w, h, d, tf)
         type(math_context_t), intent(inout) :: state
         character(len=*), intent(in) :: s
         real(dp), intent(in) :: size
@@ -394,9 +406,12 @@ contains
         type(glyphrun_t), intent(inout) :: run
         type(mrules_t), intent(inout) :: rules
         real(dp), intent(out) :: w, h, d
+        integer, intent(in) :: tf
         type(mbox_t) :: box
         integer :: head, k, st, first_glyph
 
+        state%mface = family_face(face_family(tf), FACE_MATH)
+        state%rface = family_face(face_family(tf), FACE_REGULAR)
         st = ST_T
         if (display) st = ST_D
         call reset_arenas(state)
@@ -565,7 +580,7 @@ contains
         end if
         state%noads(k)%nuc = NUC_CHAR
         state%noads(k)%cp = math_alphabet(c, alph)
-        state%noads(k)%face = FACE_MATH
+        state%noads(k)%face = state%mface
         ! The integrals take their scripts beside them, as TeX's \int is
         ! \intop\nolimits.
         if (c >= 8747 .and. c <= 8755) state%noads(k)%limits = 2
@@ -1415,7 +1430,7 @@ contains
         end if
         total = rh(1) - base(nr) + rd(nr)
         ! Centred on the axis.
-        a = math_const(MC_AXIS_HEIGHT)*size
+        a = math_const(MC_AXIS_HEIGHT, state%mface)*size
         y = a + 0.5_dp*total - rh(1)
         do r = 1, nr
             do c = 1, nc
@@ -1552,7 +1567,9 @@ contains
 
     ! A symbol by name, as fplotlib_mathsym knows it, provided the math
     ! font has its glyph; code is 0 otherwise, and the name is spelled out
-    ! like any other unknown command.
+    ! like any other unknown command. The math faces of the families have
+    ! the same repertoire (tools/gen_glyphs.py makes sure), so asking the
+    ! sans-serif one answers for all of them.
     subroutine math_sym(name, code, cls)
         character(len=*), intent(in) :: name
         integer, intent(out) :: code, cls
@@ -1592,7 +1609,7 @@ contains
             return
         case (" ")
             ! The interword space of the text font.
-            k = space_noad(state, glyph_adv(glyph_cmap(FACE_REGULAR, 32)), .false.)
+            k = space_noad(state, glyph_adv(glyph_cmap(state%rface, 32)), .false.)
             return
         case ("{")
             k = char_noad(state, iachar("{"), ALPH_RM, CL_OPEN)
@@ -1692,9 +1709,9 @@ contains
               "mathcal", "mathscr", "mathsf")
             k = list_noad(state, parse_list(state, s(a0:a1), alphabet_of(name)), CL_ORD)
         case ("text", "textrm", "mbox", "textnormal")
-            k = text_noad(state, s(a0:a1), CL_ORD, FACE_REGULAR)
+            k = text_noad(state, s(a0:a1), CL_ORD, state%rface)
         case ("operatorname")
-            k = text_noad(state, s(a0:a1), CL_OP, FACE_REGULAR)
+            k = text_noad(state, s(a0:a1), CL_OP, state%rface)
             if (index(s, "*") /= len(trim(name)) + 2) state%noads(k)%limits = 2
         case default
             call accent_code(name, ac, wide)
@@ -1719,9 +1736,9 @@ contains
                 k = list_noad(state, parse_list(state, s(a0:a1), alph), CL_ORD)
             else
                 select case (name)
-                case ("liminf"); k = text_noad(state, "lim inf", CL_OP, FACE_REGULAR)
-                case ("limsup"); k = text_noad(state, "lim sup", CL_OP, FACE_REGULAR)
-                case default; k = text_noad(state, trim(name), CL_OP, FACE_REGULAR)
+                case ("liminf"); k = text_noad(state, "lim inf", CL_OP, state%rface)
+                case ("limsup"); k = text_noad(state, "lim sup", CL_OP, state%rface)
+                case default; k = text_noad(state, trim(name), CL_OP, state%rface)
                 end select
                 ! Only these take their limits above and below in display
                 ! style, as in TeX; the rest keep them beside.
@@ -1869,18 +1886,20 @@ contains
             if (lower) c = 120250 + code - iachar("a")
             if (digit) c = 120802 + code - iachar("0")
         end select
+        ! Asking one math face answers for all; see math_sym.
         if (c /= code) then
             if (glyph_cmap(FACE_MATH, c) == 0) c = code
         end if
     end function math_alphabet
 
-    ! The glyph for a code point: the math font's, or Lato's for a
-    ! character the math font does not have.
+    ! The glyph for a code point in face: the math font's, or for a
+    ! character the math font does not have, the regular text face's of
+    ! the same family; a space when neither has it.
     integer function math_gid(cp, face) result(g)
         integer, intent(in) :: cp, face
         g = glyph_cmap(face, cp)
-        if (g == 0) g = glyph_cmap(FACE_REGULAR, cp)
-        if (g == 0) g = glyph_cmap(FACE_MATH, 32)
+        if (g == 0) g = glyph_cmap(family_face(face_family(face), FACE_REGULAR), cp)
+        if (g == 0) g = glyph_cmap(family_face(face_family(face), FACE_MATH), 32)
     end function math_gid
 
     ! ------------------------------------------------------------------
@@ -1888,14 +1907,14 @@ contains
     ! ------------------------------------------------------------------
 
     ! The font size of a style, for a formula set at size.
-    pure elemental real(dp) function style_size(style, size) result(sz)
-        integer, intent(in) :: style
+    pure elemental real(dp) function style_size(style, size, mface) result(sz)
+        integer, intent(in) :: style, mface
         real(dp), intent(in) :: size
         select case (style)
         case (ST_S)
-            sz = size*math_percent(MC_SCRIPT_PERCENT_SCALE_DOWN)/100.0_dp
+            sz = size*math_percent(MC_SCRIPT_PERCENT_SCALE_DOWN, mface)/100.0_dp
         case (ST_SS)
-            sz = size*math_percent(MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN)/100.0_dp
+            sz = size*math_percent(MC_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN, mface)/100.0_dp
         case default
             sz = size
         end select
@@ -2083,7 +2102,7 @@ contains
             st(k) = cur
             cls_l(k) = state%noads(q)%cls
             cls_r(k) = state%noads(q)%cls
-            sz = style_size(cur, size)
+            sz = style_size(cur, size, state%mface)
             select case (state%noads(q)%kind)
             case (K_STYLE)
                 cur = state%noads(q)%style
@@ -2131,7 +2150,7 @@ contains
                     cls_r(k) = CL_REL
                     if (state%noads(q)%cp > 0) then
                         call glyph_box(state, script_glyph(math_gid(state%noads(q)%cp, &
-                                       FACE_MATH), cur), sz, bx(k))
+                                       state%mface), cur), sz, bx(k))
                     else
                         bx(k) = empty_box(state)
                     end if
@@ -2191,7 +2210,7 @@ contains
                 cycle
             end if
             if (prev > 0) pen = pen + muskip(cls_r(prev), cls_l(k), st(k)) &
-                *style_size(st(k), size)/18.0_dp
+                *style_size(st(k), size, state%mface)/18.0_dp
             call move_box(state, bx(k), pen, 0.0_dp)
             pen = pen + bx(k)%w
             box%h = max(box%h, bx(k)%h)
@@ -2219,7 +2238,7 @@ contains
         real(dp) :: sz, delta
         logical :: op, limits
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         op = state%noads(q)%cls == CL_OP
         delta = 0.0_dp
         select case (state%noads(q)%nuc)
@@ -2229,7 +2248,9 @@ contains
             else
                 call glyph_box(state, script_glyph(math_gid(state%noads(q)%cp, &
                                state%noads(q)%face), style), sz, box)
-                box%kgid = math_gid(state%noads(q)%cp, state%noads(q)%face)
+                ! The math kerns are those of the glyph drawn, the script
+                ! alternate in a script style, as XeTeX reads them.
+                box%kgid = box%gid
                 ! TeX's rule for a character of a math font: its italic
                 ! correction is part of its width unless a subscript is
                 ! going to tuck in under it.
@@ -2277,7 +2298,7 @@ contains
         integer :: k, nb, i0
         real(dp) :: sz, pen, x0, y0, x1, y1
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         box = empty_box(state)
         i0 = state%ni + 1
         ! Word by word: a space is glue, as in TeX, kerned against
@@ -2325,13 +2346,13 @@ contains
         real(dp) :: sz, x0, y0, x1, y1, h1, dy
         logical :: found
 
-        sz = style_size(style, size)
-        g0 = math_gid(state%noads(q)%cp, FACE_MATH)
+        sz = style_size(style, size, state%mface)
+        g0 = math_gid(state%noads(q)%cp, state%mface)
         g = script_glyph(g0, style)
         found = .true.
         if (style == ST_D) then
             call glyph_bbox(g0, x0, y0, x1, y1)
-            h1 = max(math_const(MC_DISPLAY_OPERATOR_MIN_HEIGHT), 1.25_dp*(y1 - y0))*sz
+            h1 = max(math_const(MC_DISPLAY_OPERATOR_MIN_HEIGHT, state%mface), 1.25_dp*(y1 - y0))*sz
             call glyph_variants(g0, .true., nvar, vg, va)
             found = .false.
             do k = 1, nvar
@@ -2351,7 +2372,7 @@ contains
             delta = box%ital
         end if
         ! Centred on the axis.
-        dy = math_const(MC_AXIS_HEIGHT)*sz - 0.5_dp*(box%h - box%d)
+        dy = math_const(MC_AXIS_HEIGHT, state%mface)*sz - 0.5_dp*(box%h - box%d)
         call move_box(state, box, 0.0_dp, dy)
         box%h = box%h + dy
         box%d = box%d - dy
@@ -2376,7 +2397,7 @@ contains
         real(dp) :: sz, w, up, down, h, d, w0
         logical :: has_sup, has_sub
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         has_sup = state%noads(q)%sup >= 0
         has_sub = state%noads(q)%sub >= 0
         w0 = box%w
@@ -2393,16 +2414,16 @@ contains
         end if
         call move_box(state, box, 0.5_dp*(w - w0), 0.0_dp)
         if (has_sup) then
-            up = max(math_const(MC_UPPER_LIMIT_BASELINE_RISE_MIN)*sz - x%d, &
-                     math_const(MC_UPPER_LIMIT_GAP_MIN)*sz)
+            up = max(math_const(MC_UPPER_LIMIT_BASELINE_RISE_MIN, state%mface)*sz - x%d, &
+                     math_const(MC_UPPER_LIMIT_GAP_MIN, state%mface)*sz)
             call move_box(state, x, 0.5_dp*(w - x%w) + 0.5_dp*delta, h + up + x%d)
-            box%h = h + up + x%d + x%h + math_const(MC_STACK_GAP_MIN)*sz
+            box%h = h + up + x%d + x%h + math_const(MC_STACK_GAP_MIN, state%mface)*sz
         end if
         if (has_sub) then
-            down = max(math_const(MC_LOWER_LIMIT_BASELINE_DROP_MIN)*sz - z%h, &
-                       math_const(MC_LOWER_LIMIT_GAP_MIN)*sz)
+            down = max(math_const(MC_LOWER_LIMIT_BASELINE_DROP_MIN, state%mface)*sz - z%h, &
+                       math_const(MC_LOWER_LIMIT_GAP_MIN, state%mface)*sz)
             call move_box(state, z, 0.5_dp*(w - z%w) - 0.5_dp*delta, -(d + down + z%h))
-            box%d = d + down + z%h + z%d + math_const(MC_STACK_GAP_MIN)*sz
+            box%d = d + down + z%h + z%d + math_const(MC_STACK_GAP_MIN, state%mface)*sz
         end if
         ! Reading order: the upper limit, the operator, the lower one.
         if (has_sup) call to_front(state, box%i0, x%i0, x%i1)
@@ -2430,16 +2451,16 @@ contains
         real(dp) :: sz, ssz, u, v, gap, psi, w, x_sup, x_sub
         logical :: has_sup, has_sub
 
-        sz = style_size(style, size)
-        ssz = style_size(sup_style(style), size)
+        sz = style_size(style, size, state%mface)
+        ssz = style_size(sup_style(style), size, state%mface)
         has_sup = state%noads(q)%sup >= 0
         has_sub = state%noads(q)%sub >= 0
         if (box%is_char) then
             u = 0.0_dp
             v = 0.0_dp
         else
-            u = box%h - math_const(MC_SUPERSCRIPT_BASELINE_DROP_MAX)*ssz
-            v = box%d + math_const(MC_SUBSCRIPT_BASELINE_DROP_MIN)*ssz
+            u = box%h - math_const(MC_SUPERSCRIPT_BASELINE_DROP_MAX, state%mface)*ssz
+            v = box%d + math_const(MC_SUBSCRIPT_BASELINE_DROP_MIN, state%mface)*ssz
         end if
         x_sup = box%w + box%ital
 
@@ -2448,21 +2469,21 @@ contains
 
         if (has_sup) then
             if (cramped) then
-                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP_CRAMPED)*sz)
+                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP_CRAMPED, state%mface)*sz)
             else
-                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP)*sz)
+                u = max(u, math_const(MC_SUPERSCRIPT_SHIFT_UP, state%mface)*sz)
             end if
-            u = max(u, sup%d + math_const(MC_SUPERSCRIPT_BOTTOM_MIN)*sz)
+            u = max(u, sup%d + math_const(MC_SUPERSCRIPT_BOTTOM_MIN, state%mface)*sz)
         end if
         if (has_sub .and. .not. has_sup) then
-            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN)*sz, &
-                    sub%h - math_const(MC_SUBSCRIPT_TOP_MAX)*sz)
+            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN, state%mface)*sz, &
+                    sub%h - math_const(MC_SUBSCRIPT_TOP_MAX, state%mface)*sz)
         else if (has_sub) then
-            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN)*sz)
+            v = max(v, math_const(MC_SUBSCRIPT_SHIFT_DOWN, state%mface)*sz)
             gap = (u - sup%d) - (sub%h - v)
-            if (gap < math_const(MC_SUB_SUPERSCRIPT_GAP_MIN)*sz) then
-                v = v + math_const(MC_SUB_SUPERSCRIPT_GAP_MIN)*sz - gap
-                psi = math_const(MC_SUPERSCRIPT_BOTTOM_MAX_WITH_SUBSCRIPT)*sz - (u - sup%d)
+            if (gap < math_const(MC_SUB_SUPERSCRIPT_GAP_MIN, state%mface)*sz) then
+                v = v + math_const(MC_SUB_SUPERSCRIPT_GAP_MIN, state%mface)*sz - gap
+                psi = math_const(MC_SUPERSCRIPT_BOTTOM_MAX_WITH_SUBSCRIPT, state%mface)*sz - (u - sup%d)
                 if (psi > 0.0_dp) then
                     u = u + psi
                     v = v - psi
@@ -2491,7 +2512,7 @@ contains
         end if
         ! The space after the scripts is the formula's, as TeX's
         ! \scriptspace is, whatever the style of the nucleus.
-        box%w = w + math_const(MC_SPACE_AFTER_SCRIPT)*size
+        box%w = w + math_const(MC_SPACE_AFTER_SCRIPT, state%mface)*size
         box%i1 = state%ni
         box%is_char = .false.
         box%ital = 0.0_dp
@@ -2501,9 +2522,10 @@ contains
     ! corner plus the script's at its facing left corner, each read at two
     ! heights -- the nucleus's top and the script's bottom for a
     ! superscript, the script's top and the nucleus's bottom for a
-    ! subscript -- and the    ! smaller of the two sums taken, as XeTeX takes it. The kerns are the
-    ! characters' own, not those of their script-size alternates. shift is
-    ! how far the script's baseline sits above the nucleus's.
+    ! subscript -- and the larger of the two sums taken, the one that
+    ! keeps the script further out, as XeTeX takes it. The kerns are those
+    ! of the glyphs drawn, script-size alternates where they are used.
+    ! shift is how far the script's baseline sits above the nucleus's.
     function script_kern(base, scr, shift, sup) result(k)
         type(mbox_t), intent(in) :: base, scr
         real(dp), intent(in) :: shift
@@ -2514,11 +2536,11 @@ contains
         if (sup) then
             h1 = base%h
             h2 = shift - scr%d
-            k = min(corner(h1, 1, 4), corner(h2, 1, 4))
+            k = max(corner(h1, 1, 4), corner(h2, 1, 4))
         else
             h1 = shift + scr%h
             h2 = -base%d
-            k = min(corner(h1, 3, 2), corner(h2, 3, 2))
+            k = max(corner(h1, 3, 2), corner(h2, 3, 2))
         end if
 
     contains
@@ -2555,12 +2577,12 @@ contains
         target = 0.0_dp
         style = style0
         if (state%noads(q)%style >= 0) style = state%noads(q)%style
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         nds = NULL_DELIM*size
         i0 = state%ni + 1
-        a = math_const(MC_AXIS_HEIGHT)*sz
+        a = math_const(MC_AXIS_HEIGHT, state%mface)*sz
         th = 0.0_dp
-        if (state%noads(q)%rule) th = math_const(MC_FRACTION_RULE_THICKNESS)*sz
+        if (state%noads(q)%rule) th = math_const(MC_FRACTION_RULE_THICKNESS, state%mface)*sz
 
         if (state%noads(q)%dl > 0) then
             target = DELIM1*sz
@@ -2573,27 +2595,31 @@ contains
 
         if (state%noads(q)%rule) then
             if (style == ST_D) then
-                u = math_const(MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP)*sz
-                v = math_const(MC_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN)*sz
-                phi_n = math_const(MC_FRACTION_NUM_DISPLAY_STYLE_GAP_MIN)*sz
-                phi_d = math_const(MC_FRACTION_DENOM_DISPLAY_STYLE_GAP_MIN)*sz
+                u = math_const(MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP, state%mface)*sz
+                v = math_const(MC_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN, state%mface)*sz
+                phi_n = math_const(MC_FRACTION_NUM_DISPLAY_STYLE_GAP_MIN, state%mface)*sz
+                phi_d = math_const(MC_FRACTION_DENOM_DISPLAY_STYLE_GAP_MIN, state%mface)*sz
             else
-                u = math_const(MC_FRACTION_NUMERATOR_SHIFT_UP)*sz
-                v = math_const(MC_FRACTION_DENOMINATOR_SHIFT_DOWN)*sz
-                phi_n = math_const(MC_FRACTION_NUMERATOR_GAP_MIN)*sz
-                phi_d = math_const(MC_FRACTION_DENOMINATOR_GAP_MIN)*sz
+                u = math_const(MC_FRACTION_NUMERATOR_SHIFT_UP, state%mface)*sz
+                v = math_const(MC_FRACTION_DENOMINATOR_SHIFT_DOWN, state%mface)*sz
+                phi_n = math_const(MC_FRACTION_NUMERATOR_GAP_MIN, state%mface)*sz
+                phi_d = math_const(MC_FRACTION_DENOMINATOR_GAP_MIN, state%mface)*sz
             end if
             if ((u - num%d) - (a + 0.5_dp*th) < phi_n) u = phi_n + a + 0.5_dp*th + num%d
             if ((a - 0.5_dp*th) - (den%h - v) < phi_d) v = phi_d - a + 0.5_dp*th + den%h
         else
+            ! TeX's rule 15b shifts a stack's halves by num1 and denom1 in
+            ! display style and by num3 and denom2 otherwise, which XeTeX
+            ! reads as the fraction's shifts but for num3, StackTopShiftUp:
+            ! the MATH table's other stack shifts are never used.
             if (style == ST_D) then
-                u = math_const(MC_STACK_TOP_DISPLAY_STYLE_SHIFT_UP)*sz
-                v = math_const(MC_STACK_BOTTOM_DISPLAY_STYLE_SHIFT_DOWN)*sz
-                clr = math_const(MC_STACK_DISPLAY_STYLE_GAP_MIN)*sz
+                u = math_const(MC_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP, state%mface)*sz
+                v = math_const(MC_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN, state%mface)*sz
+                clr = math_const(MC_STACK_DISPLAY_STYLE_GAP_MIN, state%mface)*sz
             else
-                u = math_const(MC_STACK_TOP_SHIFT_UP)*sz
-                v = math_const(MC_STACK_BOTTOM_SHIFT_DOWN)*sz
-                clr = math_const(MC_STACK_GAP_MIN)*sz
+                u = math_const(MC_STACK_TOP_SHIFT_UP, state%mface)*sz
+                v = math_const(MC_FRACTION_DENOMINATOR_SHIFT_DOWN, state%mface)*sz
+                clr = math_const(MC_STACK_GAP_MIN, state%mface)*sz
             end if
             delta = 0.5_dp*(clr - ((u - num%d) - (den%h - v)))
             if (delta > 0.0_dp) then
@@ -2633,8 +2659,8 @@ contains
     ! the radicand in the same style, cramped; the smallest variant of the
     ! radical sign that covers it with the gap and the rule above, or the
     ! sign's assembly; any height the sign has to spare split evenly above
-    ! and below; the rule along the top of the sign, with the extra
-    ! ascender above it. A degree is set in scriptscript style with
+    ! and below; the rule along the top of the sign, with as much space
+    ! again above it as XeTeX leaves. A degree is set in scriptscript style with
     ! RadicalKernBeforeDegree before it and RadicalKernAfterDegree after,
     ! its baseline raised by RadicalDegreeBottomRaisePercent of the
     ! radical's height less its depth, as unicode-math places it.
@@ -2647,12 +2673,12 @@ contains
         real(dp) :: sz, th, phi, need, hg, dg, extra, rise, xs, left, ybot
         integer :: i0, g, nd
 
-        sz = style_size(style, size)
-        th = math_const(MC_RADICAL_RULE_THICKNESS)*sz
+        sz = style_size(style, size, state%mface)
+        th = math_const(MC_RADICAL_RULE_THICKNESS, state%mface)*sz
         if (style == ST_D) then
-            phi = math_const(MC_RADICAL_DISPLAY_STYLE_VERTICAL_GAP)*sz
+            phi = math_const(MC_RADICAL_DISPLAY_STYLE_VERTICAL_GAP, state%mface)*sz
         else
-            phi = math_const(MC_RADICAL_VERTICAL_GAP)*sz
+            phi = math_const(MC_RADICAL_VERTICAL_GAP, state%mface)*sz
         end if
         i0 = state%ni + 1
         ! The sign goes into the box before the radicand, as TeX puts it;
@@ -2661,7 +2687,7 @@ contains
         call mlist_box(state, state%noads(q)%a, style, .true., size, x)
         need = x%h + x%d + phi + th
 
-        g = glyph_cmap(FACE_MATH, 8730)
+        g = glyph_cmap(state%mface, 8730)
         call make_delim_box(state, g, need, sz, sign)
         hg = sign%h
         dg = sign%d
@@ -2672,16 +2698,18 @@ contains
         call move_box(state, sign, 0.0_dp, rise)
         xs = 0.0_dp
         nd = 0
-        box%h = x%h + phi + th + math_const(MC_RADICAL_EXTRA_ASCENDER)*sz
+        ! Above the rule, as much space again as the rule is thick: XeTeX's
+        ! overbar, which leaves the MATH table's RadicalExtraAscender unused.
+        box%h = x%h + phi + 2.0_dp*th
         box%d = max(x%d, dg - rise)
         if (state%noads(q)%b >= 0) then
             call mlist_box(state, state%noads(q)%b, ST_SS, .false., size, deg)
             nd = deg%i1 - deg%i0 + 1
-            left = math_const(MC_RADICAL_KERN_BEFORE_DEGREE)*sz
-            ybot = math_percent(MC_RADICAL_DEGREE_BOTTOM_RAISE_PERCENT)/100.0_dp &
+            left = math_const(MC_RADICAL_KERN_BEFORE_DEGREE, state%mface)*sz
+            ybot = math_percent(MC_RADICAL_DEGREE_BOTTOM_RAISE_PERCENT, state%mface)/100.0_dp &
                    *(box%h - box%d)
             call move_box(state, deg, left, ybot)
-            xs = left + deg%w + math_const(MC_RADICAL_KERN_AFTER_DEGREE)*sz
+            xs = left + deg%w + math_const(MC_RADICAL_KERN_AFTER_DEGREE, state%mface)*sz
             box%h = max(box%h, ybot + deg%h)
             box%d = max(box%d, deg%d - ybot)
             if (xs < 0.0_dp) then
@@ -2725,7 +2753,7 @@ contains
         real(dp) :: sz, s, sa, h, w, delta, x0, y0, x1, y1, ya
         logical :: char_nuc, asm, has_scripts
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         i0 = state%ni + 1
         hq = state%noads(q)%a
         char_nuc = .false.
@@ -2740,7 +2768,7 @@ contains
         end if
         has_scripts = state%noads(q)%sup >= 0 .or. state%noads(q)%sub >= 0
         if (char_nuc) then
-            g = math_gid(state%noads(cnuc)%cp, FACE_MATH)
+            g = math_gid(state%noads(cnuc)%cp, state%mface)
             g = glyph_dotless(g)
             call glyph_box(state, script_glyph(g, style), sz, x)
             x%kgid = g
@@ -2761,7 +2789,7 @@ contains
             h = x%h
         end if
 
-        ga0 = math_gid(state%noads(q)%cp, FACE_MATH)
+        ga0 = math_gid(state%noads(q)%cp, state%mface)
         ga = ga0
         asm = .false.
         if (state%noads(q)%wide) then
@@ -2784,7 +2812,7 @@ contains
             call glyph_bbox(script_glyph(ga, style), x0, y0, x1, y1)
             ya = max(-y0*sz, 0.0_dp)
         end if
-        delta = min(h, math_const(MC_ACCENT_BASE_HEIGHT)*sz)
+        delta = min(h, math_const(MC_ACCENT_BASE_HEIGHT, state%mface)*sz)
         call move_box(state, acc, s - sa, h - delta + ya)
         call to_front(state, i0, acc%i0, acc%i1)
         box%i0 = i0
@@ -2808,19 +2836,19 @@ contains
         type(mbox_t), intent(out) :: box
         real(dp) :: sz, gap, th, extra
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         if (state%noads(q)%kind == K_OVER) then
             call mlist_box(state, state%noads(q)%a, style, .true., size, box)
-            gap = math_const(MC_OVERBAR_VERTICAL_GAP)*sz
-            th = math_const(MC_OVERBAR_RULE_THICKNESS)*sz
-            extra = math_const(MC_OVERBAR_EXTRA_ASCENDER)*sz
+            gap = math_const(MC_OVERBAR_VERTICAL_GAP, state%mface)*sz
+            th = math_const(MC_OVERBAR_RULE_THICKNESS, state%mface)*sz
+            extra = math_const(MC_OVERBAR_EXTRA_ASCENDER, state%mface)*sz
             call add_rule(state, 0.0_dp, box%h + gap, box%w, th)
             box%h = box%h + gap + th + extra
         else
             call mlist_box(state, state%noads(q)%a, style, cramped, size, box)
-            gap = math_const(MC_UNDERBAR_VERTICAL_GAP)*sz
-            th = math_const(MC_UNDERBAR_RULE_THICKNESS)*sz
-            extra = math_const(MC_UNDERBAR_EXTRA_DESCENDER)*sz
+            gap = math_const(MC_UNDERBAR_VERTICAL_GAP, state%mface)*sz
+            th = math_const(MC_UNDERBAR_RULE_THICKNESS, state%mface)*sz
+            extra = math_const(MC_UNDERBAR_EXTRA_DESCENDER, state%mface)*sz
             call add_rule(state, 0.0_dp, -(box%d + gap + th), box%w, th)
             box%d = box%d + gap + th + extra
         end if
@@ -2851,18 +2879,18 @@ contains
         do while (q > 0)
             if (state%noads(q)%kind == K_STYLE) cur = state%noads(q)%style
             if (state%noads(q)%kind == K_LR .and. state%noads(q)%auto == 1) then
-                sz = style_size(cur, size)
+                sz = style_size(cur, size, state%mface)
                 i0 = state%ni
                 save = state%lr_target
                 state%lr_target = -2.0_dp
                 call mlist_box(state, state%noads(q)%a, cur, cramped, size, inner)
                 state%lr_target = save
                 state%ni = i0
-                ax = math_const(MC_AXIS_HEIGHT)*sz
+                ax = math_const(MC_AXIS_HEIGHT, state%mface)*sz
                 full = 2.0_dp*max(inner%h - ax, inner%d + ax)
-                call glyph_bbox(math_gid(state%noads(q)%dl, FACE_MATH), x0, y0, x1, y1)
+                call glyph_bbox(math_gid(state%noads(q)%dl, state%mface), x0, y0, x1, y1)
                 hl = (y1 - y0)*sz
-                call glyph_bbox(math_gid(state%noads(q)%dr, FACE_MATH), x0, y0, x1, y1)
+                call glyph_bbox(math_gid(state%noads(q)%dr, state%mface), x0, y0, x1, y1)
                 hr = (y1 - y0)*sz
                 grow = full - AUTO_SHORTFALL*sz > max(hl, hr)
                 o = state%noads(q)%lo
@@ -2917,14 +2945,14 @@ contains
         real(dp) :: sz, a, d1, d2, target, full, save, save_full
         integer :: i0
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         i0 = state%ni + 1
         save = state%lr_target
         save_full = state%lr_full
         state%lr_target = -2.0_dp
         call mlist_box(state, state%noads(q)%a, style, cramped, size, inner)
         state%ni = i0 - 1
-        a = math_const(MC_AXIS_HEIGHT)*sz
+        a = math_const(MC_AXIS_HEIGHT, state%mface)*sz
         d2 = inner%d + a
         d1 = inner%h + inner%d - d2
         if (d2 > d1) d1 = d2
@@ -2963,8 +2991,8 @@ contains
         real(dp) :: sz, hb, x0, y0, x1, y1, d1, target
         real(dp), parameter :: FACTOR(4) = [1.0_dp, 1.5_dp, 2.0_dp, 2.5_dp]
 
-        sz = style_size(style, size)
-        call glyph_bbox(glyph_cmap(FACE_MATH, iachar("(")), x0, y0, x1, y1)
+        sz = style_size(style, size, state%mface)
+        call glyph_bbox(glyph_cmap(state%mface, iachar("(")), x0, y0, x1, y1)
         hb = FACTOR(state%noads(q)%level)*1.2_dp*(y1 - y0)*size
         d1 = 0.5_dp*hb
         target = max(DELIM_FACTOR*d1, 2.0_dp*d1 - SHORTFALL*size)
@@ -2982,14 +3010,14 @@ contains
         real(dp), intent(in), optional :: full
         real(dp) :: sz, dy
 
-        sz = style_size(style, size)
+        sz = style_size(style, size, state%mface)
         if (code == 0) then
             box = empty_box(state)
             box%w = NULL_DELIM*size
             return
         end if
-        call make_delim_box(state, math_gid(code, FACE_MATH), target, sz, box, full)
-        dy = math_const(MC_AXIS_HEIGHT)*sz - 0.5_dp*(box%h - box%d)
+        call make_delim_box(state, math_gid(code, state%mface), target, sz, box, full)
+        dy = math_const(MC_AXIS_HEIGHT, state%mface)*sz - 0.5_dp*(box%h - box%d)
         call move_box(state, box, 0.0_dp, dy)
         box%h = box%h + dy
         box%d = box%d - dy
@@ -3067,7 +3095,7 @@ contains
         integer, allocatable :: seq(:)
 
         call glyph_assembly(g, vertical, n, parts, st, en, fu, ex, ic)
-        minov = real(MIN_CONNECTOR_OVERLAP, dp)/real(FACE_EM(FACE_MATH), dp)
+        minov = math_overlap(state%mface)
         reps = -1
         no_ext = .true.
         do

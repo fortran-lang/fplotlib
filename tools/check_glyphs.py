@@ -21,8 +21,8 @@ def close(a, b):
 def main():
     exp = json.load(open(sys.argv[1]))
     lines = open(sys.argv[2]).read().split("\n")
-    em = exp["em"]
     cmap, kern = {}, {}
+    nx = 0
     ng = 0
     i = 0
     while i < len(lines):
@@ -60,6 +60,7 @@ def main():
         elif tag == "K":
             g = int(p[1])
             k = exp["math"][str(g)]["kern"]
+            em = exp["math"][str(g)]["em"]
             vals = list(map(float, p[2:]))
             hs = [0.01 * j for j in range(-50, 151, 5)]
             want = []
@@ -99,9 +100,12 @@ def main():
         elif tag == "R":
             kern[(int(p[1]), int(p[2]))] = float(p[3])
         elif tag == "X":
-            assert all(close(float(a), b) for a, b in zip(p[1:], exp["constants"])), "constants"
+            want = exp["constants"][int(p[1]) - 1]
+            assert all(close(float(a), b) for a, b in zip(p[2:], want)), "constants"
+            nx += 1
         i += 1
     assert ng == len(exp["glyphs"]), (ng, len(exp["glyphs"]))
+    assert nx == len(exp["constants"]), "constants of every family"
     assert cmap == {(f, cp): g for f, cp, g in exp["cmap"]}, "cmap"
     want = {(a, b): v for a, b, v in exp["kern"]}
     assert set(kern) == set(want), ("kerned pairs", len(kern), len(want))
