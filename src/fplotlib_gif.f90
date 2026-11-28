@@ -16,6 +16,7 @@ module fplotlib_gif
     private
 
     public :: gif_encode
+    public :: build_palette, bucket, NBUCKET, NPAL
 
     ! Colours are bucketed to five bits per channel before anything else.
     ! 32768 buckets is small enough to histogram outright and fine enough
@@ -123,11 +124,12 @@ contains
     ! frame, which is far more visible than the extra error.
     ! ------------------------------------------------------------------
 
-    subroutine build_palette(pix, npix, pal, map)
+    subroutine build_palette(pix, npix, pal, map, ncolors)
         character(len=*), intent(in) :: pix
         integer, intent(in) :: npix
         integer, intent(out) :: pal(3, 0:NPAL - 1)
         integer, intent(out) :: map(0:NBUCKET - 1)
+        integer, intent(out), optional :: ncolors
         integer, allocatable :: cnt(:), idx(:)
         real, allocatable :: sr(:), sg(:), sb(:)
         integer, allocatable :: lo(:), hi(:), pop(:)
@@ -243,6 +245,7 @@ contains
                 pal(3, i - 1) = min(255, max(0, nint(tb/tn)))
             end if
         end do
+        if (present(ncolors)) ncolors = nbox
     end subroutine build_palette
 
     function bucket(r, g, b) result(k)

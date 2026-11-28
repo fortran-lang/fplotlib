@@ -23,7 +23,7 @@ module fplotlib
     use fplotlib_draw, axes_state_t_d => axes_t, fig_state_t_d => figure_t
     use fplotlib_status, only: status_t, contract_error, set_status, STATUS_OK, ERROR_IO, ERROR_SIZE, MESSAGE_LEN
     use fplotlib_io, only: file_ext, write_bytes, read_bytes, dir_name
-    use, intrinsic :: iso_fortran_env, only: error_unit
+    use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use fplotlib_markdown, only: md_typeset, md_typeset_files, md_document_t, md_figure_t, &
                                  md_directive_cb, md_body_cb, md_heading_cb
@@ -69,11 +69,11 @@ module fplotlib
     public :: imshow, colorbar, contour, contourf, clabel
     public :: triplot, tripcolor, tricontour, tricontourf
     public :: title, xlabel, ylabel, grid, legend
-    public :: xlim, ylim, clf, savefig, show, figure
+    public :: xlim, ylim, clf, savefig, show, show_sixel, figure
     public :: get_xlim, get_ylim, invert_xaxis, invert_yaxis
     public :: set_bad, set_under, set_over, set_cmap_colors
     public :: figlegend
-    public :: render_svg, render_pdf, render_png, render_eps
+    public :: render_svg, render_pdf, render_png, render_eps, render_sixel
     public :: add_frame, save_animation
     public :: axes3d, plot3d, scatter3d, plot_surface, plot_wireframe
     public :: plot_trisurf, bar3d, quiver3d, contour3d
@@ -229,6 +229,7 @@ module fplotlib
         procedure :: save => fig_save
         procedure :: savefig => fig_save
         procedure :: show => fig_show
+        procedure :: show_sixel => fig_show_sixel
         procedure :: capture => fig_capture
         procedure :: clf => fig_clf
         procedure :: close => fig_close
@@ -1306,6 +1307,24 @@ contains
         end if
         call show(status=status)
     end subroutine fig_show
+
+    subroutine fig_show_sixel(self, dpi, facecolor, transparent, bbox_inches, &
+                              pad_inches, status)
+        class(figure_t), intent(in) :: self
+        real(dp), intent(in), optional :: dpi, pad_inches
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        type(status_t), intent(out), optional :: status
+
+        if (self%num <= 0) &
+            call contract_error( &
+                "figure_t%show_sixel: figure is not initialized or has been closed")
+        if (self%num /= cur_fig .or. .not. fig_initialized) then
+            call figure(num=self%num)
+        end if
+        call show_sixel(dpi=dpi, facecolor=facecolor, transparent=transparent, &
+                        bbox_inches=bbox_inches, pad_inches=pad_inches, status=status)
+    end subroutine fig_show_sixel
 
     subroutine fig_capture(self, frame, facecolor, transparent, bbox_inches, pad_inches)
         class(figure_t), intent(in) :: self
@@ -7966,19 +7985,21 @@ contains
         call check_pad_arg("savefig", "pad_inches", pad_inches)
 
         select case (file_ext(filename))
-        case ("svg", "pdf", "png", "eps")
+        case ("svg", "pdf", "png", "eps", "six", "sixel")
         case default
-            call contract_error("savefig: supported formats are .svg, .pdf, .eps and .png, not ." &
-                                //file_ext(filename))
+            call contract_error( &
+                "savefig: supported formats are .svg, .pdf, .eps, .png, .six and .sixel, not ." &
+                //file_ext(filename))
         end select
         if (present(dpi)) then
             if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
                 call contract_error("savefig: dpi must be finite and positive")
             end if
         end if
-        ! A whole figure too large for a PNG is known beforehand; a tight
-        ! crop takes its size from the drawing, and render_png decides.
-        if (file_ext(filename) == "png" .and. .not. tight_crop(bbox_inches)) then
+        ! A whole figure too large for a raster is known beforehand; a tight
+        ! crop takes its size from the drawing, and render_png/render_sixel decide.
+        if ((file_ext(filename) == "png" .or. file_ext(filename) == "six" &
+             .or. file_ext(filename) == "sixel") .and. .not. tight_crop(bbox_inches)) then
             if (present(dpi)) then
                 call check_pixels("savefig", dpi)
             else
@@ -7989,7 +8010,7 @@ contains
         ! the figure's own dpi is what figure(dpi=) set and outlives the call.
         saved_dpi = fig_dpi
         if (present(dpi)) fig_dpi = dpi
-        ! Cropped to what is drawn, a PNG's size depends on the drawing,
+        ! Cropped to what is drawn, a raster's size depends on the drawing,
         ! which the caller cannot know beforehand: one too large is a
         ! failure at run time, returned like a file that cannot be written.
         select case (file_ext(filename))
@@ -8001,6 +8022,8 @@ contains
             data = render_png(facecolor, transparent, bbox_inches, pad_inches, status=local)
         case ("eps")
             data = render_eps(facecolor, transparent, bbox_inches, pad_inches, status=local)
+        case ("six", "sixel")
+            data = render_sixel(facecolor, transparent, bbox_inches, pad_inches, status=local)
         end select
         fig_dpi = saved_dpi
         if (.not. local%ok()) then
@@ -8488,5 +8511,48 @@ contains
         print *, "fplotlib: wrote fplotlib_show.svg"
         print *, "fplotlib: for Jupyter use display_data('image/svg+xml', render_svg())"
     end subroutine show
+
+    ! Write the current figure directly to standard output as a DEC Sixel
+    ! stream, for inline display in Sixel-capable terminals (xterm -ti vt340,
+    ! foot, WezTerm, mlterm, iTerm2, mintty, Contour, etc.).
+    subroutine show_sixel(dpi, facecolor, transparent, bbox_inches, pad_inches, status)
+        real(dp), intent(in), optional :: dpi, pad_inches
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: data
+        type(status_t) :: local
+        integer :: ios
+
+        ! Arguments checked as tools/gen_arg_checks.py tables them.
+        call check_pad_arg("show_sixel", "pad_inches", pad_inches)
+
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) then
+                call contract_error("show_sixel: dpi must be finite and positive")
+            end if
+        end if
+        if (.not. tight_crop(bbox_inches)) then
+            if (present(dpi)) then
+                call check_pixels("show_sixel", dpi)
+            else
+                call check_pixels("show_sixel", fig_dpi)
+            end if
+        end if
+        data = render_sixel(facecolor, transparent, bbox_inches, pad_inches, dpi=dpi, &
+                            status=local)
+        if (.not. local%ok()) then
+            call fail_run("show_sixel", local%code, trim(local%message), status)
+            return
+        end if
+        write (output_unit, "(a)", iostat=ios) data
+        if (ios /= 0) then
+            call fail_run("show_sixel", ERROR_IO, "cannot write sixel stream to output_unit", &
+                          status)
+            return
+        end if
+        flush (output_unit)
+        if (present(status)) status = local
+    end subroutine show_sixel
 
 end module fplotlib

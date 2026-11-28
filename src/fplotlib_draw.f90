@@ -22,6 +22,7 @@ module fplotlib_draw
     use fplotlib_backend_pdf
     use fplotlib_backend_eps
     use fplotlib_gif, only: gif_encode
+    use fplotlib_sixel, only: sixel_encode
     use fplotlib_proj3d
     use fplotlib_backend_png
     use fplotlib_mathtext
@@ -5113,5 +5114,38 @@ contains
         end if
         png = r%bytes()
     end function render_png
+
+    ! Render the current figure to a DEC Sixel terminal graphics stream.
+    ! Uses the PNG rasterizer with keep_pixels=.true. (flattening alpha onto
+    ! white) and encodes the packed RGB buffer via sixel_encode.
+    function render_sixel(facecolor, transparent, bbox_inches, pad_inches, dpi, &
+                          status) result(sixel)
+        character(len=*), intent(in), optional :: facecolor, bbox_inches
+        logical, intent(in), optional :: transparent
+        real(dp), intent(in), optional :: pad_inches, dpi
+        type(status_t), intent(out), optional :: status
+        character(len=:), allocatable :: sixel
+        type(png_renderer_t) :: r
+        type(status_t) :: st
+
+        call check_pad_arg("render_sixel", "pad_inches", pad_inches)
+        if (present(dpi)) then
+            if (.not. ieee_is_finite(dpi) .or. dpi <= 0.0_dp) &
+                call contract_error("render_sixel: dpi must be finite and positive")
+            call r%set_dpi(dpi)
+        else
+            call r%set_dpi(fig_dpi)
+        end if
+        r%keep_pixels = .true.
+        call render_figure(r, facecolor, transparent, bbox_inches, pad_inches, st)
+        if (present(status)) status = st
+        if (.not. st%ok()) then
+            sixel = ""
+            if (present(status)) return
+            write (error_unit, "(a)") "fplotlib: render_sixel: "//trim(st%message)
+            error stop 2
+        end if
+        sixel = sixel_encode(r%pw, r%ph, r%rgb)
+    end function render_sixel
 
 end module fplotlib_draw
