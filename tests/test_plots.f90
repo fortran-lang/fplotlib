@@ -1740,6 +1740,7 @@ program test_plots
     call document_case()
     call textbox_case()
     call plot_kwargs_case()
+    call extended_kwargs_case()
     call oop_figure_check()
 
     print *, "All test plots written."
@@ -1988,6 +1989,339 @@ contains
             error stop "plot_kwargs_case: single-call ax%plot differs from multi-call"
         deallocate (svg_s, svg_ref)
     end subroutine plot_kwargs_case
+
+    subroutine extended_kwargs_case()
+        character, parameter :: NL = achar(10)
+        character(len=:), allocatable :: svg_s, svg_ref
+        real(dp) :: x(10), y(10), y2(10), err(10), z(5, 5), rgb(4, 4, 3)
+        real(dp) :: bx(4), bh(4), mat(2, 10), hdata(20)
+        character(len=5), parameter :: cats(4) = ["alpha", "beta ", "gamma", "delta"]
+        type(figure_t) :: fig, fig_ref
+        type(axes_t) :: ax_one, ax_ref
+        type(axes_t), allocatable :: row(:), grd(:, :)
+        type(report_t) :: rep, rep_ref
+        type(document_asset_t), allocatable :: a1(:), a2(:)
+        integer :: k, i, j, sz
+
+        do k = 1, 10
+            x(k) = real(k, dp)
+            y(k) = sin(0.5_dp*x(k)) + 1.5_dp
+            y2(k) = y(k) - 0.3_dp
+            err(k) = 0.1_dp
+            mat(1, k) = real(k, dp)
+            mat(2, k) = real(k, dp)*1.5_dp + 1.0_dp
+        end do
+        do k = 1, 20
+            hdata(k) = real(mod(k*7, 11), dp)*0.5_dp
+        end do
+        bx = [1.0_dp, 2.0_dp, 3.0_dp, 4.0_dp]
+        bh = [2.0_dp, 5.0_dp, 3.0_dp, 4.0_dp]
+        do i = 1, 5
+            do j = 1, 5
+                z(i, j) = real(i + j, dp)
+            end do
+        end do
+        rgb = 0.5_dp
+        rgb(1, 1, 1) = 1.0_dp
+
+        ! 1) scatter
+        call clf()
+        call scatter(x, y, label="pts", title="Scat", xlabel="X", ylabel="Y", &
+                     xlim=[0.0_dp, 11.0_dp], ylim=[0.0_dp, 3.0_dp], &
+                     grid=.true., legend=.true., savefig="tests/out/ext_scatter.svg")
+        svg_s = render_svg()
+        call clf()
+        call scatter(x, y, label="pts")
+        call title("Scat")
+        call xlabel("X")
+        call ylabel("Y")
+        call xlim(0.0_dp, 11.0_dp)
+        call ylim(0.0_dp, 3.0_dp)
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: scatter mismatch"
+        inquire (file="tests/out/ext_scatter.svg", size=sz)
+        if (sz /= len(svg_ref)) error stop "extended_kwargs_case: scatter savefig mismatch"
+
+        ! 2) bar (numeric + categorical) & barh (numeric + categorical)
+        call clf()
+        call bar(bx, bh, label="b", title="Bar", xlabel="x", ylabel="h", &
+                 grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call bar(bx, bh, label="b")
+        call title("Bar")
+        call xlabel("x")
+        call ylabel("h")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: bar_num mismatch"
+
+        call clf()
+        call bar(cats, bh, title="BarCat", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call bar(cats, bh)
+        call title("BarCat")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: bar_cat mismatch"
+
+        call clf()
+        call barh(bx, bh, label="bh", title="Barh", grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call barh(bx, bh, label="bh")
+        call title("Barh")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: barh_num mismatch"
+
+        call clf()
+        call barh(cats, bh, title="BarhCat", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call barh(cats, bh)
+        call title("BarhCat")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: barh_cat mismatch"
+
+        ! 3) hist, fill_between, fill_betweenx, errorbar, step, stem
+        call clf()
+        call hist(hdata, bins=5, label="h", title="Hist", xlabel="v", ylabel="n", &
+                  grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call hist(hdata, bins=5, label="h")
+        call title("Hist")
+        call xlabel("v")
+        call ylabel("n")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: hist mismatch"
+
+        call clf()
+        call fill_between(x, y, y2, label="band", title="Fill", grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call fill_between(x, y, y2, label="band")
+        call title("Fill")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: fill_between mismatch"
+
+        call clf()
+        call fill_betweenx(x, y, y2, title="FillX", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call fill_betweenx(x, y, y2)
+        call title("FillX")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: fill_betweenx mismatch"
+
+        call clf()
+        call errorbar(x, y, yerr=err, label="e", title="Err", grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call errorbar(x, y, yerr=err, label="e")
+        call title("Err")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: errorbar mismatch"
+
+        call clf()
+        call step(x, y, label="st", title="Step", grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call step(x, y, label="st")
+        call title("Step")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: step mismatch"
+
+        call clf()
+        call stem(x, y, label="sm", title="Stem", grid=.true., legend=.true.)
+        svg_s = render_svg()
+        call clf()
+        call stem(x, y, label="sm")
+        call title("Stem")
+        call grid(.true.)
+        call legend()
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: stem mismatch"
+
+        ! 4) imshow (2D & RGB), pcolormesh, contour, contourf
+        call clf()
+        call imshow(z, title="Img", xlabel="c", ylabel="r")
+        svg_s = render_svg()
+        call clf()
+        call imshow(z)
+        call title("Img")
+        call xlabel("c")
+        call ylabel("r")
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: imshow_z mismatch"
+
+        call clf()
+        call imshow(rgb, title="RGB")
+        svg_s = render_svg()
+        call clf()
+        call imshow(rgb)
+        call title("RGB")
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: imshow_rgb mismatch"
+
+        call clf()
+        call pcolormesh(x(1:5), x(1:5), z, title="Mesh", xlabel="x", ylabel="y")
+        svg_s = render_svg()
+        call clf()
+        call pcolormesh(x(1:5), x(1:5), z)
+        call title("Mesh")
+        call xlabel("x")
+        call ylabel("y")
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: pcolormesh mismatch"
+
+        call clf()
+        call contour(z, title="Cont", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call contour(z)
+        call title("Cont")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: contour mismatch"
+
+        call clf()
+        call contourf(z, title="ContF", xlabel="x", ylabel="y")
+        svg_s = render_svg()
+        call clf()
+        call contourf(z)
+        call title("ContF")
+        call xlabel("x")
+        call ylabel("y")
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: contourf mismatch"
+
+        ! 5) boxplot (1D & 2D) and violinplot (1D & 2D)
+        call clf()
+        call boxplot(hdata, title="Box1", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call boxplot(hdata)
+        call title("Box1")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: boxplot_one mismatch"
+
+        call clf()
+        call boxplot(mat, title="Box2", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call boxplot(mat)
+        call title("Box2")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: boxplot_many mismatch"
+
+        call clf()
+        call violinplot(hdata, title="Vio1", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call violinplot(hdata)
+        call title("Vio1")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: violinplot_one mismatch"
+
+        call clf()
+        call violinplot(mat, title="Vio2", grid=.true.)
+        svg_s = render_svg()
+        call clf()
+        call violinplot(mat)
+        call title("Vio2")
+        call grid(.true.)
+        svg_ref = render_svg()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: violinplot_many mismatch"
+
+        ! 6) figure_t + axes_t declarative kwargs
+        fig = figure_t(figsize=[6.0_dp, 4.0_dp], suptitle="FigKw", tight_layout=.true.)
+        call fig%subplots(ax_one, title="Sub1", xlabel="x", ylabel="y", &
+                          xlim=[0.0_dp, 11.0_dp], ylim=[0.0_dp, 3.0_dp], grid=.true.)
+        call ax_one%scatter(x, y, label="s", legend=.true.)
+        svg_s = render_svg()
+        call fig%close()
+
+        fig_ref = figure_t(figsize=[6.0_dp, 4.0_dp])
+        call fig_ref%suptitle("FigKw")
+        call fig_ref%tight_layout()
+        call fig_ref%subplots(ax_ref)
+        call ax_ref%set_title("Sub1")
+        call ax_ref%set_xlabel("x")
+        call ax_ref%set_ylabel("y")
+        call ax_ref%set_xlim(0.0_dp, 11.0_dp)
+        call ax_ref%set_ylim(0.0_dp, 3.0_dp)
+        call ax_ref%grid(.true.)
+        call ax_ref%scatter(x, y, label="s")
+        call ax_ref%legend()
+        svg_ref = render_svg()
+        call fig_ref%close()
+        if (svg_s /= svg_ref) error stop "extended_kwargs_case: figure_t/axes_t mismatch"
+
+        ! Verify axes_t methods with kwargs across 2D/distribution/bar/step/stem
+        fig = figure_t(constrained_layout=.true.)
+        call fig%subplots(1, 2, row, suptitle="RowKw")
+        call row(1)%bar(cats, bh, title="AxBar", grid=.true.)
+        call row(2)%boxplot(mat, title="AxBox", grid=.true.)
+        call fig%close()
+
+        fig = figure_t()
+        call fig%subplots(2, 2, grd, suptitle="GridKw", tight_layout=.true.)
+        call grd(1, 1)%hist(hdata, bins=4, title="AxHist")
+        call grd(1, 2)%errorbar(x, y, yerr=err, title="AxErr")
+        call grd(2, 1)%contourf(z, title="AxContF")
+        call grd(2, 2)%violinplot(mat, title="AxVio")
+        call fig%close()
+
+        ! 7) report_t declarative constructor, init(), and new_report()
+        rep = report_t(title="Kw Report", subtitle="Sub", author="A. Author", &
+                       date="2026-11-27", page_size="letter", dpi=100.0_dp)
+        call rep%markdown("Body paragraph for declarative report.")
+        call rep%export("svg", a1)
+
+        call rep_ref%clear()
+        call rep_ref%markdown("---"//NL//"title: Kw Report"//NL//"subtitle: Sub"//NL// &
+                              "author: A. Author"//NL//"date: 2026-11-27"//NL// &
+                              "paper: letter"//NL//"---"//NL//NL// &
+                              "Body paragraph for declarative report.")
+        call rep_ref%export("svg", a2, dpi=100.0_dp)
+        if (size(a1) /= size(a2) .or. size(a1) < 1) &
+            error stop "extended_kwargs_case: report_t page count mismatch"
+        if (a1(1)%bytes /= a2(1)%bytes) &
+            error stop "extended_kwargs_case: report_t declarative kwargs mismatch"
+
+        call rep%init(title="Reinit Report", author="B. Author", dpi=120.0_dp)
+        call rep%markdown("Second body.")
+        call rep%export("svg", a1)
+        if (size(a1) < 1 .or. len(a1(1)%bytes) < 200) &
+            error stop "extended_kwargs_case: report_t%init export failed"
+
+        call new_report(title="Global Report", author="C. Author", &
+                        date="2026-11-27", page_size="a4", dpi=100.0_dp)
+        call markdown("Immediate-mode declarative report.")
+        call render_report("svg", a1)
+        if (size(a1) < 1 .or. len(a1(1)%bytes) < 200) &
+            error stop "extended_kwargs_case: new_report kwargs failed"
+    end subroutine extended_kwargs_case
 
     recursive subroutine doc_directive(doc, d, ctx, handled)
         use fplotlib_markdown, only: md_document_t, md_ctx_t, md_directive_t, md_blocks, &
