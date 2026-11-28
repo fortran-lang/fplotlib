@@ -34,7 +34,7 @@ program plot_book_chapter
         "numbersections: true"//NL// &
         "---"//NL//NL// &
         "# The Shape of a Paragraph"//NL//NL// &
-        "> *Typography exists to honor content.*\"//NL// &
+        "> *Typography exists to honor content.*"//achar(92)//NL// &
         "> --- Robert Bringhurst"//NL//NL// &
         "When Donald Knuth received the galley proofs of the second edition of his"//NL// &
         "book on algorithms in 1977, he was dismayed. The publisher had replaced its"//NL// &
